@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Bash(git init *)",
+      "Bash(docker --version)",
+      "Bash(python -m venv .venv)",
+      "Bash(./.venv/Scripts/python.exe -m pip install --upgrade pip -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip install -r requirements.txt)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(rmdir alembic/versions)",
+      "Bash(rmdir alembic *)",
+      "Bash(./.venv/Scripts/python.exe -m alembic init alembic)",
+      "Bash(cp .env.example .env)",
+      "Bash(nslookup db.nquhpvsmhvvmbpsrwbua.supabase.co)",
+      "Bash(nslookup supabase.co)",
+      "Bash(nslookup google.com)",
+      "Bash(nslookup aws-0-ap-southeast-1.pooler.supabase.com)",
+      "Bash(nslookup aws-1-ap-southeast-1.pooler.supabase.com)",
+      "Bash(./.venv/Scripts/python.exe -m alembic revision --autogenerate -m \"initial schema\")",
+      "Bash(./.venv/Scripts/python.exe -m alembic upgrade head)",
+      "Bash(./.venv/Scripts/python.exe -m alembic check)",
+      "Bash(./.venv/Scripts/python.exe -m app.seed)"
+    ]
+  }
+}

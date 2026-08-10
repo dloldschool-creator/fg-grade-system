@@ -1,0 +1,15 @@
+# Secrets — never commit
+.env
+supabase.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
