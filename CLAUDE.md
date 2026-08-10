@@ -463,10 +463,61 @@ those formulas with values written by our own grading engine via
       "Term 3 Average" rather than claiming a General Average the learner
       hasn't earned yet. Grade Summary's per-learner detail now shows the
       three Term Averages.
-- [ ] Next: Phase 9 (SF2) — ask before starting. `roster_for_month()` in
-      `app/attendance_service.py` already sorts male-then-female
-      alphabetically the way SF2 wants (§34), and the attendance data it
-      needs is all in place.
+- [x] Phase 9 (SF2) built; not yet clicked through by the user.
+      **`app/sf2_report.py`** fills `sf-templates/SF2-template-with-sample-
+      data.xlsx` via openpyxl (exact layout/merges/fonts/logos preserved,
+      per the stack decision), **`app/pdf_convert.py`** flattens it with
+      headless LibreOffice, **`app/admin_pages/sf2.py`** is the page
+      (Adviser own-section + Super Admin/Registrar), **`tests/
+      test_sf2_report.py`** covers the pure rules; suite is now 58.
+      **⚠️ LibreOffice is NOT installed on this machine**, so PDF export
+      is currently unavailable — the page detects that, disables the PDF
+      button with an explanation, and still offers the .xlsx (which is
+      complete and prints identically from Excel). `find_soffice()` also
+      probes the two standard Windows install paths, since LibreOffice
+      usually isn't on PATH there. Nothing auto-installs it.
+      **The template arrives tethered to another workbook** — ~1600 of its
+      data cells are external-link formulas pointing at the school's
+      master automation workbook on OneDrive (`'[1]ATTENDANCE DAILY'!…`,
+      `'[1]SETUP'!…`). `strip_external_formulas()` blanks every one before
+      writing, `workbook._external_links = []` drops the link definition,
+      and `assert_no_external_links()` raises if any survive, so generated
+      files never prompt "update links?" or show stale numbers. Expect the
+      same for SF9/SF10 in Phases 10-11 — those templates come from the
+      same master workbook.
+      Four openpyxl traps hit here, all likely to recur on SF9/SF10:
+      (1) **Merge anchors differ row by row.** A day column that anchors a
+      merge on the weekday row sits mid-merge on the date row, and writing
+      to a non-anchor merged cell raises. `_anchor_map()` resolves every
+      (row, col) to its top-left once per sheet; all writes go through
+      `_write()`/`_write_ref()`. Never write via `ws.cell(...).value =`
+      directly in these modules.
+      (2) **`copy_worksheet` silently drops images**, so page 2 of a
+      multi-page form printed without the DepEd/school seals.
+      (3) **A loaded image's bytes can only be read once** — `_data()`
+      consumes the BytesIO and leaves it closed, so sharing one image
+      object across sheets saves the first and raises "I/O operation on
+      closed file" on the second. `_replicate_images()` captures the bytes
+      once and builds a fresh `Image` per sheet; there's a regression test.
+      (4) **Percentages must not be summed.** The summary box's M/F/Total
+      row defaults Total to M+F, which is right for counts and for average
+      daily attendance but reports 200% for the percentage rows — those
+      pass an explicitly recomputed total.
+      Two data rules worth keeping: the printed form's **blank means
+      present** (§30) — the inverse of the encoding UI's explicit "P",
+      which is why the on-screen grid and the printed form deliberately
+      differ; and "Enrolment as of (1st Friday of June)" is anchored to
+      the **first Friday on or after the school year start**, not June's
+      calendar first Friday, which for SY 2026-2027 (opens Mon 8 June)
+      falls on the 5th when nobody is enrolled yet and would report zero.
+      Pagination (§34) is per-sex: 25 male + 25 female rows per page, and
+      the page count follows whichever sex overflows further, not the
+      combined total — 30M+30F is 60 learners but only 2 pages. Verified
+      end-to-end with a synthetic 60M/30F roster.
+- [ ] Next: Phase 10 (SF9) — ask before starting. Reuse
+      `app/sf2_report.py`'s external-link stripping and `_anchor_map()`
+      write helpers; the SF9 template has the same provenance and the
+      Grade 11 combined-language display rule (§16) to honour.
 
 ## Development phases (per spec Section 71 — build in this order)
 
@@ -478,8 +529,8 @@ those formulas with values written by our own grading engine via
 6. Grade computation engine (incl. combined-language rule) — done
 7. Annual summary, validation, finalization, awards — done
 8. Academic calendar and attendance — done
-9. SF2 ← **we are here**
-10. SF9
+9. SF2 — done
+10. SF9 ← **we are here**
 11. Temporary SF10
 12. Temp cards and certificates
 13. Excel import/export migration tooling
