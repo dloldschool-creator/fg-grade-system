@@ -348,8 +348,80 @@ those formulas with values written by our own grading engine via
       renders cleanly (no import errors from the new pages) — full
       click-through (award policy config → eligibility compute →
       certificate download → finalize → reopen) not yet done by the user.
-- [ ] Next: Phase 8 (Academic calendar and attendance) — ask before
-      starting.
+- [x] Phase 8 (Academic calendar and attendance) built; not yet tested by
+      the user in the live app. Same engine/service split as Phase 6:
+      **`app/attendance_engine.py`** is pure and DB-free (calendar day
+      generation with per-date term assignment, learner active-window
+      reduction from `learner_movements`, eligible class days, attendance
+      counts, five-consecutive-absence runs), **`app/attendance_service.py`**
+      only reads/writes rows. **`tests/test_attendance_engine.py`** — 18
+      tests incl. master-spec §68 **Test D** (transferred out in September
+      → appears on September SF2, gone from October); suite is now 25/25.
+      Four rules worth knowing before touching this area:
+      (1) **Eligible class days are per-learner, not per-section** — a
+      late enrollee has none before their effective date, a transferee
+      none after. Counting a section-wide total against everyone inflates
+      absences.
+      (2) **"No longer active" and "don't show them" are different
+      questions** (§32), so they're two functions: `is_active_on` vs
+      `appears_in_month`. A learner who exits mid-month still appears on
+      *that* month's sheet with a remark and only drops off the next one.
+      An exit is inclusive of its effective date.
+      (3) **An un-encoded attendance day is not "present"** — the
+      attendance analogue of the NULL-is-not-zero grading rule, and what
+      makes §33's missing-attendance check possible at all. Note this
+      inverts the *paper* form's convention (blank = present), so the
+      Attendance page's "Prepare / refresh this month's sheet" button
+      materialises an explicit PRESENT row per learner × class day; blank
+      then keeps meaning "nobody has said yet". Re-run it after a late
+      enrollee joins or the calendar changes.
+      (4) **LATE and CUTTING still count as days present** — the learner
+      was in school. They're separate counters, not a third presence
+      state.
+      **Academic Calendar** page (Super Admin) — "Generate calendar" is
+      re-runnable and never touches an existing date, so an override is
+      never silently reverted; only missing dates are added. Weekdays
+      inside a term become class days; weekends and the national **regular**
+      holidays don't. `philippine_regular_holidays()` covers everything
+      derivable from the year alone: the fixed dates, National Heroes Day
+      (last Monday of August), and Maundy Thursday/Good Friday via
+      `easter_sunday()` (anonymous Gregorian algorithm, verified against
+      `dateutil.easter` for 1900-2100 — dateutil was a throwaway check,
+      not a dependency). Deliberately **not** guessed at, and the line not
+      to cross: lunar holidays (Eid'l Fitr/Eid'l Adha), *special*
+      non-working days (All Souls', Immaculate Conception, Chinese New
+      Year, EDSA), and local suspensions — all proclamation-dependent, and
+      a wrong guess silently changes every learner's eligible class-day
+      count. There's a test asserting those specific dates stay absent.
+      With the seeded SY 2026-2027 this lands 9 of 11 months exactly on
+      §28's workbook counts (203 vs 201 total); only November and December
+      need a manual mark. The page shows a per-month generated-vs-target
+      diff so those two are obvious. Changing a date's class-day
+      status requires a reason (§28) and renumbers `class_day_sequence`
+      across the whole year (it's a running count, so one flip shifts
+      every later day).
+      **Attendance** page (Adviser own-section + Super Admin/Registrar) —
+      editable month grid via `st.data_editor` (learners × class days,
+      codes P/X/T-L/T-C per §30, `·` for days outside a learner's
+      window), per-learner monthly summary, and the §33 workflow
+      NOT_STARTED → OPEN → FOR_REVIEW → FINALIZED with a pre-finalization
+      validation panel (missing attendance and out-of-school-year movement
+      dates block; five-consecutive-absence runs warn). Reopen is
+      Super-Admin-only and requires a reason.
+      Two gotchas hit here, both worth reusing: (a) a `SelectboxColumn`
+      cell whose value isn't in `options` renders *empty*, which made
+      out-of-window days look un-encoded — the sentinel has to be a valid
+      option. (b) Don't call a `get_or_create_*` helper on a page's plain
+      view path: it INSERTs on every render, leaving an uncommitted insert
+      open and racing concurrent users into a unique violation. Split it
+      into a read-only `get_month_status` for viewing and
+      `get_or_create_month_status` for paths that actually commit.
+      `pandas` is now a direct dependency (the grid round-trips a
+      DataFrame), not just a transitive Streamlit one.
+- [ ] Next: Phase 9 (SF2) — ask before starting. `roster_for_month()` in
+      `app/attendance_service.py` already sorts male-then-female
+      alphabetically the way SF2 wants (§34), and the attendance data it
+      needs is all in place.
 
 ## Development phases (per spec Section 71 — build in this order)
 
@@ -360,8 +432,8 @@ those formulas with values written by our own grading engine via
 5. Teacher assignments and term gradebooks — done
 6. Grade computation engine (incl. combined-language rule) — done
 7. Annual summary, validation, finalization, awards — done
-8. Academic calendar and attendance ← **we are here**
-9. SF2
+8. Academic calendar and attendance — done
+9. SF2 ← **we are here**
 10. SF9
 11. Temporary SF10
 12. Temp cards and certificates

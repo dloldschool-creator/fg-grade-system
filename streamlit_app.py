@@ -1,7 +1,9 @@
 import streamlit as st
 
 from app.admin_pages import (
+    academic_calendar,
     academic_structure,
+    attendance,
     award_policy,
     awards,
     enrollment,
@@ -52,6 +54,7 @@ else:
             st.Page(school_info.render, title="School Info", icon="🏫", url_path="school-info", default=True),
             st.Page(school_years.render, title="School Years & Terms", icon="📅", url_path="school-years"),
             st.Page(academic_structure.render, title="Academic Structure", icon="🎓", url_path="academic-structure"),
+            st.Page(academic_calendar.render, title="Academic Calendar", icon="🗓️", url_path="academic-calendar"),
             st.Page(sections.render, title="Sections", icon="🏷️", url_path="sections"),
             st.Page(subject_catalog.render, title="Subject Catalog", icon="📚", url_path="subject-catalog"),
             st.Page(subject_profiles.render, title="Subject Profiles", icon="🗂️", url_path="subject-profiles"),
@@ -74,6 +77,7 @@ else:
             ),
             st.Page(enrollment.render, title="Enrollment", icon="📝", url_path="enrollment"),
             st.Page(grade_summary.render, title="Grade Summary", icon="📊", url_path="grade-summary"),
+            st.Page(attendance.render, title="Attendance", icon="🗒️", url_path="attendance"),
             st.Page(awards.render, title="Awards", icon="🏆", url_path="awards"),
         ]
     if current_user.has_role("SUBJECT_TEACHER"):
