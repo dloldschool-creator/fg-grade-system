@@ -9,6 +9,7 @@ from app.grading_engine import (
     compute_combined_language_term_grade,
     compute_general_average,
     compute_subject_final_grade,
+    compute_term_average,
     determine_pass_fail,
     round_half_up,
 )
@@ -100,3 +101,42 @@ def test_two_term_subject_averages_only_its_two_terms():
     final = compute_subject_final_grade({1: D(80), 2: D(90), 3: D(100)}, {1, 2})
     assert final == round_half_up((D(80) + D(90)) / 2)
     assert final == 85
+
+
+def test_term_average_uses_spec_worked_example():
+    """§17's own example: a G11 academic section has SEVEN term-grade
+    entries, because Effective Communication and Mabisang Komunikasyon
+    each count separately."""
+    grades = [D(90), D(88), D(85), D(92), D(87), D(91), D(89)]
+    assert len(grades) == 7
+    assert compute_term_average(grades) == round_half_up(sum(grades) / D(7))
+
+
+def test_term_average_counts_the_language_pair_separately():
+    """The rule most likely to be got wrong: §17 says outright "Do not
+    substitute the combined language grade when calculating the Term
+    Average", which is the opposite of the General Average rule (§19).
+
+    Effective Communication 90 and Mabisang Komunikasyon 80 combine to 85
+    for SF9 display. Averaged against a single other subject of 100:
+      - as two separate entries (correct): (90 + 80 + 100) / 3 = 90
+      - as one combined entry (wrong):     (85 + 100) / 2      = 93
+    """
+    correct = compute_term_average([D(90), D(80), D(100)])
+    assert correct == 90
+
+    combined = compute_combined_language_term_grade(D(90), D(80))
+    assert combined == 85
+    wrong = compute_term_average([combined, D(100)])
+    assert wrong == 93
+    assert correct != wrong
+
+
+def test_term_average_is_none_when_any_subject_is_unencoded():
+    assert compute_term_average([D(90), None, D(85)]) is None
+    assert compute_term_average([]) is None
+
+
+def test_term_average_rounds_half_up():
+    # (92 + 93) / 2 = 92.5 -> 93, not Python round()'s 92.
+    assert compute_term_average([D(92), D(93)]) == 93

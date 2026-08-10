@@ -418,6 +418,51 @@ those formulas with values written by our own grading engine via
       `get_or_create_month_status` for paths that actually commit.
       `pandas` is now a direct dependency (the grid round-trips a
       DataFrame), not just a transitive Streamlit one.
+- [x] Award scope split (post-Phase-8 change, user-directed): the two
+      policies are judged against **different averages at different
+      frequencies**, so `award_policy_versions.scope` (`AwardScope`,
+      migration `a5defba95bef`) now carries that:
+      **Legacy Tiered Honors = TERM** — evaluated once per term against
+      that term's Term Average, so a learner can make Honors in Term 3
+      and miss it in Terms 1-2. **Academic Excellence = ANNUAL** —
+      evaluated once against the year's General Average, unchanged.
+      Scope and tier-shape are **orthogonal**: either scope can use flat
+      thresholds or a tier ladder, and `award_service._evaluate()` handles
+      all four combinations off one code path.
+      This required Term Average, which did not exist before this change:
+      **`compute_term_average()`** (§17) plus a new **`term_grade_summaries`**
+      table (term_average / lowest_term_grade / failed_subject_count /
+      completion_status per enrollment per term), written by
+      `recompute_enrollment_grades` alongside the annual summary.
+      **The rule to not get wrong:** the Term Average counts the Grade 11
+      language pair as **two separate subjects** — §17 says outright "Do
+      not substitute the combined language grade when calculating the
+      Term Average", and its worked example lists seven entries including
+      both. That is the exact opposite of the General Average rule (§19),
+      where the pair collapses into one combined learning area. There's a
+      test showing the two produce different numbers (90 vs 93) from the
+      same grades.
+      `learner_awards` gained a nullable `term_id` (NULL = annual). Its
+      old single UNIQUE became **two partial unique indexes** — a plain
+      UNIQUE over a nullable column can't stop duplicate annual rows,
+      because in SQL NULL never equals NULL.
+      Two Alembic gotchas hit generating that migration, both likely to
+      recur: (1) autogenerate emits a bare `sa.Enum` inside `create_table`
+      for an enum type that **already exists**, re-issuing CREATE TYPE and
+      failing — use `postgresql.ENUM(..., create_type=False)`. (2)
+      `op.add_column` does **not** auto-create a new enum type the way
+      `create_table` does — call `.create(op.get_bind(), checkfirst=True)`
+      first.
+      The migration also carries two data fixes: it sets the seeded
+      Legacy Honors version to TERM (the new column defaults everything
+      to ANNUAL), and deletes award rows that were computed annually
+      against a now-TERM-scoped policy — those carry `term_id IS NULL`
+      and are unreachable by the new code. Manual overrides are
+      deliberately spared, since they carry a human decision.
+      Certificates take an optional `term_name` so a term award cites a
+      "Term 3 Average" rather than claiming a General Average the learner
+      hasn't earned yet. Grade Summary's per-learner detail now shows the
+      three Term Averages.
 - [ ] Next: Phase 9 (SF2) — ask before starting. `roster_for_month()` in
       `app/attendance_service.py` already sorts male-then-female
       alphabetically the way SF2 wants (§34), and the attendance data it

@@ -113,6 +113,41 @@ class CombinedLearningAreaResult(UUIDPKMixin, Base):
     version: Mapped[int] = mapped_column(default=1, server_default="1")
 
 
+class TermGradeSummary(UUIDPKMixin, Base):
+    """Per-term aggregate (§17 Term Average, §22 Term Completion Check) —
+    the term-level counterpart of `AnnualGradeSummary`, and what a
+    TERM-scoped award policy is judged against.
+
+    `term_average` deliberately counts the Grade 11 combined-language
+    components as **two separate subjects** (§17 is explicit: "Do not
+    substitute the combined language grade when calculating the Term
+    Average"). That's the opposite of the General Average rule, where the
+    pair collapses into one virtual learning area — the single most
+    common way to get this wrong.
+    """
+
+    __tablename__ = "term_grade_summaries"
+    __table_args__ = (UniqueConstraint("enrollment_id", "term_id"),)
+
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enrollments.id", ondelete="RESTRICT"), nullable=False
+    )
+    school_year_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False
+    )
+    term_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("terms.id", ondelete="RESTRICT"), nullable=False
+    )
+    term_average: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    lowest_term_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    failed_subject_count: Mapped[int | None] = mapped_column(SmallInteger)
+    completion_status: Mapped[CompletionStatus] = mapped_column(
+        default=CompletionStatus.INCOMPLETE, server_default=CompletionStatus.INCOMPLETE.value
+    )
+    computed_at: Mapped[datetime | None]
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+
+
 class AnnualGradeSummary(UUIDPKMixin, Base):
     __tablename__ = "annual_grade_summaries"
 

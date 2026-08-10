@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDPKMixin
-from app.models.enums import AwardResult, PolicyVersionStatus
+from app.models.enums import AwardResult, AwardScope, PolicyVersionStatus
 
 
 class AwardPolicy(UUIDPKMixin, Base):
@@ -32,6 +32,9 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
     effective_school_year_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False
     )
+    scope: Mapped[AwardScope] = mapped_column(
+        default=AwardScope.ANNUAL, server_default=AwardScope.ANNUAL.value, nullable=False
+    )
     require_complete_record: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     require_no_derogatory_record: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true"
@@ -53,16 +56,44 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
 
 class LearnerAward(UUIDPKMixin, Base):
     """Stores the eligibility **reason**, not just a boolean — §24 requires
-    showing why a learner isn't eligible."""
+    showing why a learner isn't eligible.
+
+    `term_id` is NULL for an ANNUAL-scoped policy and set for a
+    TERM-scoped one, so a learner can hold up to three Honors rows plus
+    one annual Academic Excellence row in the same year. The uniqueness
+    rule is therefore "one row per enrollment per policy version per
+    term", enforced by two partial indexes rather than one constraint —
+    a plain UNIQUE over a nullable column would let duplicate annual rows
+    through, since in SQL NULL never equals NULL.
+    """
 
     __tablename__ = "learner_awards"
-    __table_args__ = (UniqueConstraint("enrollment_id", "award_policy_version_id"),)
+    __table_args__ = (
+        Index(
+            "uq_learner_awards_term",
+            "enrollment_id",
+            "award_policy_version_id",
+            "term_id",
+            unique=True,
+            postgresql_where=text("term_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_learner_awards_annual",
+            "enrollment_id",
+            "award_policy_version_id",
+            unique=True,
+            postgresql_where=text("term_id IS NULL"),
+        ),
+    )
 
     enrollment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("enrollments.id", ondelete="RESTRICT"), nullable=False
     )
     school_year_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False
+    )
+    term_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("terms.id", ondelete="RESTRICT")
     )
     award_policy_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("award_policy_versions.id", ondelete="RESTRICT"), nullable=False

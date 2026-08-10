@@ -6,10 +6,10 @@ from app.award_service import clear_award_override, compute_award_eligibility, s
 from app.certificate_generator import generate_award_certificate
 from app.models.academic_structure import Section
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
-from app.models.enums import AwardResult
-from app.models.grades import AnnualGradeSummary
+from app.models.enums import AwardResult, AwardScope
+from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment, Learner
-from app.models.organization import School, SchoolYear
+from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
 
 
@@ -74,6 +74,35 @@ def render() -> None:
             options=[v.id for v in policy_versions],
             format_func=lambda v: f"{policy_by_id[version_by_id[v].award_policy_id].name} (v{version_by_id[v].version_number})",
         )
+        version = version_by_id[version_choice]
+
+        # A TERM-scoped policy is judged once per term against that term's
+        # Term Average (§17), so the term is part of the selection; an
+        # ANNUAL one has no term dimension at all.
+        term_choice = None
+        term_name = None
+        if version.scope == AwardScope.TERM:
+            terms = (
+                session.query(Term)
+                .filter_by(school_year_id=sy_choice)
+                .order_by(Term.term_number)
+                .all()
+            )
+            if not terms:
+                st.warning("This school year has no terms yet.")
+                return
+            term_by_id = {t.id: t for t in terms}
+            term_choice = st.selectbox(
+                "Term", options=[t.id for t in terms], format_func=lambda v: term_by_id[v].name
+            )
+            term_name = term_by_id[term_choice].name
+            st.caption(
+                "Judged on this term's **Term Average**, which counts the Grade 11 "
+                "language pair as two separate subjects (§17) — unlike the General "
+                "Average, where they combine into one."
+            )
+        else:
+            st.caption("Judged once for the year on the **General Average** across all terms.")
 
         enrollments = (
             session.query(Enrollment)
@@ -88,7 +117,7 @@ def render() -> None:
 
         if st.button("Compute eligibility for all"):
             for enrollment in enrollments:
-                compute_award_eligibility(session, enrollment.id, version_choice)
+                compute_award_eligibility(session, enrollment.id, version_choice, term_choice)
             flash("success", f"Computed eligibility for {len(enrollments)} learner(s).")
             st.rerun()
 
@@ -96,10 +125,27 @@ def render() -> None:
             learner = session.get(Learner, enrollment.learner_id)
             award = (
                 session.query(LearnerAward)
-                .filter_by(enrollment_id=enrollment.id, award_policy_version_id=version_choice)
+                .filter_by(
+                    enrollment_id=enrollment.id,
+                    award_policy_version_id=version_choice,
+                    term_id=term_choice,
+                )
                 .one_or_none()
             )
-            summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
+            if version.scope == AwardScope.TERM:
+                summary = (
+                    session.query(TermGradeSummary)
+                    .filter_by(enrollment_id=enrollment.id, term_id=term_choice)
+                    .one_or_none()
+                )
+                average = summary.term_average if summary else None
+            else:
+                summary = (
+                    session.query(AnnualGradeSummary)
+                    .filter_by(enrollment_id=enrollment.id)
+                    .one_or_none()
+                )
+                average = summary.general_average if summary else None
 
             status_label = award.award_result.value if award else "not computed yet"
             with st.expander(f"{learner.last_name}, {learner.first_name} — {status_label}"):
@@ -110,6 +156,8 @@ def render() -> None:
                 st.write(f"**Result:** {award.award_result.value}")
                 if award.award_name:
                     st.write(f"**Award:** {award.award_name}")
+                average_label = "Term Average" if version.scope == AwardScope.TERM else "General Average"
+                st.write(f"**{average_label}:** {int(average) if average is not None else '—'}")
                 st.write(f"**Reason:** {award.reason}")
                 if award.is_override:
                     st.warning(f"Manually overridden by an admin: {award.override_reason}")
@@ -151,7 +199,8 @@ def render() -> None:
                         schools_division=school.schools_division,
                         learner_name=f"{learner.last_name}, {learner.first_name}",
                         award_name=award.award_name or "RECOGNITION",
-                        general_average=summary.general_average if summary else None,
+                        general_average=average,
+                        term_name=term_name,
                         recognition_date=school_year.recognition_date,
                         recognition_venue=school_year.recognition_venue or "",
                         school_year_name=school_year.name,
@@ -162,7 +211,10 @@ def render() -> None:
                     st.download_button(
                         "Download certificate",
                         data=pdf_bytes,
-                        file_name=f"certificate_{learner.last_name}_{learner.first_name}.pdf",
+                        file_name=(
+                            f"certificate_{learner.last_name}_{learner.first_name}"
+                            f"{'_' + term_name.replace(' ', '') if term_name else ''}.pdf"
+                        ),
                         mime="application/pdf",
                         key=f"dl_{award.id}",
                     )

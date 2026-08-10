@@ -48,7 +48,13 @@ def generate_award_certificate(
     adviser_name: str,
     school_head_name: str,
     school_head_position: str,
+    term_name: str | None = None,
 ) -> bytes:
+    """`term_name` is set for a TERM-scoped award (the tiered Honors,
+    judged on one term's Term Average) and None for an ANNUAL one (the
+    Academic Excellence Award, judged on the year's General Average). It
+    only changes the wording of the citation line — a term certificate
+    must not claim a General Average the learner hasn't earned yet."""
     buffer = io.BytesIO()
     page_size = landscape(letter)
     width, height = page_size
@@ -114,9 +120,13 @@ def generate_award_certificate(
     c.setFont("Times-Roman", 12)
     c.setFillColor(colors.black)
     ga_display = int(general_average) if general_average is not None else "—"
-    c.drawCentredString(
-        center_x, y, f"for earning {award_name} with a General Average of {ga_display}."
-    )
+    if term_name:
+        citation = (
+            f"for earning {award_name} with a {term_name} Average of {ga_display}."
+        )
+    else:
+        citation = f"for earning {award_name} with a General Average of {ga_display}."
+    c.drawCentredString(center_x, y, citation)
 
     y -= 24
     c.setFont("Times-Roman", 10)

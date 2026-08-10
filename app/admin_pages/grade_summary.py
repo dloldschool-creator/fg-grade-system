@@ -13,6 +13,7 @@ from app.models.grades import (
     GradeFinalizationRecord,
     SubjectFinalGrade,
     TermGrade,
+    TermGradeSummary,
 )
 from app.models.learners import Enrollment, Learner
 from app.models.organization import SchoolYear, Term
@@ -125,6 +126,28 @@ def _learner_detail(session, current_user, enrollment: Enrollment):
     col3.metric("Completion", summary.completion_status.value if summary else "not computed yet")
     if summary and summary.failed_subject_count:
         st.caption(f"{summary.failed_subject_count} subject(s) currently below passing.")
+
+    # Term Averages (§17) — shown separately from the subject table below
+    # because they're computed a different way: the Grade 11 language pair
+    # counts as two subjects here, not as the one combined area the Final
+    # Grade column uses. This is what a TERM-scoped award (tiered Honors)
+    # is judged on.
+    term_summaries = (
+        session.query(TermGradeSummary)
+        .join(Term, Term.id == TermGradeSummary.term_id)
+        .filter(TermGradeSummary.enrollment_id == enrollment.id)
+        .order_by(Term.term_number)
+        .all()
+    )
+    if term_summaries:
+        term_names = {t.id: t.name for t in session.query(Term).filter_by(
+            school_year_id=enrollment.school_year_id
+        ).all()}
+        cols = st.columns(len(term_summaries))
+        for col, ts in zip(cols, term_summaries):
+            col.metric(
+                f"{term_names.get(ts.term_id, 'Term')} Average", str(_fmt(ts.term_average))
+            )
 
     finals = {f.subject_id: f for f in session.query(SubjectFinalGrade).filter_by(enrollment_id=enrollment.id).all()}
     combined_results = (

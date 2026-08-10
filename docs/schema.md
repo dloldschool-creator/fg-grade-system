@@ -553,6 +553,34 @@ displayed/counted for the combined parent row.
 
 `UNIQUE (enrollment_id, combined_learning_area_id, school_year_id)`
 
+### `term_grade_summaries`
+Per-term aggregate (§17 Term Average, §22 Term Completion Check) — the
+term-level counterpart of `annual_grade_summaries`, and what a
+`TERM`-scoped award policy is judged against.
+
+**Note the deliberate asymmetry with `annual_grade_summaries`:**
+`term_average` counts the Grade 11 combined-language components as **two
+separate subjects**, because §17 says explicitly "Do not substitute the
+combined language grade when calculating the Term Average". The General
+Average below does the opposite, collapsing the pair into one virtual
+learning area (§19). Same two subjects, two different treatments,
+depending on which figure is being computed.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| enrollment_id | UUID FK → enrollments NOT NULL | |
+| school_year_id | UUID FK → school_years NOT NULL | |
+| term_id | UUID FK → terms NOT NULL | |
+| term_average | NUMERIC(5,2) NULL | §17; NULL while any subject in the term is un-encoded |
+| lowest_term_grade | NUMERIC(5,2) NULL | |
+| failed_subject_count | SMALLINT NULL | |
+| completion_status | ENUM(`COMPLETE`,`INCOMPLETE`) NOT NULL DEFAULT `INCOMPLETE` | |
+| computed_at | TIMESTAMPTZ NULL | |
+| version | INTEGER NOT NULL DEFAULT 1 | |
+
+`UNIQUE (enrollment_id, term_id)`
+
 ### `annual_grade_summaries`
 | Column | Type | Notes |
 |---|---|---|
@@ -660,10 +688,11 @@ Academic Excellence conditions.
 | award_policy_id | UUID FK → award_policies NOT NULL | |
 | version_number | INTEGER NOT NULL | |
 | effective_school_year_id | UUID FK → school_years NOT NULL | |
-| require_complete_record | BOOLEAN NOT NULL DEFAULT true | |
+| scope | ENUM(`TERM`,`ANNUAL`) NOT NULL DEFAULT `ANNUAL` | which average is judged, and how often — see note below |
+| require_complete_record | BOOLEAN NOT NULL DEFAULT true | term completion for `TERM`, annual completion for `ANNUAL` |
 | require_no_derogatory_record | BOOLEAN NOT NULL DEFAULT true | |
-| min_general_average | NUMERIC(5,2) NULL | |
-| min_lowest_final_grade | NUMERIC(5,2) NULL | |
+| min_general_average | NUMERIC(5,2) NULL | read against whichever average `scope` selects, despite the name |
+| min_lowest_final_grade | NUMERIC(5,2) NULL | lowest Final Grade (`ANNUAL`) or lowest term grade (`TERM`) |
 | require_no_failed_subject | BOOLEAN NOT NULL DEFAULT false | |
 | tier_thresholds | JSONB NULL | e.g. `[{"label":"WITH HIGHEST HONORS","min_ga":98}, ...]` for the legacy tiered policy |
 | status | ENUM(`DRAFT`,`ACTIVE`,`ARCHIVED`) NOT NULL DEFAULT `DRAFT` | |
@@ -671,6 +700,20 @@ Academic Excellence conditions.
 | created_at | TIMESTAMPTZ | |
 
 `UNIQUE (award_policy_id, version_number)`
+
+**`scope` vs. tier shape are orthogonal.** `scope` decides *what average*
+is judged and *how often*; whether `tier_thresholds` is set decides *how*
+the threshold applies (flat minimum vs. highest-cleared-tier ladder).
+Either scope works with either shape. As seeded:
+
+- **Legacy Tiered Honors** — `scope=TERM`, tiered. Judged once per term
+  against `term_grade_summaries.term_average` (§17), so a learner can
+  make Honors in one term and miss it in another.
+- **Academic Excellence (DO 15, s. 2026)** — `scope=ANNUAL`, flat.
+  Judged once against `annual_grade_summaries.general_average` (§19/§20).
+
+The tier dicts keep the key name `min_general_average` under every scope;
+it's historical, and under a `TERM` scope it means "minimum Term Average".
 
 ### `learner_awards`
 Stores the eligibility **reason**, not just a boolean — §24 explicitly
@@ -681,6 +724,7 @@ requires showing why a learner isn't eligible.
 | id | UUID PK | |
 | enrollment_id | UUID FK → enrollments NOT NULL | |
 | school_year_id | UUID FK → school_years NOT NULL | |
+| term_id | UUID FK → terms NULL | set for a `TERM`-scoped policy, NULL for an `ANNUAL` one |
 | award_policy_version_id | UUID FK → award_policy_versions NOT NULL | |
 | award_result | ENUM(`ELIGIBLE_AWARDED`,`NOT_ELIGIBLE`) NOT NULL | |
 | award_name | TEXT NULL | e.g. "ACADEMIC EXCELLENCE AWARD", "WITH HIGH HONORS" |
@@ -691,7 +735,17 @@ requires showing why a learner isn't eligible.
 | computed_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 | created_at | TIMESTAMPTZ | |
 
-`UNIQUE (enrollment_id, award_policy_version_id)`
+Uniqueness is "one row per enrollment per policy version per term",
+enforced by **two partial unique indexes** rather than one constraint:
+
+- `uq_learner_awards_term` on `(enrollment_id, award_policy_version_id,
+  term_id) WHERE term_id IS NOT NULL`
+- `uq_learner_awards_annual` on `(enrollment_id,
+  award_policy_version_id) WHERE term_id IS NULL`
+
+A single `UNIQUE (enrollment_id, award_policy_version_id, term_id)` would
+**not** work: in SQL NULL never equals NULL, so it would happily admit
+unlimited duplicate annual rows.
 
 ---
 

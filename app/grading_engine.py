@@ -75,6 +75,28 @@ def compute_combined_language_final_grade(
     return round_half_up(_average([component1_final, component2_final]))
 
 
+def compute_term_average(term_subject_grades: list[Decimal | None]) -> Decimal | None:
+    """§17. The average of every active subject grade actually encoded for
+    that term, rounded.
+
+    Critically, the Grade 11 language pair counts as **two separate
+    entries** here — §17 says outright "Do not substitute the combined
+    language grade when calculating the Term Average", and its worked
+    example lists seven term-grade entries including both Effective
+    Communication and Mabisang Komunikasyon. That is the exact opposite
+    of the General Average rule (§19), where the pair collapses into one
+    combined learning area. Callers assemble the list; this function just
+    averages it.
+
+    Returns None if any grade in the term is still un-encoded, rather
+    than averaging the subset — a partial Term Average would understate
+    or overstate depending on which subjects happen to be in yet.
+    """
+    if not term_subject_grades or any(g is None for g in term_subject_grades):
+        return None
+    return round_half_up(_average(term_subject_grades))
+
+
 def compute_general_average(applicable_finals: list[Decimal | None]) -> Decimal | None:
     """§19, §20, §61. `applicable_finals` must already be assembled
     correctly by the caller — for Grade 11, the two combined-language

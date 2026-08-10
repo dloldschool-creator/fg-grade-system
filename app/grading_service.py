@@ -16,10 +16,17 @@ from app.grading_engine import (
     compute_combined_language_term_grade,
     compute_general_average,
     compute_subject_final_grade,
+    compute_term_average,
     determine_pass_fail,
 )
 from app.models.enums import CompletionStatus, PolicyVersionStatus, SubjectRemark
-from app.models.grades import AnnualGradeSummary, CombinedLearningAreaResult, SubjectFinalGrade, TermGrade
+from app.models.grades import (
+    AnnualGradeSummary,
+    CombinedLearningAreaResult,
+    SubjectFinalGrade,
+    TermGrade,
+    TermGradeSummary,
+)
 from app.models.learners import Enrollment
 from app.models.organization import Term
 from app.models.subjects import (
@@ -189,6 +196,48 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
         result.remark = _remark(combined_final, passing_grade)
         result.computed_at = now
 
+    # Per-term summaries (§17 Term Average, §22 Term Completion Check).
+    # Note this uses raw per-subject term grades, NOT the combined
+    # language grade — §17 keeps the Grade 11 pair as two separate
+    # entries, the opposite of the General Average rule below.
+    default_passing = _resolve_passing_grade(session, enrollment.school_year_id, None)
+    for term in terms.values():
+        grades_this_term: list = []
+        for term_offerings in offerings_by_subject.values():
+            offering = term_offerings.get(term.term_number)
+            if offering is None:
+                continue  # subject not offered this term — not an omission
+            tg = term_grades.get((offering.id, offering.term_id))
+            grades_this_term.append(tg.official_grade if tg else None)
+
+        term_average = compute_term_average(grades_this_term)
+        encoded = [g for g in grades_this_term if g is not None]
+        term_completion = (
+            CompletionStatus.COMPLETE
+            if grades_this_term and term_average is not None
+            else CompletionStatus.INCOMPLETE
+        )
+
+        term_summary = (
+            session.query(TermGradeSummary)
+            .filter_by(enrollment_id=enrollment_id, term_id=term.id)
+            .one_or_none()
+        )
+        if term_summary is None:
+            term_summary = TermGradeSummary(
+                enrollment_id=enrollment_id,
+                school_year_id=enrollment.school_year_id,
+                term_id=term.id,
+            )
+            session.add(term_summary)
+        else:
+            term_summary.version += 1
+        term_summary.term_average = term_average
+        term_summary.lowest_term_grade = min(encoded) if encoded else None
+        term_summary.failed_subject_count = sum(1 for g in encoded if g < default_passing)
+        term_summary.completion_status = term_completion
+        term_summary.computed_at = now
+
     # Annual General Average (§19, §20, §61) — every subject's final,
     # EXCEPT combined-language components counted individually; the
     # combined area's own final substitutes for its pair, once.
@@ -204,7 +253,6 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
     )
     non_null_finals = [f for f in applicable_finals if f is not None]
     lowest_final_grade = min(non_null_finals) if completion_status == CompletionStatus.COMPLETE else None
-    default_passing = _resolve_passing_grade(session, enrollment.school_year_id, None)
     failed_subject_count = sum(1 for f in non_null_finals if f < default_passing)
 
     summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment_id).one_or_none()

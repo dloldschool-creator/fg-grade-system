@@ -3,7 +3,7 @@ import streamlit as st
 from app.admin_pages._helpers import get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.models.awards import AwardPolicy, AwardPolicyVersion
-from app.models.enums import PolicyVersionStatus
+from app.models.enums import AwardScope, PolicyVersionStatus
 from app.models.organization import SchoolYear
 
 
@@ -15,11 +15,14 @@ def _tier_editor(key_prefix: str, existing: list[dict] | None = None) -> list[di
     tiers = []
     for i in range(3):
         default_label = existing[i]["label"] if i < len(existing) else ""
+        # The stored key stays `min_general_average` for every scope —
+        # historical, and kept so already-seeded JSONB stays readable.
+        # Under a TERM-scoped policy it means "minimum Term Average".
         default_min = existing[i]["min_general_average"] if i < len(existing) else 0
         col1, col2 = st.columns(2)
         label = col1.text_input(f"Tier {i + 1} label", value=default_label, key=f"{key_prefix}_label_{i}")
         min_ga = col2.number_input(
-            f"Tier {i + 1} min General Average",
+            f"Tier {i + 1} minimum average",
             min_value=0.0,
             max_value=100.0,
             value=float(default_min),
@@ -55,19 +58,26 @@ def render() -> None:
                 .all()
             )
             for v in versions:
+                scope_label = (
+                    "per term, on the Term Average"
+                    if v.scope == AwardScope.TERM
+                    else "annual, on the General Average"
+                )
+                average_word = "TA" if v.scope == AwardScope.TERM else "GA"
                 if v.tier_thresholds:
                     shape = ", ".join(
-                        f"{t['label']} (GA≥{t['min_general_average']})" for t in v.tier_thresholds
+                        f"{t['label']} ({average_word}≥{t['min_general_average']})"
+                        for t in v.tier_thresholds
                     )
                 else:
                     parts = []
                     if v.min_general_average is not None:
-                        parts.append(f"GA≥{float(v.min_general_average)}")
+                        parts.append(f"{average_word}≥{float(v.min_general_average)}")
                     if v.min_lowest_final_grade is not None:
-                        parts.append(f"lowest Final Grade≥{float(v.min_lowest_final_grade)}")
+                        parts.append(f"lowest grade≥{float(v.min_lowest_final_grade)}")
                     shape = ", ".join(parts) or "no thresholds set"
                 st.write(
-                    f"**v{v.version_number}** ({v.status.value}) — "
+                    f"**v{v.version_number}** ({v.status.value}) — **{scope_label}** — "
                     f"{'complete record required, ' if v.require_complete_record else ''}"
                     f"{'no derogatory record, ' if v.require_no_derogatory_record else ''}"
                     f"{'no failed subject, ' if v.require_no_failed_subject else ''}"
@@ -84,6 +94,17 @@ def render() -> None:
                         format_func=lambda v: sy_by_id[v].name,
                         key=f"sy_{policy.id}",
                     )
+                    scope = st.radio(
+                        "Judged against",
+                        options=[AwardScope.TERM.value, AwardScope.ANNUAL.value],
+                        format_func=lambda s: (
+                            "Each term's Term Average (§17) — awarded up to 3× a year"
+                            if s == AwardScope.TERM.value
+                            else "The annual General Average (§19/§20) — awarded once a year"
+                        ),
+                        index=1,
+                        key=f"scope_{policy.id}",
+                    )
                     require_complete_record = st.checkbox(
                         "Require complete record", value=True, key=f"reqc_{policy.id}"
                     )
@@ -94,13 +115,17 @@ def render() -> None:
                         "Require no failed subject", value=False, key=f"reqf_{policy.id}"
                     )
 
-                    st.markdown("**Single-tier thresholds** (leave at 0 to skip — used by policies like Academic Excellence)")
+                    st.markdown(
+                        "**Single-tier thresholds** (leave at 0 to skip — used by policies "
+                        "like Academic Excellence). Both are read against whichever average "
+                        "the scope above selects."
+                    )
                     col1, col2 = st.columns(2)
                     min_general_average = col1.number_input(
-                        "Min General Average", min_value=0.0, max_value=100.0, value=0.0, key=f"minga_{policy.id}"
+                        "Min average", min_value=0.0, max_value=100.0, value=0.0, key=f"minga_{policy.id}"
                     )
                     min_lowest_final_grade = col2.number_input(
-                        "Min lowest Final Grade", min_value=0.0, max_value=100.0, value=0.0, key=f"minlow_{policy.id}"
+                        "Min lowest single grade", min_value=0.0, max_value=100.0, value=0.0, key=f"minlow_{policy.id}"
                     )
 
                     st.markdown("**Tiered thresholds** (fill in to make this a tiered policy like Legacy Honors — overrides the single-tier fields above)")
@@ -116,6 +141,7 @@ def render() -> None:
                                 award_policy_id=policy.id,
                                 version_number=next_version,
                                 effective_school_year_id=sy_choice,
+                                scope=AwardScope(scope),
                                 require_complete_record=require_complete_record,
                                 require_no_derogatory_record=require_no_derogatory_record,
                                 require_no_failed_subject=require_no_failed_subject,

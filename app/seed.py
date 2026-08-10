@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.academic_structure import GradeLevel, Strand, Track
 from app.models.awards import AwardPolicy, AwardPolicyVersion
-from app.models.enums import PolicyVersionStatus, SchoolYearStatus
+from app.models.enums import AwardScope, PolicyVersionStatus, SchoolYearStatus
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import Role
 from app.models.subjects import (
@@ -289,6 +289,9 @@ def seed() -> None:
             version_number=1,
             defaults=dict(
                 effective_school_year_id=school_year.id,
+                # Judged once a year on the General Average across all
+                # three terms (§24).
+                scope=AwardScope.ANNUAL,
                 require_complete_record=True,
                 require_no_derogatory_record=True,
                 min_general_average=90,
@@ -303,8 +306,8 @@ def seed() -> None:
             AwardPolicy,
             name="Legacy Tiered Honors",
             defaults=dict(
-                description="GA >= 98 With Highest Honors; >= 95 With High Honors; >= 90 "
-                "With Honors; no failed subject."
+                description="Awarded per term on the Term Average: >= 98 With Highest "
+                "Honors; >= 95 With High Honors; >= 90 With Honors; no failed subject."
             ),
         )
         get_or_create(
@@ -314,6 +317,10 @@ def seed() -> None:
             version_number=1,
             defaults=dict(
                 effective_school_year_id=school_year.id,
+                # Judged separately for each term against that term's
+                # Term Average (§17), so a learner can make Honors in one
+                # term and miss it in another.
+                scope=AwardScope.TERM,
                 require_complete_record=True,
                 require_no_derogatory_record=True,
                 require_no_failed_subject=True,

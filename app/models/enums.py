@@ -95,6 +95,20 @@ class AttendanceStatus(str, enum.Enum):
     CUTTING = "CUTTING"
 
 
+class AwardScope(str, enum.Enum):
+    """What a given award policy is evaluated against.
+
+    TERM — judged per term against that term's Term Average (§17), so a
+    learner can earn it up to three times a year. This is the legacy
+    tiered Honors shape.
+    ANNUAL — judged once against the year's General Average (§19/§20),
+    which is what the Academic Excellence Award (§24) uses.
+    """
+
+    TERM = "TERM"
+    ANNUAL = "ANNUAL"
+
+
 class AwardResult(str, enum.Enum):
     ELIGIBLE_AWARDED = "ELIGIBLE_AWARDED"
     NOT_ELIGIBLE = "NOT_ELIGIBLE"
