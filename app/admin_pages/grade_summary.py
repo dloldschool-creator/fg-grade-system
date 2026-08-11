@@ -6,7 +6,7 @@ from app.academic_record_service import capture_academic_record, get_academic_re
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.grading_service import recompute_enrollment_grades
-from app.report_card import build_learning_area_rows
+from app.report_card import build_learning_area_rows, load_report_context
 from app.models.academic_structure import Section
 from app.models.enums import CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
 from app.models.grades import (
@@ -28,31 +28,6 @@ def _fmt(value):
     """Grades are always whole numbers (every formula in the spec rounds,
     §60) — display as a plain int, not the raw Decimal(5,2)'s "93.00"."""
     return int(value) if value is not None else DASH
-
-
-def _term_grades_by_subject(session, enrollment: Enrollment) -> dict:
-    """subject_id -> {term_number: official_grade | None}, straight from
-    term_grades — independent of subject_final_grades, since a subject
-    can have some terms encoded and others not (that's exactly what makes
-    it Incomplete)."""
-    offerings = (
-        session.query(SectionSubjectOffering)
-        .filter_by(section_id=enrollment.section_id, school_year_id=enrollment.school_year_id)
-        .all()
-    )
-    terms = {t.id: t for t in session.query(Term).filter_by(school_year_id=enrollment.school_year_id).all()}
-    term_grades = {
-        tg.section_subject_offering_id: tg
-        for tg in session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
-    }
-    result: dict = {}
-    for offering in offerings:
-        term = terms.get(offering.term_id)
-        if term is None:
-            continue
-        tg = term_grades.get(offering.id)
-        result.setdefault(offering.subject_id, {})[term.term_number] = tg.official_grade if tg else None
-    return result
 
 
 def _finalization_section(session, current_user, enrollment: Enrollment) -> None:
@@ -135,7 +110,7 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
         st.rerun()
 
 
-def _learner_detail(session, current_user, enrollment: Enrollment):
+def _learner_detail(session, current_user, enrollment: Enrollment, context=None):
     summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
 
     col1, col2, col3 = st.columns(3)
@@ -179,7 +154,7 @@ def _learner_detail(session, current_user, enrollment: Enrollment):
             "Final Grade": "" if row.is_component else _fmt(row.final_grade),
             "Remark": "" if row.is_component else (row.remark or DASH),
         }
-        for row in build_learning_area_rows(session, enrollment)
+        for row in build_learning_area_rows(session, enrollment, context)
     ]
 
     if rows:
@@ -228,30 +203,40 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
     view = st.radio("View", VIEW_OPTIONS, horizontal=True, key="class_summary_view")
 
     subjects = _section_subjects(session, section_id, school_year_id)
+    enrollment_ids = [e.id for e in enrollments]
     summaries = {
         s.enrollment_id: s
         for s in session.query(AnnualGradeSummary)
-        .filter(AnnualGradeSummary.enrollment_id.in_([e.id for e in enrollments]))
+        .filter(AnnualGradeSummary.enrollment_id.in_(enrollment_ids))
         .all()
+    }
+    # One context for the whole roster, and one query for every learner
+    # name — the database is ~85ms away, so anything issued per learner
+    # dominates the page.
+    context = load_report_context(session, enrollments)
+    learners = {
+        l.id: l for l in session.query(Learner).filter(
+            Learner.id.in_([e.learner_id for e in enrollments])
+        ).all()
     }
 
     rows = []
     for enrollment in enrollments:
-        learner = session.get(Learner, enrollment.learner_id)
-        row = {"Learner": f"{learner.last_name}, {learner.first_name}"}
+        learner = learners.get(enrollment.learner_id)
+        row = {"Learner": f"{learner.last_name}, {learner.first_name}" if learner else "?"}
         if view == "Final":
-            finals = {
-                f.subject_id: f
-                for f in session.query(SubjectFinalGrade).filter_by(enrollment_id=enrollment.id).all()
-            }
             for subject in subjects:
-                final = finals.get(subject.id)
+                final = context.finals.get((enrollment.id, subject.id))
                 row[subject.short_name] = _fmt(final.final_grade) if final else DASH
         else:
             term_number = VIEW_OPTIONS.index(view) + 1
-            term_grades = _term_grades_by_subject(session, enrollment)
             for subject in subjects:
-                row[subject.short_name] = _fmt(term_grades.get(subject.id, {}).get(term_number))
+                offering_id = context.offerings_by_subject.get(subject.id, {}).get(term_number)
+                row[subject.short_name] = _fmt(
+                    context.term_grades.get((enrollment.id, offering_id))
+                    if offering_id is not None
+                    else None
+                )
         summary = summaries.get(enrollment.id)
         row["General Average"] = _fmt(summary.general_average) if summary else DASH
         row["Completion"] = summary.completion_status.value if summary else "not computed yet"
@@ -321,7 +306,19 @@ def render() -> None:
 
         st.divider()
         st.subheader("Per-learner detail")
+        # Load the roster's grade data once and hand the same context to
+        # every learner's panel. Building it per learner cost ~12 queries
+        # each, which at ~85ms per round trip is the difference between an
+        # instant page and a forty-second one for a full section.
+        detail_context = load_report_context(session, enrollments)
+        learners = {
+            l.id: l
+            for l in session.query(Learner)
+            .filter(Learner.id.in_([e.learner_id for e in enrollments]))
+            .all()
+        }
         for enrollment in enrollments:
-            learner = session.get(Learner, enrollment.learner_id)
-            with st.expander(f"{learner.last_name}, {learner.first_name}"):
-                _learner_detail(session, current_user, enrollment)
+            learner = learners.get(enrollment.learner_id)
+            label = f"{learner.last_name}, {learner.first_name}" if learner else "?"
+            with st.expander(label):
+                _learner_detail(session, current_user, enrollment, detail_context)

@@ -7,7 +7,7 @@ from app.models.grades import TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
-from app.report_card import build_term_subject_rows
+from app.report_card import build_term_subject_rows, load_report_context
 from app.term_card import (
     CARDS_PER_PAGE,
     TermCardData,
@@ -22,12 +22,8 @@ def _fmt(value):
     return int(value) if value is not None else DASH
 
 
-def _card_for(session, enrollment, learner, *, school, term, grade_level, section, adviser) -> TermCardData:
-    summary = (
-        session.query(TermGradeSummary)
-        .filter_by(enrollment_id=enrollment.id, term_id=term.id)
-        .one_or_none()
-    )
+def _card_for(session, enrollment, learner, *, school, term, grade_level, section, adviser,
+              context=None, summary=None) -> TermCardData:
     comment = {
         1: enrollment.term1_adviser_comment,
         2: enrollment.term2_adviser_comment,
@@ -40,7 +36,7 @@ def _card_for(session, enrollment, learner, *, school, term, grade_level, sectio
         lrn=learner.lrn or "",
         grade_level=(grade_level.code or grade_level.name) if grade_level else "",
         section_name=section.name if section else "",
-        subjects=build_term_subject_rows(session, enrollment, term.term_number),
+        subjects=build_term_subject_rows(session, enrollment, term.term_number, context),
         term_average=summary.term_average if summary else None,
         adviser_name=adviser.full_name if adviser else "",
         adviser_comment=comment,
@@ -116,13 +112,32 @@ def render() -> None:
             if enrollments[0].grade_level_id
             else None
         )
-        learner_by_enrollment = {e.id: session.get(Learner, e.learner_id) for e in enrollments}
+        # Everything the roster needs, in a fixed number of queries rather
+        # than a few per learner (the database is ~85ms away).
+        context = load_report_context(session, enrollments)
+        learners = {
+            l.id: l
+            for l in session.query(Learner)
+            .filter(Learner.id.in_([e.learner_id for e in enrollments]))
+            .all()
+        }
+        learner_by_enrollment = {e.id: learners.get(e.learner_id) for e in enrollments}
+        summaries = {
+            s.enrollment_id: s
+            for s in session.query(TermGradeSummary)
+            .filter(
+                TermGradeSummary.enrollment_id.in_([e.id for e in enrollments]),
+                TermGradeSummary.term_id == term.id,
+            )
+            .all()
+        }
 
         def card(enrollment):
             return _card_for(
                 session, enrollment, learner_by_enrollment[enrollment.id],
                 school=school, term=term, grade_level=grade_level,
                 section=section, adviser=adviser,
+                context=context, summary=summaries.get(enrollment.id),
             )
 
         st.divider()
@@ -130,13 +145,9 @@ def render() -> None:
 
         preview_rows = []
         for enrollment in enrollments:
-            summary = (
-                session.query(TermGradeSummary)
-                .filter_by(enrollment_id=enrollment.id, term_id=term.id)
-                .one_or_none()
-            )
+            summary = summaries.get(enrollment.id)
             learner = learner_by_enrollment[enrollment.id]
-            active = build_term_subject_rows(session, enrollment, term.term_number)
+            active = build_term_subject_rows(session, enrollment, term.term_number, context)
             preview_rows.append(
                 {
                     "Learner": f"{learner.last_name}, {learner.first_name}",

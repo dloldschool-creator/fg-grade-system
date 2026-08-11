@@ -660,6 +660,46 @@ those formulas with values written by our own grading engine via
       **LibreOffice was installed at the start of this phase**, so PDF
       export is now live everywhere (`is_pdf_available()` → True).
       `pytest tests/` is 162.
+- [x] **Performance pass (post-Phase-12, user-reported "pages feel
+      slow")** — measured, not guessed. The database is Supabase in Tokyo
+      and the median round trip from here is **~85ms**, so the cost of a
+      page is dominated by *how many* queries it issues, not by how much
+      data they return.
+      The problem was a classic N+1: `build_learning_area_rows` and the
+      page loops issued **~12 queries per learner**. A 4-learner section
+      took 4.8s; a real 40-learner section projected to ~480 queries and
+      **~41 seconds**. Streamlit re-runs the whole script on every widget
+      interaction, so that cost was per *click*, not per visit.
+      **The fix is `report_card.ReportCardContext` + `load_report_context()`**
+      — every per-enrollment fetch became one `IN (...)` over the whole
+      roster, so loading a section costs a *fixed* 8 queries and building
+      each learner's rows afterwards costs **zero**. 40 learners now cost
+      the same round trips as 1 (~0.7s instead of ~41s). Callers that
+      render a roster (Grade Summary's class summary and per-learner
+      detail, Term Cards) load one context and pass it in; single-learner
+      callers (SF9, the academic-record snapshot) can still omit it and
+      get a context built for them.
+      `tests/test_query_cost.py` locks this in by asserting the *shape*
+      of the data access — a preloaded context must issue **zero**
+      queries while rendering, and a whole section must cost no more than
+      one learner. Those assertions stay meaningful on a fast local
+      database, where the bug would otherwise be invisible.
+      **Pool** (`app/database.py`): was SQLAlchemy's default 5 + 10, which
+      would queue requests once ~15 teachers were active; now 20 + 10
+      against the instance's `max_connections = 60`, leaving margin for
+      the SQL editor and anything else. `pool_pre_ping=True` and a
+      30-minute `pool_recycle` were added because Supabase closes idle
+      connections server-side — without them the first query on a dropped
+      connection raises instead of reconnecting, which shows up as random
+      errors rather than at a predictable moment. `pool_timeout` is 10s so
+      exhaustion fails fast and legibly instead of just being slow. All
+      overridable via `DB_POOL_*` env vars.
+      **Deliberately NOT done: caching reference data** (school, terms,
+      sections) in `st.cache_data`. Measured first: it would save ~6 of
+      the remaining 15 queries on a page, but caching ORM instances risks
+      detached-instance and staleness bugs across 15 pages for a modest
+      gain once the N+1 was gone. If pages still feel slow, that's the
+      next lever — cache plain tuples for the dropdowns, not ORM objects.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
