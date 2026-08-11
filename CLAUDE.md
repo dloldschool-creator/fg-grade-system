@@ -514,10 +514,85 @@ those formulas with values written by our own grading engine via
       the page count follows whichever sex overflows further, not the
       combined total — 30M+30F is 60 learners but only 2 pages. Verified
       end-to-end with a synthetic 60M/30F roster.
-- [ ] Next: Phase 10 (SF9) — ask before starting. Reuse
-      `app/sf2_report.py`'s external-link stripping and `_anchor_map()`
-      write helpers; the SF9 template has the same provenance and the
-      Grade 11 combined-language display rule (§16) to honour.
+- [x] Phase 10 (SF9) built; not yet clicked through by the user.
+      Two refactors came first, both worth knowing:
+      **`app/excel_template.py`** now holds the template plumbing that
+      SF2 and SF9 (and SF10 later) share — `strip_external_formulas`,
+      `assert_no_external_links`, `anchor_map`/`write`/`write_ref`,
+      `replicate_images`, `clear_column`, `workbook_to_bytes`. All four
+      openpyxl traps from Phase 9 live here now, so SF10 gets them free.
+      **`app/report_card.py`** is the *single* implementation of the §16
+      combined-language display rule, used by **both** the Grade Summary
+      screen and the generated SF9. That's deliberate: it's the rule
+      CLAUDE.md flags as the biggest source of bugs, and having the
+      screen and the printed card derive rows separately would invite
+      them to disagree — with the printed one being what goes home to a
+      parent. `build_learning_area_rows()` returns parent rows carrying a
+      Final Grade and component rows with `final_grade=None` *because
+      §16 says the cell is blank*, not because the value is unknown (it
+      exists in `subject_final_grades`).
+      **`app/sf9_report.py`** fills `sf-templates/SF9-template-with-
+      sample-data.xlsx` (42 rows × 27 cols, 109 external-link formulas,
+      same OneDrive master workbook as SF2). **`app/admin_pages/sf9.py`**
+      is the page (Adviser own-section + Super Admin/Registrar) with an
+      on-screen preview of the same rows the form prints.
+      **One template serves both grade levels.** §35 asks for separate
+      G11/G12 templates, but the supplied file is already grade-aware —
+      its own formulas branch on `SETUP!$B$13=11` to decide whether to
+      draw the combined-language hierarchy. Since we replace those
+      formulas with values anyway, the distinction is purely data-driven:
+      a G11 enrollment has a combined learning area, a G12 one doesn't.
+      Layout: learning areas occupy rows 20-31 (12 rows, bounded by the
+      "General Average" label at row 32 — there's a test asserting
+      `MAX_LEARNING_AREAS` stays derived from that), A:G = name,
+      H/I/J = terms, K = final, L:M = remarks. Attendance is P..Z
+      (Jun-Apr) + AA total, rows 4/5/6.
+      Three rules specific to this form:
+      (1) **Age is taken at the school year's start**, not today — a card
+      reprinted years later must still show the age the learner was.
+      (2) **A month with nothing encoded is omitted entirely**, not
+      printed as "22 class days, 0 present" — on a card going home to a
+      parent that reads as the learner having missed the whole month.
+      Totals sum only the months actually shown.
+      (3) **Class days are the learner's eligible days**, not the
+      section's calendar total (§31), so a late enrollee isn't shown
+      absent for weeks before they arrived.
+      The month header row is an external formula in the template, so it
+      gets stripped with everything else and has to be written back — an
+      easy one to miss, since the row looks static.
+      **The biggest trap on this form, and a fifth openpyxl/Excel one for
+      the list: the template blocks out non-offered terms with its own
+      CONDITIONAL FORMATTING, driven by helper column N.** Three rules
+      shade H/I/J when the matching digit of N is zero —
+      `INT($N20/100)=0`, `MOD(INT($N20/10),10)=0`, `MOD($N20,10)=0` —
+      so N is a 3-digit per-term flag (111 = all three terms, 100 = Term 1
+      only, 10 = Term 2 only, 1 = Term 3 only). Writing that flag is all
+      that's needed; the grey, the white text on top and the block-out
+      pattern are the official template's own styling. Two ways this went
+      wrong before being understood: (a) column N was mistaken for print
+      scaffolding and blanked, making every digit 0 and greying out
+      *every* grade on the card; (b) hand-painting fills instead — and
+      "clearing" the others with `PatternFill(fill_type=None)`, which
+      serialises onto OOXML fill index 1, and index 1 is **always
+      gray125**, so the supposedly-cleared cells came out grey too.
+      Before adding fills to any of these templates, check
+      `worksheet.conditional_formatting` first — the form may already do
+      it. `report_card.LearningAreaRow.offered_terms` is what feeds the
+      flag, and exists precisely to tell "subject doesn't run that term"
+      apart from "runs but not yet encoded"; they look identical in
+      `term_grades` but mean opposite things.
+      Print setup (the template ships with no `<pageSetup>` at all):
+      landscape, `fitToWidth=1` **and** `fitToHeight=1` for a single
+      sheet, margins narrowed 0.75"→0.25" (the card is ~9.5" tall, so the
+      original margins forced a ~73% shrink; 0.25" gets it to ~84%), and
+      `printOptions horizontal/verticalCentered` — without those the
+      height binds first and the card parks against the left margin.
+      `pytest tests/` is 137; PDF export is still unavailable (LibreOffice
+      not installed), same graceful fallback as SF2.
+- [ ] Next: Phase 11 (Temporary SF10) — ask before starting. Note §36:
+      the SF10 layout is explicitly temporary, so build the permanent
+      learner academic record independently of the report layout and
+      treat the current form as a template only.
 
 ## Development phases (per spec Section 71 — build in this order)
 
@@ -530,8 +605,8 @@ those formulas with values written by our own grading engine via
 7. Annual summary, validation, finalization, awards — done
 8. Academic calendar and attendance — done
 9. SF2 — done
-10. SF9 ← **we are here**
-11. Temporary SF10
+10. SF9 — done
+11. Temporary SF10 ← **we are here**
 12. Temp cards and certificates
 13. Excel import/export migration tooling
 14. Audit logs, backups, security hardening

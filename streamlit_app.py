@@ -16,6 +16,7 @@ from app.admin_pages import (
     section_offerings,
     sections,
     sf2,
+    sf9,
     subject_catalog,
     subject_profiles,
     teacher_assignments,
@@ -80,6 +81,7 @@ else:
             st.Page(grade_summary.render, title="Grade Summary", icon="📊", url_path="grade-summary"),
             st.Page(attendance.render, title="Attendance", icon="🗒️", url_path="attendance"),
             st.Page(sf2.render, title="SF2", icon="📄", url_path="sf2"),
+            st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
             st.Page(awards.render, title="Awards", icon="🏆", url_path="awards"),
         ]
     if current_user.has_role("SUBJECT_TEACHER"):
