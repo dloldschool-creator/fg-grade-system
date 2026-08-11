@@ -47,4 +47,7 @@ class ReportGenerationLog(UUIDPKMixin, Base):
     generated_at: Mapped[datetime] = mapped_column(server_default="now()")
 
 
-# `report_snapshots` intentionally not modeled yet — see docs/schema.md §9.
+# The deferred `report_snapshots` idea is now realised as the permanent
+# academic record in app/models/academic_record.py — see §38. It freezes
+# the learner's *result* rather than a rendered file, which is what makes
+# a later template revision reprintable without recalculating grades.

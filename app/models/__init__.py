@@ -5,8 +5,9 @@ module has been loaded once."""
 
 from app.models.base import Base
 from app.models import (  # noqa: F401
-    admin,
+    academic_record,
     academic_structure,
+    admin,
     attendance,
     awards,
     grades,

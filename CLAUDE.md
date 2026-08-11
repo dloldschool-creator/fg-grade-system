@@ -109,9 +109,11 @@ those formulas with values written by our own grading engine via
       `strands` covers both the Academic ("Program/Cluster": ASSH/BE/STEM)
       and TechPro ("Strand/Specialization": ICT/HE/CP/EMS) usages the spec
       uses interchangeably. See `docs/schema.md` Academic Structure section.
-- [ ] Not yet modeled: `report_snapshots` (freeze data behind a generated
-      PDF for provable reprint fidelity) — add before go-live, not required
-      for Phase 1.
+- [x] The long-deferred `report_snapshots` idea landed in Phase 11 as the
+      **permanent learner academic record** (`app/models/academic_record.py`)
+      — see the Phase 11 entry below. It freezes the learner's *result*
+      rather than a rendered file, which is what makes a later template
+      revision reprintable without recalculating grades (§36.4).
 - [x] SQLAlchemy models written (`app/models/`, one file per domain) and
       first Alembic migration (`alembic/versions/`) generated + applied to
       the live Supabase DB — all 42 tables confirmed present, `alembic
@@ -589,10 +591,60 @@ those formulas with values written by our own grading engine via
       height binds first and the card parks against the left margin.
       `pytest tests/` is 137; PDF export is still unavailable (LibreOffice
       not installed), same graceful fallback as SF2.
-- [ ] Next: Phase 11 (Temporary SF10) — ask before starting. Note §36:
-      the SF10 layout is explicitly temporary, so build the permanent
-      learner academic record independently of the report layout and
-      treat the current form as a template only.
+- [~] Phase 11 (Temporary SF10) — **the record layer is built; the report
+      layout is BLOCKED.** `sf-templates/` still has only SF2 and SF9; the
+      school's SF10 file hasn't been supplied, so nothing can be filled
+      yet. That blocks only the rendering: §36 orders this phase the other
+      way round anyway ("create the underlying permanent learner academic
+      record database independently from the report layout… never design
+      the database around the visual coordinates of the temporary SF10"),
+      so the record was built first and is layout-agnostic.
+      **`app/models/academic_record.py`** — three tables (migration
+      `f00c90460cb9`, 46 tables total): `learner_academic_records` (one
+      finalized year per enrollment), `learner_academic_record_subjects`
+      (one per learning area), `learner_academic_record_terms` (per-term
+      averages and adviser comments).
+      **The design rule, and the whole point of §38: everything
+      descriptive is stored as TEXT, not as a foreign key.** Subject name,
+      code and category; school name and DepEd ID; section, track, strand;
+      the grading policy's passing grade as a *number*. §38 is explicit —
+      "if administrators rename a subject or change a policy in a later
+      school year, historical SF10 records must NOT change" — and
+      pointing at `subjects.id` would make a rename in SY 2028-2029
+      silently rewrite a learner's SY 2026-2027 record. The FK columns
+      that remain (`enrollment_id`, `learner_id`, `subject_id`) are for
+      lineage/lookup only and are never read for display. There's a
+      structural test asserting those display columns stay VARCHAR, plus
+      behavioural tests that rename a subject, recategorise it, and edit
+      the policy's passing grade, then assert the frozen record is
+      unchanged.
+      **`app/academic_record_service.py`** — `capture_academic_record()`
+      reads the already-computed derived tables via `app/report_card.py`
+      (so the §16 row order matches the screen and SF9) and never
+      recomputes a grade. Wired into Grade Summary's **Finalize**, which
+      is already gated on the record being COMPLETE (§23) — capture on an
+      un-recomputed enrollment would freeze stale numbers. Re-finalizing
+      after an audited reopen replaces the child rows and bumps
+      `revision` rather than accumulating duplicates.
+      A component keeps its own Final Grade in `component_final_grade`
+      even though §16 blanks that cell on the printed card: the record
+      holds the truth, the form decides what to show.
+      Gotcha worth remembering: `session.flush()` must come **after** the
+      NOT NULL columns are populated. Flushing straight after
+      `session.add()` (to get the id for child rows) fires the INSERT with
+      every field still None.
+      `pytest tests/` is 147. Note the new tests hit the live database and
+      roll back, so the suite now takes ~60s rather than ~10s.
+- [ ] Blocked, needs you: drop the school's SF10 file into
+      `sf-templates/` and the report layer can be built on top of the
+      record — `app/excel_template.py` already carries the five
+      openpyxl/Excel traps SF2 and SF9 hit. Label the output
+      **TEMPORARY THREE-TERM SF10 – FOR SCHOOL USE ONLY** (§36.3).
+- [ ] Also still open: §37's Grade 11 prior-entry/eligibility fields
+      (PEPT, ALS A&E, CLC, previous school) already exist in
+      `learner_admission_records` and are deliberately NOT snapshotted —
+      they describe a single admission event rather than a year's result.
+      Revisit if the SF10 layout needs them frozen too.
 
 ## Development phases (per spec Section 71 — build in this order)
 

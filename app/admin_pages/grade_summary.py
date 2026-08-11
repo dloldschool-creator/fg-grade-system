@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
+from app.academic_record_service import capture_academic_record, get_academic_record
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.grading_service import recompute_enrollment_grades
@@ -66,6 +67,14 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
 
     if is_finalized:
         st.success(f"Finalized {latest_record.finalized_at:%Y-%m-%d %H:%M}.")
+        snapshot = get_academic_record(session, enrollment.id)
+        if snapshot is not None:
+            st.caption(
+                f"Permanent academic record captured "
+                f"{snapshot.snapshot_at:%Y-%m-%d %H:%M}"
+                f"{f' (revision {snapshot.revision})' if snapshot.revision > 1 else ''} — "
+                "frozen against later subject renames or policy changes (§38)."
+            )
         # Reopening a finalized record is Super-Admin-only (§3A lists
         # "reopen finalized records" as a Super Admin capability, not
         # Registrar/Adviser).
@@ -114,7 +123,15 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
             tg.finalized_by_user_id = current_user.id
             tg.finalized_at = now
             tg.version += 1
-        try_commit(session, "Finalized — grades are now read-only until an audited reopen.")
+        # Freeze the permanent academic record (§38). Everything it shows
+        # is copied now, so renaming a subject or editing the grading
+        # policy in a later year can't rewrite this one.
+        capture_academic_record(session, enrollment.id, current_user.id)
+        try_commit(
+            session,
+            "Finalized — grades are read-only until an audited reopen, and the "
+            "permanent academic record has been captured.",
+        )
         st.rerun()
 
 
