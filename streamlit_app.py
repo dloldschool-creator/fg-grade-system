@@ -6,6 +6,8 @@ from app.admin_pages import (
     attendance,
     award_policy,
     awards,
+    data_export,
+    data_import,
     enrollment,
     gradebook,
     grade_summary,
@@ -65,6 +67,7 @@ else:
             st.Page(teacher_assignments.render, title="Teacher Assignments", icon="🧑‍🏫", url_path="teacher-assignments"),
             st.Page(grading_policy.render, title="Grading Policy", icon="✅", url_path="grading-policy"),
             st.Page(award_policy.render, title="Award Policy", icon="🏅", url_path="award-policy"),
+            st.Page(data_import.render, title="Import from Excel", icon="📥", url_path="import"),
             st.Page(users.render, title="Users & Roles", icon="👥", url_path="users"),
         ]
     # Learner Masterlist, Enrollment, and Grade Summary are all reachable
@@ -85,6 +88,7 @@ else:
             st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
             st.Page(term_cards.render, title="Term Cards", icon="🎫", url_path="term-cards"),
             st.Page(awards.render, title="Awards", icon="🏆", url_path="awards"),
+            st.Page(data_export.render, title="Export", icon="📤", url_path="export"),
         ]
     if current_user.has_role("SUBJECT_TEACHER"):
         pages += [

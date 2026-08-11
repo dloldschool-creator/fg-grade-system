@@ -700,6 +700,47 @@ those formulas with values written by our own grading engine via
       detached-instance and staleness bugs across 15 pages for a modest
       gain once the N+1 was gone. If pages still feel slow, that's the
       next lever — cache plain tuples for the dropdowns, not ORM objects.
+- [x] Phase 13 (Excel import/export migration tooling) built; not yet
+      clicked through by the user. **Scope was chosen with the user: the
+      two import kinds that carry real migration volume — learners and
+      term grades — not all six §51 lists.** Subject catalog already has
+      the lightweight CSV path from Phase 6, and school info is a single
+      row an admin types once. Exports cover the full §52 set, since they
+      share one code path.
+      **`app/import_pipeline.py`** is §51's sequence — upload, detect
+      columns, map, validate, show errors, confirm, audit — parameterised
+      by an `ImportSpec` so each kind supplies only its columns,
+      validators and writer. Split so the DB-free half (reading, mapping,
+      value parsing) is unit-testable without a session.
+      **`app/import_specs.py`** holds the two kinds and covers every error
+      §51 names: duplicate LRN (both against the database *and* within the
+      same file), unknown section, unknown subject, invalid grade,
+      impossible date, and a subject not offered during that term — the
+      last being the one that matters most, since
+      `section_subject_offerings` is the single source of truth for what a
+      learner is graded on (rule 5).
+      Two rules the importer holds to: a **blank grade stays blank**, never
+      0 (rule 2); and imported grades land as **DRAFT**, never straight to
+      FINALIZED, so migrated data still goes through the normal
+      submit/verify workflow (rule 7). Re-importing the same
+      learner/subject/term updates in place rather than duplicating.
+      **`app/export_service.py`** does §52's five exports as .xlsx and
+      .csv. **The LRN trap runs in both directions and is tested at both
+      ends:** Excel hands a 12-digit LRN back as a *float*, so a naive
+      `str()` on read yields `1.07041140016e+11` and destroys it; and on
+      write, a numeric cell shows scientific notation and drops a leading
+      zero. Reading coerces integral floats back to int-then-str, and
+      writing sets both a string value *and* number_format `"@"` so Excel
+      won't re-coerce on save. CSV quotes every field.
+      Validation reference data is loaded **once per file**, not per row —
+      the same ~85ms-per-round-trip lesson from the performance pass; a
+      300-row masterlist validated per row would take half a minute.
+      Pages: **Import from Excel** (Super Admin + Registrar only — it
+      writes learner records) and **Export** (Adviser own-section too).
+      A failed validation still writes an `import_jobs` row, since a
+      rejected import is also something an administrator may need to
+      account for.
+      `pytest tests/` is 204.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
@@ -725,6 +766,6 @@ those formulas with values written by our own grading engine via
 10. SF9 — done
 11. Temporary SF10 — record layer done; report BLOCKED on the template file
 12. Temp cards and certificates — done
-13. Excel import/export migration tooling ← **we are here**
-14. Audit logs, backups, security hardening
+13. Excel import/export migration tooling — done (learners + term grades; §52 exports in full)
+14. Audit logs, backups, security hardening ← **we are here**
 15. Automated tests, deployment
