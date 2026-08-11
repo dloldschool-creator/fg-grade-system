@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import streamlit as st
 
 from app.database import SessionLocal
+from app.naming import normalize_name
 from app.models.rbac import Role, User, UserRole
 from app.supabase_clients import get_anon_client
 
@@ -54,7 +55,7 @@ def _load_or_provision_user(
             user = User(
                 supabase_auth_user_id=supabase_auth_user_id,
                 email=email,
-                full_name=full_name or email,
+                full_name=normalize_name(full_name) or email,
             )
             session.add(user)
             session.flush()

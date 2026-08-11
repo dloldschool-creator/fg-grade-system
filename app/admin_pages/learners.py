@@ -15,6 +15,7 @@ from app.auth import require_role
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
+from app.naming import normalize_name
 from app.models.organization import SchoolYear
 
 RESULT_LIMIT = 50
@@ -46,10 +47,10 @@ def _identity_form(session, learner: Learner) -> None:
 
         col1, col2 = st.columns(2)
         if col1.form_submit_button("Save"):
-            learner.last_name = last_name
-            learner.first_name = first_name
-            learner.middle_name = middle_name or None
-            learner.extension_name = extension_name or None
+            learner.last_name = normalize_name(last_name)
+            learner.first_name = normalize_name(first_name)
+            learner.middle_name = normalize_name(middle_name)
+            learner.extension_name = normalize_name(extension_name)
             learner.sex = Sex(sex)
             learner.birthdate = birthdate
             learner.lrn = lrn.strip() or None
@@ -168,8 +169,10 @@ def _admission_record_form(session, learner: Learner) -> None:
 
 
 def _validate_learner_row(row: dict) -> tuple[dict | None, str | None]:
-    last_name = row.get("last_name", "")
-    first_name = row.get("first_name", "")
+    # Normalize before validating, so a name of only whitespace is caught
+    # by the required-field check rather than saved as blank.
+    last_name = normalize_name(row.get("last_name", ""))
+    first_name = normalize_name(row.get("first_name", ""))
     sex_raw = row.get("sex", "").upper()
     birthdate_raw = row.get("birthdate", "")
     lrn = row.get("lrn", "") or None
@@ -189,8 +192,8 @@ def _validate_learner_row(row: dict) -> tuple[dict | None, str | None]:
         {
             "last_name": last_name,
             "first_name": first_name,
-            "middle_name": row.get("middle_name") or None,
-            "extension_name": row.get("extension_name") or None,
+            "middle_name": normalize_name(row.get("middle_name")),
+            "extension_name": normalize_name(row.get("extension_name")),
             "sex": Sex(sex_raw),
             "birthdate": birthdate,
             "lrn": lrn,
@@ -314,14 +317,16 @@ def render() -> None:
             lrn = st.text_input("LRN (12 digits, blank if not yet assigned)", key="new_lrn")
 
             if st.form_submit_button("Add"):
+                last_name = normalize_name(last_name)
+                first_name = normalize_name(first_name)
                 if not last_name or not first_name:
                     st.error("Last name and first name are required.")
                 else:
                     learner = Learner(
                         last_name=last_name,
                         first_name=first_name,
-                        middle_name=middle_name or None,
-                        extension_name=extension_name or None,
+                        middle_name=normalize_name(middle_name),
+                        extension_name=normalize_name(extension_name),
                         sex=Sex(sex),
                         birthdate=birthdate,
                         lrn=lrn.strip() or None,

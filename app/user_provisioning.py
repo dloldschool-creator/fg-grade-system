@@ -17,6 +17,7 @@ import secrets
 from dataclasses import dataclass
 
 from app.database import SessionLocal
+from app.naming import normalize_name
 from app.models.rbac import Role, User, UserRole
 from app.supabase_clients import get_admin_client
 
@@ -76,6 +77,9 @@ def provision_user(email: str, full_name: str, role_codes: list[str]) -> Provisi
     email/role combination; each call does generate and set a fresh
     temporary password, though, so only call it when you intend to hand
     out a new one."""
+    # Same uppercase rule as learner names, so advisers and teachers
+    # print consistently on SF2/SF9 signature lines and certificates.
+    full_name = normalize_name(full_name) or email
     provisioned = _create_or_reset_auth_user(email, full_name)
 
     session = SessionLocal()

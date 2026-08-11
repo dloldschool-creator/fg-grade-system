@@ -2,6 +2,7 @@ import streamlit as st
 
 from app.admin_pages._helpers import get_session, render_flashes, try_commit
 from app.auth import require_role
+from app.naming import normalize_name
 from app.models.organization import School
 
 
@@ -33,7 +34,7 @@ def render() -> None:
                             schools_division=schools_division,
                             district=district,
                             address=address,
-                            school_head_name=school_head_name,
+                            school_head_name=normalize_name(school_head_name),
                             school_head_position=school_head_position,
                         )
                     )
@@ -60,7 +61,7 @@ def render() -> None:
                 school.schools_division = schools_division
                 school.district = district
                 school.address = address
-                school.school_head_name = school_head_name
+                school.school_head_name = normalize_name(school_head_name)
                 school.school_head_position = school_head_position
                 try_commit(session, "Saved.")
                 st.rerun()

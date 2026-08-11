@@ -150,7 +150,7 @@ def seed() -> None:
                 schools_division="Schools Division of Angeles City",
                 district="1st District",
                 address="Angeles City, Pampanga",
-                school_head_name="Hermes P. Vargas",
+                school_head_name="HERMES P. VARGAS",  # uppercase per app/naming.py
                 school_head_position="Principal IV",
             ),
         )
