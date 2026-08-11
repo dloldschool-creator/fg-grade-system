@@ -472,12 +472,12 @@ those formulas with values written by our own grading engine via
       headless LibreOffice, **`app/admin_pages/sf2.py`** is the page
       (Adviser own-section + Super Admin/Registrar), **`tests/
       test_sf2_report.py`** covers the pure rules; suite is now 58.
-      **⚠️ LibreOffice is NOT installed on this machine**, so PDF export
-      is currently unavailable — the page detects that, disables the PDF
-      button with an explanation, and still offers the .xlsx (which is
-      complete and prints identically from Excel). `find_soffice()` also
-      probes the two standard Windows install paths, since LibreOffice
-      usually isn't on PATH there. Nothing auto-installs it.
+      **LibreOffice is installed as of Phase 12**, so PDF export works
+      for SF2/SF9 (verified end-to-end: SF2 → 2 landscape pages, SF9 → 1).
+      `find_soffice()` probes the two standard Windows install paths as
+      well as PATH, since LibreOffice usually isn't on PATH there; if it
+      ever goes missing the pages fall back to offering the .xlsx with an
+      explanation rather than erroring.
       **The template arrives tethered to another workbook** — ~1600 of its
       data cells are external-link formulas pointing at the school's
       master automation workbook on OneDrive (`'[1]ATTENDANCE DAILY'!…`,
@@ -589,8 +589,10 @@ those formulas with values written by our own grading engine via
       original margins forced a ~73% shrink; 0.25" gets it to ~84%), and
       `printOptions horizontal/verticalCentered` — without those the
       height binds first and the card parks against the left margin.
-      `pytest tests/` is 137; PDF export is still unavailable (LibreOffice
-      not installed), same graceful fallback as SF2.
+      `pytest tests/` is 137 at this point. PDF export was unavailable
+      when this phase was built and started working in Phase 12 once
+      LibreOffice was installed — SF9 converts to exactly one landscape
+      page, confirming the fit-to-page settings survive the conversion.
 - [~] Phase 11 (Temporary SF10) — **the record layer is built; the report
       layout is BLOCKED.** `sf-templates/` still has only SF2 and SF9; the
       school's SF10 file hasn't been supplied, so nothing can be filled
@@ -635,6 +637,29 @@ those formulas with values written by our own grading engine via
       every field still None.
       `pytest tests/` is 147. Note the new tests hit the live database and
       roll back, so the suite now takes ~60s rather than ~10s.
+- [x] Phase 12 (Temporary term cards) built; not yet clicked through by
+      the user. **`app/term_card.py`** draws the end-of-term slip (§39)
+      directly with ReportLab, **eight cards to a 8.5 × 13 in sheet**
+      (2 across × 4 down) — the school prints on Philippine long bond, so
+      that replaces §39's suggested "6 per landscape Letter". The school
+      seal is on every card. One routine draws a card into an arbitrary
+      rectangle and the page builder tiles it, the same shape as the
+      certificate generator, so the single-learner print and the
+      whole-section batch can't drift. Pagination is automatic (§39).
+      **`app/admin_pages/term_cards.py`** is the page (Adviser
+      own-section + Super Admin/Registrar): school year → section →
+      **term**, an on-screen preview, "Print section" and "Print selected
+      learner".
+      **The rule worth not getting wrong here:** the card lists the Grade
+      11 language pair as **two separate subjects**, via the new
+      `report_card.build_term_subject_rows()`. That's the opposite of the
+      annual report card, where §16 collapses the pair into one row — but
+      it's right for this card, because §17 computes the Term Average
+      printed at its foot from those two subjects. Collapsing them would
+      print a list that doesn't add up to the figure beneath it.
+      **LibreOffice was installed at the start of this phase**, so PDF
+      export is now live everywhere (`is_pdf_available()` → True).
+      `pytest tests/` is 162.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
@@ -658,8 +683,8 @@ those formulas with values written by our own grading engine via
 8. Academic calendar and attendance — done
 9. SF2 — done
 10. SF9 — done
-11. Temporary SF10 ← **we are here**
-12. Temp cards and certificates
-13. Excel import/export migration tooling
+11. Temporary SF10 — record layer done; report BLOCKED on the template file
+12. Temp cards and certificates — done
+13. Excel import/export migration tooling ← **we are here**
 14. Audit logs, backups, security hardening
 15. Automated tests, deployment

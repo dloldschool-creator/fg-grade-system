@@ -20,6 +20,7 @@ from app.admin_pages import (
     subject_catalog,
     subject_profiles,
     teacher_assignments,
+    term_cards,
     users,
 )
 from app.auth import change_password_form, get_current_user, login_form, logout
@@ -82,6 +83,7 @@ else:
             st.Page(attendance.render, title="Attendance", icon="🗒️", url_path="attendance"),
             st.Page(sf2.render, title="SF2", icon="📄", url_path="sf2"),
             st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
+            st.Page(term_cards.render, title="Term Cards", icon="🎫", url_path="term-cards"),
             st.Page(awards.render, title="Awards", icon="🏆", url_path="awards"),
         ]
     if current_user.has_role("SUBJECT_TEACHER"):

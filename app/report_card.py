@@ -99,6 +99,36 @@ def _term_grades_by_subject(session: Session, enrollment: Enrollment) -> dict:
     return result
 
 
+def build_term_subject_rows(
+    session: Session, enrollment: Enrollment, term_number: int
+) -> list[tuple[str, Decimal | None]]:
+    """(subject name, grade) for the subjects actually active in one term
+    — what a temporary term card lists (§39: "show only subjects active
+    during the selected term").
+
+    Note this deliberately does **not** use the combined-language parent
+    row. §17 keeps Effective Communication and Mabisang Komunikasyon as
+    two separate subjects when computing the Term Average, so a card that
+    prints the Term Average has to itemise the same two subjects that
+    average is made of. Collapsing them into the parent here would show a
+    subject list that doesn't add up to the figure beneath it.
+
+    That's the opposite of the annual report card, where §16 does collapse
+    the pair — see `build_learning_area_rows`.
+    """
+    by_subject = _term_grades_by_subject(session, enrollment)
+    rows: list[tuple[str, Decimal | None]] = []
+    for subject_id, grades in by_subject.items():
+        if term_number not in grades:
+            continue  # subject doesn't run this term
+        subject = session.get(Subject, subject_id)
+        if subject is None:
+            continue
+        rows.append((subject.official_name, grades[term_number]))
+    rows.sort(key=lambda row: row[0])
+    return rows
+
+
 def build_learning_area_rows(session: Session, enrollment: Enrollment) -> list[LearningAreaRow]:
     """The rows for one learner, in print order: each combined learning
     area followed by its indented components, then every other subject."""
