@@ -57,10 +57,28 @@ TEXT_INSET = 2.0
 PAGE_BREAK_TOLERANCE = 0.5
 
 
-def column_width_to_points(width: float | None) -> float:
+def column_width_to_points(width: float | None, *, is_stored: bool = True) -> float:
+    """Excel column width to points.
+
+    **The padding is already inside a stored width, and adding it again is
+    a real bug.** ECMA-376 defines the stored value as
+
+        width = Truncate((chars * MDW + 5) / MDW * 256) / 256
+
+    so it is chars + 5/MDW, and inverting gives `pixels = width * MDW`
+    with no further padding. Adding 5px per column on top inflated SF2 —
+    81 columns, many of them sub-character hairline separators — from
+    10.3in to 14.6in, which shrank the whole form to 62% and printed its
+    title at 6.9pt against the 10pt it should be.
+
+    `baseColWidth` is the exception: it *is* a raw character count, so the
+    padding does apply there.
+    """
     if width is None:
         width = DEFAULT_COL_WIDTH
-    return (width * MAX_DIGIT_WIDTH + CELL_PADDING_PX) * PIXELS_TO_POINTS
+        is_stored = False
+    pixels = width * MAX_DIGIT_WIDTH + (0 if is_stored else CELL_PADDING_PX)
+    return pixels * PIXELS_TO_POINTS
 
 
 # --- Fonts -----------------------------------------------------------------
@@ -182,11 +200,13 @@ def sheet_geometry(worksheet, max_row: int | None = None, max_col: int | None = 
     # baseColWidth is the sheet's own default when defaultColWidth is unset;
     # only fall back to Excel's global 8.43 when neither is present.
     fmt = worksheet.sheet_format
-    default_col = (
-        getattr(fmt, "defaultColWidth", None)
-        or getattr(fmt, "baseColWidth", None)
-        or DEFAULT_COL_WIDTH
-    )
+    # defaultColWidth is a stored (already-padded) value; baseColWidth is a
+    # raw character count. They need different conversions — see
+    # column_width_to_points.
+    default_col = getattr(fmt, "defaultColWidth", None)
+    default_is_stored = default_col is not None
+    if default_col is None:
+        default_col = getattr(fmt, "baseColWidth", None) or DEFAULT_COL_WIDTH
     default_row = getattr(fmt, "defaultRowHeight", None) or DEFAULT_ROW_HEIGHT
 
     dimensions = column_dimension_map(worksheet, max_col)
@@ -198,8 +218,10 @@ def sheet_geometry(worksheet, max_row: int | None = None, max_col: int | None = 
         # A hidden column occupies no space on the printed page.
         if dim is not None and dim.hidden:
             width = 0.0
+        elif dim is not None and dim.width:
+            width = column_width_to_points(dim.width, is_stored=True)
         else:
-            width = column_width_to_points(dim.width if dim is not None and dim.width else default_col)
+            width = column_width_to_points(default_col, is_stored=default_is_stored)
         col_x[col] = x
         col_w[col] = width
         x += width

@@ -147,6 +147,33 @@ def replicate_images(base, copies) -> None:
 
 
 def workbook_to_bytes(workbook) -> bytes:
+    """Saves to bytes **without destroying the workbook**.
+
+    `workbook.save()` consumes every embedded image's stream and leaves it
+    closed — the same one-read-only trap `replicate_images` works around.
+    That made the workbook single-use: a page that offered an .xlsx
+    download and then rendered the same object to PDF got a PDF with no
+    DepEd shield and no school seal, silently, because a missing seal must
+    never break a report.
+
+    So the bytes are captured first and each image's stream is rebuilt
+    afterwards, leaving the workbook exactly as usable as before.
+    """
+    images = []
+    for sheet in workbook.worksheets:
+        for image in getattr(sheet, "_images", []):
+            ref = getattr(image, "ref", None)
+            try:
+                data = ref.getvalue() if hasattr(ref, "getvalue") else None
+            except ValueError:  # already closed by an earlier save
+                data = None
+            images.append((image, data))
+
     buffer = io.BytesIO()
     workbook.save(buffer)
+
+    for image, data in images:
+        if data is not None:
+            image.ref = io.BytesIO(data)
+
     return buffer.getvalue()

@@ -81,13 +81,22 @@ def test_grouped_column_definitions_apply_to_every_column_in_range():
 
 
 def test_sf9_geometry_matches_the_forms_real_size():
-    """~9.5in tall is the figure the SF9 print setup was tuned against;
-    the width must come out narrower than the height in landscape terms,
-    or fit-to-page shrinks the card unnecessarily."""
-    workbook = openpyxl.load_workbook(SF9_TEMPLATE)
-    geometry = sheet_geometry(workbook["SF9"])
+    """~9.5in tall is the figure the SF9 print setup was tuned against.
+
+    SF9's scale is bound by its *height*, not its width — which is why the
+    double-padded column widths never showed up here the way they did on
+    SF2. Asserting that explicitly keeps the two forms' failure modes
+    distinguishable.
+    """
+    _, worksheet = _prepared(SF9_TEMPLATE, "SF9")
+    geometry = sheet_geometry(worksheet)
     assert 9.0 < geometry.height / 72 < 10.0
-    assert 11.5 < geometry.width / 72 < 13.0
+    assert 10.0 < geometry.width / 72 < 11.5
+
+    left, right, top, bottom = 0.25 * 72, 0.25 * 72, 0.25 * 72, 0.25 * 72
+    width_scale = (792 - left - right) / geometry.width
+    height_scale = (612 - top - bottom) / geometry.height
+    assert height_scale < width_scale, "SF9 must remain height-bound"
 
 
 def test_a_hidden_column_takes_no_width():
@@ -98,8 +107,28 @@ def test_a_hidden_column_takes_no_width():
     assert geometry.col_w[2] == 0.0
 
 
-def test_column_width_conversion_uses_excels_own_padding():
-    assert column_width_to_points(8.43) == pytest.approx(48.01, abs=0.05)
+def test_a_stored_width_is_not_padded_twice():
+    """ECMA-376 stores a column width as `chars + 5/MDW`, so inverting it
+    gives `pixels = width * MDW` with no further padding. Adding 5px per
+    column on top inflated SF2 — 81 columns, many of them sub-character
+    hairline separators — from 10.3in to 14.6in, shrinking the whole form
+    to 62% and printing its title at 6.9pt instead of ~10pt."""
+    assert column_width_to_points(8.43) == pytest.approx(8.43 * 7 * 0.75, abs=0.05)
+    # A hairline separator must stay a hairline, not become 6px.
+    assert column_width_to_points(0.199) < 1.5
+    # baseColWidth is a raw character count, so it does take the padding.
+    assert column_width_to_points(8, is_stored=False) == pytest.approx((8 * 7 + 5) * 0.75, abs=0.05)
+
+
+def test_sf2_fits_its_width_without_shrinking_the_form():
+    """The title is 11pt; if the sheet is measured too wide, fit-to-width
+    scales everything down and the form prints smaller than the official
+    one."""
+    _, worksheet = _prepared(SF2_TEMPLATE, "SF2")
+    geometry = sheet_geometry(worksheet)
+    assert geometry.width / 72 < 12.0, "SF2 should measure ~10-11in wide, not 14.6in"
+    scale, _ = plan_pages(worksheet, 792, 612, geometry)
+    assert scale > 0.85, f"form would print at {scale:.0%} of its intended size"
 
 
 # --- Fonts -----------------------------------------------------------------
@@ -198,6 +227,24 @@ def test_a_component_row_keeps_its_indent_when_wrapped():
     text = f"{COMPONENT_INDENT}Mabisang Komunikasyon"
     lines = _wrap(text, "Helvetica", 8, 200)
     assert lines[0].startswith(COMPONENT_INDENT)
+
+
+def test_the_seals_survive_saving_the_workbook_first():
+    """`workbook.save()` consumes every embedded image's stream and leaves
+    it closed. Both report pages offer an .xlsx download and then render
+    the *same* workbook to PDF — so the PDF came out with no DepEd shield
+    and no school seal, silently, because a missing seal must never break
+    a report. `workbook_to_bytes` restores the streams afterwards.
+    """
+    from app.excel_template import workbook_to_bytes
+
+    workbook, _ = _prepared(SF9_TEMPLATE, "SF9")
+    before = _render(SF9_TEMPLATE, "SF9").count(b"/Subtype /Image")
+    assert before > 0, "the template should carry seals to begin with"
+
+    workbook_to_bytes(workbook)  # the order the page uses
+    after = workbook_to_pdf(workbook).count(b"/Subtype /Image")
+    assert after == before, "saving to .xlsx stripped the seals from the PDF"
 
 
 def test_the_renderer_needs_no_external_program():

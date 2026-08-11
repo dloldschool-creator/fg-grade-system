@@ -1,3 +1,6 @@
+import io
+import zipfile
+
 import streamlit as st
 
 from app.admin_pages._helpers import get_session, render_flashes
@@ -199,31 +202,74 @@ def _batch_section(session, enrollments, learner_by_enrollment, section) -> None
         st.info("No learners match — nothing to print.")
         return
 
-    if not st.button(f"Build PDF for {len(chosen)} learner(s)", type="primary"):
+    # Splitting into several files doesn't make the work shorter — the
+    # cost is per learner either way — it only lets printing start
+    # sooner, at the price of collating more files. One file with a
+    # progress bar is the better default; the option is here because
+    # printing 40 cards in one go can be worth breaking up.
+    per_file = st.selectbox(
+        "Learners per file",
+        options=[0, 20, 10, 5],
+        format_func=lambda v: "All in one PDF" if v == 0 else f"{v} per PDF (zipped)",
+        key="sf9_batch_chunk",
+    )
+
+    if not st.button(f"Build for {len(chosen)} learner(s)", type="primary"):
         return
 
-    def _workbooks(context):
+    groups = (
+        [chosen] if not per_file
+        else [chosen[i:i + per_file] for i in range(0, len(chosen), per_file)]
+    )
+
+    progress = st.progress(0.0, text="Loading section data…")
+    done = 0
+
+    # One context for the whole section regardless of grouping: without it
+    # each card issues ~43 queries, which at ~85ms per round trip is over
+    # two minutes for a full section.
+    context = load_sf9_context(session, chosen)
+
+    def _workbooks(group):
+        nonlocal done
         # Built lazily, one at a time, so a 40-learner section costs one
         # workbook of memory rather than forty.
-        for enrollment in chosen:
+        for enrollment in group:
             yield build_sf9_workbook(session, enrollment.id, context)
+            done += 1
+            progress.progress(
+                done / len(chosen),
+                text=f"Rendered {done} of {len(chosen)} card(s)…",
+            )
 
-    with st.spinner(f"Rendering {len(chosen)} card(s)…"):
-        # One context for the section: without it each card issues ~43
-        # queries, which at ~85ms per round trip is over two minutes for
-        # a full section.
-        context = load_sf9_context(session, chosen)
-        try:
-            data = workbooks_to_pdf(_workbooks(context))
-        except ValueError as exc:
-            st.error(str(exc))
-            return
+    try:
+        rendered = [(group, workbooks_to_pdf(_workbooks(group))) for group in groups]
+    except ValueError as exc:
+        progress.empty()
+        st.error(str(exc))
+        return
+    progress.empty()
 
-    st.success(f"{len(chosen)} card(s), {len(data) / 1024:,.0f} KB.")
+    stem = f"SF9_{section.name.replace(' ', '')}"
+    if len(rendered) == 1:
+        data = rendered[0][1]
+        st.success(f"{len(chosen)} card(s), {len(data) / 1024:,.0f} KB.")
+        st.download_button(
+            "Download section PDF", data=data, file_name=f"{stem}_all.pdf",
+            mime="application/pdf", type="primary",
+        )
+        return
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index, (group, data) in enumerate(rendered, start=1):
+            archive.writestr(f"{stem}_part{index:02d}_of_{len(rendered)}.pdf", data)
+    payload = buffer.getvalue()
+    st.success(
+        f"{len(chosen)} card(s) across {len(rendered)} PDF(s), "
+        f"{len(payload) / 1024:,.0f} KB zipped."
+    )
     st.download_button(
-        "Download section PDF",
-        data=data,
-        file_name=f"SF9_{section.name.replace(' ', '')}_all.pdf",
-        mime="application/pdf",
-        type="primary",
+        "Download section PDFs (.zip)", data=payload, file_name=f"{stem}_all.zip",
+        mime="application/zip", type="primary",
     )
