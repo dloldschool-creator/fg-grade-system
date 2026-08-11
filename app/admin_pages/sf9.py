@@ -53,7 +53,7 @@ def _learner_label(learner: Learner) -> str:
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("SF9 — Learner's Progress Report Card")
     st.caption(
         "Built from the computed grades and finalized attendance (§35) — nothing is "
@@ -62,7 +62,7 @@ def render() -> None:
     )
     render_flashes()
 
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()

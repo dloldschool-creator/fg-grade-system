@@ -906,10 +906,45 @@ those formulas with values written by our own grading engine via
       role with screens must be covered, and both halves of the language
       rule must stay explained.
       **Surfaced while writing it:** `ATTENDANCE_ENCODER` and
-      `SCHOOL_HEAD` are seeded roles with **no pages wired**, so granting
-      either alone lands the user on "not authorized". The guide says so
-      and suggests the interim workaround; building their screens is still
-      open.
+      `SCHOOL_HEAD` were seeded roles with **no pages wired**, so granting
+      either alone landed the user on "not authorized". SCHOOL_HEAD was
+      built out immediately after (below); `ATTENDANCE_ENCODER` is still
+      open, and the guide says to grant ADVISER instead meanwhile.
+- [x] **School Head read-only view** (§3F: view dashboards, review section
+      summaries, review finalized records, view/print reports, **cannot
+      change official data**).
+      **`AuthUser.is_read_only()`** is the single rule, and it is
+      deliberately *positive* about who may edit — `EDITING_ROLES` lists
+      the four working roles, and anything else (including a brand-new
+      account with no roles) is read-only until someone decides otherwise.
+      That is the safe direction to fail. The limit describes the
+      **account, not the title**: a principal who also advises a section
+      holds ADVISER too and edits normally.
+      **`app/admin_pages/dashboard.py`** is the "view dashboards" half —
+      enrolment and completion per section, grade-encoding progress per
+      term, and which section-months of attendance are still unfinalized.
+      Read-only *by construction*: it draws no control that writes, so
+      there is nothing to forget to hide. Also given to SUPER_ADMIN and
+      REGISTRAR, who want the same overview.
+      A School Head additionally gets Grade Summary, SF9, SF2, Term Cards
+      and Export — the report pages are safe by construction too (they
+      only generate documents). **Grade Summary is the one exception**:
+      it can write, so Recompute (single and section-wide) and the whole
+      finalize/reopen block are gated on `is_read_only()`.
+      Scoping note: a School Head is **not** adviser-scoped — §3F says
+      review *section summaries*, plural — so the four report pages and
+      Grade Summary all treat SCHOOL_HEAD like REGISTRAR for section
+      visibility while still refusing every write.
+      `tests/test_read_only_role.py` guards this structurally rather than
+      by clicking: it parses each granted page's AST and asserts the
+      purely-read-only ones call **none** of the known writing functions,
+      that every page in the navigation actually admits the role, and
+      that Grade Summary checks `is_read_only()` at least three times.
+      `st.navigation` raises on a duplicate `url_path`, so
+      `streamlit_app.py` now de-duplicates the page list — a principal
+      holding SCHOOL_HEAD *and* REGISTRAR was getting the same pages
+      twice.
+      `pytest tests/` is 272.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

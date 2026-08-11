@@ -33,6 +33,9 @@ def _fmt(value):
 
 def _finalization_section(session, current_user, enrollment: Enrollment) -> None:
     st.subheader("Finalization")
+    # A School Head reviews finalized records (§3F) but never finalizes or
+    # reopens one, so the state is shown and the controls are not drawn.
+    read_only = current_user.is_read_only()
     latest_record = (
         session.query(GradeFinalizationRecord)
         .filter_by(scope_type=FinalizationScopeType.ANNUAL_ENROLLMENT, enrollment_id=enrollment.id)
@@ -54,7 +57,7 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
         # Reopening a finalized record is Super-Admin-only (§3A lists
         # "reopen finalized records" as a Super Admin capability, not
         # Registrar/Adviser).
-        if current_user.has_role("SUPER_ADMIN"):
+        if current_user.has_role("SUPER_ADMIN") and not read_only:
             with st.form(f"reopen_{enrollment.id}"):
                 reason = st.text_area("Reopen reason (required)", key=f"reopen_reason_{enrollment.id}")
                 if st.form_submit_button("Reopen"):
@@ -93,6 +96,10 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
         return
 
     summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
+    if read_only:
+        st.caption("Not finalized yet. Finalizing is done by the registrar or adviser.")
+        return
+
     can_finalize = summary is not None and summary.completion_status == CompletionStatus.COMPLETE
     if not can_finalize:
         st.info(
@@ -188,13 +195,18 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None)
 
     if rows:
         st.table(rows)
+    elif current_user.is_read_only():
+        st.caption("No computed grades yet.")
     else:
         st.caption("No computed grades yet — encode grades on the Gradebook page, or click Recompute below.")
 
-    if st.button("Recompute", key=f"recompute_{enrollment.id}"):
-        recompute_enrollment_grades(session, enrollment.id)
-        flash("success", "Recomputed.")
-        st.rerun()
+    # Recompute writes to the derived tables, so it counts as changing
+    # official data even though it invents nothing (§3F).
+    if not current_user.is_read_only():
+        if st.button("Recompute", key=f"recompute_{enrollment.id}"):
+            recompute_enrollment_grades(session, enrollment.id)
+            flash("success", "Recomputed.")
+            st.rerun()
 
     st.divider()
     _finalization_section(session, current_user, enrollment)
@@ -274,18 +286,22 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Grade Summary")
     st.caption(
-        "Read-only view of the derived grade tables (§48) — recomputed from Gradebook "
-        "entries automatically, or on demand with the Recompute button below."
+        "The derived grade tables (§48) — recomputed from Gradebook entries "
+        "automatically, or on demand with the Recompute button."
+        if not current_user.is_read_only()
+        else "Section summaries and finalized records, read-only (§3F)."
     )
     render_flashes()
 
     # Registrar/Super Admin see every section; an Adviser-only account
     # (no Registrar/Super Admin role) is scoped to sections they're the
-    # actual adviser of, per §3C — not a school-wide view.
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    # actual adviser of, per §3C — not a school-wide view. A School Head
+    # reviews section summaries school-wide (§3F), so they aren't scoped
+    # either — they just can't change anything.
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -325,11 +341,12 @@ def render() -> None:
             st.info("No learners enrolled in this section yet.")
             return
 
-        if st.button("Recompute all in this section"):
-            for enrollment in enrollments:
-                recompute_enrollment_grades(session, enrollment.id)
-            flash("success", f"Recomputed {len(enrollments)} learner(s).")
-            st.rerun()
+        if not current_user.is_read_only():
+            if st.button("Recompute all in this section"):
+                for enrollment in enrollments:
+                    recompute_enrollment_grades(session, enrollment.id)
+                flash("success", f"Recomputed {len(enrollments)} learner(s).")
+                st.rerun()
 
         _class_summary(session, enrollments, section_choice, sy_choice)
 

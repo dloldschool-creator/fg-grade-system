@@ -44,7 +44,7 @@ def _card_for(session, enrollment, learner, *, school, term, grade_level, sectio
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Temporary Term Cards")
     st.caption(
         "The end-of-term slip for learners (§39) — only the subjects active in the "
@@ -53,7 +53,7 @@ def render() -> None:
     )
     render_flashes()
 
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school = session.query(School).one_or_none()

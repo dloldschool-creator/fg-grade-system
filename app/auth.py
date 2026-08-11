@@ -21,6 +21,11 @@ from app.supabase_clients import get_anon_client
 SESSION_KEY = "auth_user"
 LAST_SEEN_KEY = "auth_last_seen"
 
+# Roles that may change official data. SCHOOL_HEAD is deliberately absent
+# (§3F), and so is ATTENDANCE_ENCODER until its screens exist — see
+# AuthUser.is_read_only.
+EDITING_ROLES = frozenset({"SUPER_ADMIN", "REGISTRAR", "ADVISER", "SUBJECT_TEACHER"})
+
 # §53's "inactivity/session timeout where appropriate". Teachers encode
 # grades on shared staffroom machines, so an abandoned tab shouldn't stay
 # signed in — but the window has to be long enough to survive a class
@@ -51,6 +56,23 @@ class AuthUser:
         if "SUPER_ADMIN" in self.role_codes:
             return True
         return bool(self.role_codes.intersection(codes))
+
+    def is_read_only(self) -> bool:
+        """True for a School Head with no working role alongside it.
+
+        §3F is explicit that this role "cannot change official data", so
+        the check is deliberately *positive* about who may edit rather
+        than listing what a viewer can't do: a role added later is
+        read-only here until someone decides otherwise, which is the safe
+        direction to fail.
+
+        Someone holding School Head *and* a working role (a principal who
+        also advises a section) edits normally — the read-only status
+        describes the account, not the title.
+        """
+        if not self.role_codes:
+            return True
+        return not self.role_codes.intersection(EDITING_ROLES)
 
 
 def _load_or_provision_user(

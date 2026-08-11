@@ -8,6 +8,7 @@ from app.admin_pages import (
     award_policy,
     awards,
     backup,
+    dashboard,
     data_export,
     data_import,
     enrollment,
@@ -102,6 +103,36 @@ else:
                 default=not pages,
             ),
         ]
+    # School Head / read-only viewer (§3F): dashboards, section summaries,
+    # finalized records, and view/print reports — but no page that writes.
+    # The report pages are safe by construction (they only generate
+    # documents); Grade Summary hides its Recompute and Finalize controls
+    # for a read-only account rather than relying on this list alone.
+    if current_user.has_role("SCHOOL_HEAD", "REGISTRAR"):
+        pages += [
+            st.Page(
+                dashboard.render, title="Dashboard", icon="📈", url_path="dashboard",
+                default=not pages,
+            ),
+            st.Page(grade_summary.render, title="Grade Summary", icon="📊", url_path="grade-summary"),
+            st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
+            st.Page(sf2.render, title="SF2", icon="📄", url_path="sf2"),
+            st.Page(term_cards.render, title="Term Cards", icon="🎫", url_path="term-cards"),
+            st.Page(data_export.render, title="Export", icon="📤", url_path="export"),
+        ]
+
+    # A principal who also advises a section holds two roles, so the same
+    # page can be added twice — Streamlit raises on a duplicate url_path.
+    # Keep the first occurrence, which is also the one that may carry
+    # default=True.
+    seen: set[str] = set()
+    deduped = []
+    for page in pages:
+        if page.url_path in seen:
+            continue
+        seen.add(page.url_path)
+        deduped.append(page)
+    pages = deduped
 
     if not pages:
         # Someone whose account exists but has no role yet still gets the

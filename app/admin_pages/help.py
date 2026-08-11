@@ -140,6 +140,36 @@ BY_ROLE = {
             ),
         ],
     ),
+    "SCHOOL_HEAD": (
+        "School Head — Read-only view",
+        [
+            (
+                "You can see everything and change nothing",
+                "That's deliberate (§3F). The Dashboard, Grade Summary and the "
+                "report pages are open to you school-wide; the buttons that "
+                "encode, recompute, finalize or reopen are not drawn at all "
+                "rather than shown and refused.",
+            ),
+            (
+                "Start at the Dashboard",
+                "It shows enrolment per section, how many learners have a "
+                "complete record, how far grade encoding has got in each term, "
+                "and which section-months of attendance are still unfinalized — "
+                "which is usually the question worth asking near a deadline.",
+            ),
+            (
+                "You can print any report",
+                "SF9, SF2 and Term Cards are all available, including the "
+                "whole-section SF9 print. Printing changes nothing.",
+            ),
+            (
+                "If you also advise a section, you edit normally",
+                "The read-only limit follows the account, not the title. "
+                "Holding School Head alongside Adviser or Registrar gives you "
+                "that role's editing rights as usual.",
+            ),
+        ],
+    ),
     "SUPER_ADMIN": (
         "Super Admin — Setup and control",
         [
@@ -171,13 +201,11 @@ BY_ROLE = {
                 "recalculate a finished year on their own.",
             ),
             (
-                "Two roles exist but have no screens yet",
-                "**Attendance Encoder** and **School Head** are in the role list "
-                "because the specification defines them, but nothing is built "
-                "for them yet — granting either one on its own leaves that "
-                "person with no pages at all. Until those screens exist, give "
-                "an attendance encoder the Adviser role for their section, and "
-                "a school head Registrar if they need school-wide visibility.",
+                "One role still has no screens",
+                "**Attendance Encoder** is in the role list because the "
+                "specification defines it, but nothing is built for it yet — "
+                "granting it on its own leaves that person with no pages at "
+                "all. Give them the Adviser role for their section instead.",
             ),
             (
                 "The Backup download is not your only backup",
@@ -192,29 +220,6 @@ BY_ROLE = {
 
 # Asked often enough to be worth answering once, in writing.
 NOTES = [
-    (
-        "Why do Effective Communication and Mabisang Komunikasyon have no Final Grade?",
-        "For Grade 11 these two are graded separately every term, but for the "
-        "annual General Average they count as **one** learning area — the "
-        "average of their two finals. So the combined row above them carries "
-        "the Final Grade, and the two component rows are deliberately left "
-        "blank. That's the official rule, not a missing value.\n\n"
-        "The end-of-term card is different on purpose: it lists them as two "
-        "separate subjects, because the Term Average printed at its foot is "
-        "worked out from both.",
-    ),
-    (
-        "Why is a term greyed out on a report card?",
-        "That subject isn't offered in that term, so there is no grade to give. "
-        "It's different from a blank cell, which means the subject runs that "
-        "term but nobody has encoded it yet.",
-    ),
-    (
-        "Why does a full class print on several pages?",
-        "SF2 is one page wide and as tall as it needs to be. A full roster is "
-        "taller than one sheet, so it splits — squeezing it onto a single page "
-        "would shrink the text past readable.",
-    ),
     (
         "Why can't I finalize a learner's grades?",
         "Their annual record isn't complete — at least one applicable subject "
@@ -266,7 +271,7 @@ def render() -> None:
                 _render_items(items)
 
     st.divider()
-    st.subheader("Questions that come up")
+    st.subheader("Question that comes up")
     for question, answer in NOTES:
         with st.expander(question):
             st.markdown(answer)

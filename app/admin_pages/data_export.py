@@ -30,7 +30,7 @@ EXPORTS = {
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Export")
     st.caption(
         "Excel and CSV export (§52). LRN is always written as text, so leading "
@@ -38,7 +38,7 @@ def render() -> None:
     )
     render_flashes()
 
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()

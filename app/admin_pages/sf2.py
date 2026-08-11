@@ -16,7 +16,7 @@ from app.models.academic_structure import Section
 from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
-from app.xlsx_render import page_count, workbook_to_pdf
+from app.xlsx_render import workbook_to_pdf
 from app.sf2_report import (
     build_sf2_workbook,
     paginate,
@@ -61,7 +61,7 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("SF2 — Daily Attendance Report of Learners")
     st.caption(
         "Generated straight from the attendance database (§34) — attendance is never "
@@ -71,7 +71,7 @@ def render() -> None:
     )
     render_flashes()
 
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -164,16 +164,9 @@ def render() -> None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         with col_b:
-            pdf_bytes = workbook_to_pdf(workbook)
             st.download_button(
                 "Download PDF",
-                data=pdf_bytes,
+                data=workbook_to_pdf(workbook),
                 file_name=f"{stem}.pdf",
                 mime="application/pdf",
-            )
-            pages = page_count(workbook)
-            st.caption(
-                f"{pages} page(s), landscape. A full roster runs to several pages "
-                "by design — the form is one page wide and as tall as it needs "
-                "to be (§34), so the print stays legible."
             )
