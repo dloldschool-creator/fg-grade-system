@@ -12,10 +12,10 @@ from app.admin_pages import (
     data_export,
     data_import,
     enrollment,
-    gradebook,
     grade_summary,
-    help as help_page,
+    gradebook,
     grading_policy,
+    help as help_page,
     learners,
     school_info,
     school_years,
@@ -33,9 +33,137 @@ from app.auth import change_password_form, get_current_user, login_form, logout
 
 st.set_page_config(page_title="FGNMHS Grading System", layout="wide")
 
+# --- Navigation ------------------------------------------------------------
+#
+# One table rather than per-role blocks appending lists. Two reasons:
+#
+# 1. **Order follows the work, not the role.** Grouped by role, a Super
+#    Admin met eleven setup pages before reaching anything used daily —
+#    but School Info is touched once a year and the Gradebook every day.
+#    Groups run roughly most-used first, and Setup runs in dependency
+#    order: you cannot make a Section without an Academic Structure, an
+#    offering without a Section, or a Teacher Assignment without an
+#    offering.
+#
+# 2. **A page appears exactly once.** Previously a principal holding
+#    SCHOOL_HEAD and REGISTRAR had the same page added twice, and
+#    st.navigation raises on a duplicate url_path — so a de-duplication
+#    pass was papering over the real problem. Listing each page once with
+#    the full set of roles that may reach it removes the failure mode
+#    instead of handling it.
+#
+# `roles` must match the page's own require_role call — tests/test_navigation.py
+# checks that, because a mismatch either hides a page from someone entitled
+# to it or shows a sidebar entry that refuses them on click.
+
+GROUPS = [
+    (
+        "Overview",
+        [
+            (dashboard, "Dashboard", "📈", "dashboard",
+             ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
+        ],
+    ),
+    (
+        "Grades & Attendance",
+        [
+            (gradebook, "Gradebook", "📓", "gradebook", ("SUBJECT_TEACHER",)),
+            (grade_summary, "Grade Summary", "📊", "grade-summary",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            (attendance, "Attendance", "🗒️", "attendance",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
+        ],
+    ),
+    (
+        "Learners",
+        [
+            (learners, "Learner Masterlist", "🧑‍🎓", "learners",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
+            (enrollment, "Enrollment", "📝", "enrollment",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
+        ],
+    ),
+    (
+        "Forms & Reports",
+        [
+            (sf9, "SF9", "🧾", "sf9",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            (sf2, "SF2", "📄", "sf2",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            (term_cards, "Term Cards", "🎫", "term-cards",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            (awards, "Awards", "🏆", "awards",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
+            (data_export, "Export", "📤", "export",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+        ],
+    ),
+    (
+        "Setup",
+        [
+            (school_info, "School Info", "🏫", "school-info", ("SUPER_ADMIN",)),
+            (school_years, "School Years & Terms", "📅", "school-years", ("SUPER_ADMIN",)),
+            (academic_calendar, "Academic Calendar", "🗓️", "academic-calendar", ("SUPER_ADMIN",)),
+            (academic_structure, "Academic Structure", "🎓", "academic-structure", ("SUPER_ADMIN",)),
+            (sections, "Sections", "🏷️", "sections", ("SUPER_ADMIN",)),
+            (subject_catalog, "Subject Catalog", "📚", "subject-catalog", ("SUPER_ADMIN",)),
+            (subject_profiles, "Subject Profiles", "🗂️", "subject-profiles", ("SUPER_ADMIN",)),
+            (section_offerings, "Section Offerings", "📋", "section-offerings", ("SUPER_ADMIN",)),
+            (teacher_assignments, "Teacher Assignments", "🧑‍🏫", "teacher-assignments", ("SUPER_ADMIN",)),
+            (grading_policy, "Grading Policy", "✅", "grading-policy", ("SUPER_ADMIN",)),
+            (award_policy, "Award Policy", "🏅", "award-policy", ("SUPER_ADMIN",)),
+        ],
+    ),
+    (
+        "Administration",
+        [
+            (users, "Users & Roles", "👥", "users", ("SUPER_ADMIN",)),
+            (data_import, "Import from Excel", "📥", "import", ("SUPER_ADMIN", "REGISTRAR")),
+            (audit_log, "Audit Log", "🧭", "audit-log", ("SUPER_ADMIN",)),
+            (backup, "Backup", "💾", "backup", ("SUPER_ADMIN",)),
+        ],
+    ),
+    (
+        "Help",
+        [
+            # Everyone, including an account with no role yet — it is the
+            # one page that explains what they are waiting for.
+            (help_page, "Quick Guide", "❓", "help", ()),
+        ],
+    ),
+]
+
 
 def _render_not_authorized() -> None:
     st.error("You don't have access to any admin pages. Ask a Super Admin to grant you a role.")
+
+
+def build_navigation(user) -> dict:
+    """Grouped sidebar for this user, empty groups omitted.
+
+    The first page of the first group carries `default=True`, so whatever
+    the user's most-used group turns out to be is also their landing page.
+    """
+    navigation: dict[str, list] = {}
+    claimed_default = False
+    for heading, entries in GROUPS:
+        visible = []
+        for module, title, icon, url_path, roles in entries:
+            if roles and not user.has_role(*roles):
+                continue
+            visible.append(
+                st.Page(
+                    module.render,
+                    title=title,
+                    icon=icon,
+                    url_path=url_path,
+                    default=not claimed_default,
+                )
+            )
+            claimed_default = True
+        if visible:
+            navigation[heading] = visible
+    return navigation
 
 
 current_user = get_current_user()
@@ -52,91 +180,11 @@ else:
             logout()
             st.rerun()
 
-    is_super_admin = current_user.has_role("SUPER_ADMIN")
+    navigation = build_navigation(current_user)
 
-    # st.navigation allows at most one default=True page. Whichever
-    # role-block below runs first for this user claims it; later blocks
-    # pass default=False regardless of what they'd otherwise want.
-    pages = []
-    if is_super_admin:
-        pages += [
-            st.Page(school_info.render, title="School Info", icon="🏫", url_path="school-info", default=True),
-            st.Page(school_years.render, title="School Years & Terms", icon="📅", url_path="school-years"),
-            st.Page(academic_structure.render, title="Academic Structure", icon="🎓", url_path="academic-structure"),
-            st.Page(academic_calendar.render, title="Academic Calendar", icon="🗓️", url_path="academic-calendar"),
-            st.Page(sections.render, title="Sections", icon="🏷️", url_path="sections"),
-            st.Page(subject_catalog.render, title="Subject Catalog", icon="📚", url_path="subject-catalog"),
-            st.Page(subject_profiles.render, title="Subject Profiles", icon="🗂️", url_path="subject-profiles"),
-            st.Page(section_offerings.render, title="Section Offerings", icon="📋", url_path="section-offerings"),
-            st.Page(teacher_assignments.render, title="Teacher Assignments", icon="🧑‍🏫", url_path="teacher-assignments"),
-            st.Page(grading_policy.render, title="Grading Policy", icon="✅", url_path="grading-policy"),
-            st.Page(award_policy.render, title="Award Policy", icon="🏅", url_path="award-policy"),
-            st.Page(data_import.render, title="Import from Excel", icon="📥", url_path="import"),
-            st.Page(users.render, title="Users & Roles", icon="👥", url_path="users"),
-            st.Page(audit_log.render, title="Audit Log", icon="🧭", url_path="audit-log"),
-            st.Page(backup.render, title="Backup", icon="💾", url_path="backup"),
-        ]
-    # Learner Masterlist, Enrollment, and Grade Summary are all reachable
-    # by Registrar and by Adviser — DepEd advisers pick up
-    # registrar-adjacent duties for their own section (§3C), so each of
-    # these pages scopes itself internally (adviser_user_id filtering on
-    # sections) rather than being gated out entirely.
-    if current_user.has_role("SUPER_ADMIN", "REGISTRAR", "ADVISER"):
-        pages += [
-            st.Page(
-                learners.render, title="Learner Masterlist", icon="🧑‍🎓", url_path="learners",
-                default=not pages,
-            ),
-            st.Page(enrollment.render, title="Enrollment", icon="📝", url_path="enrollment"),
-            st.Page(grade_summary.render, title="Grade Summary", icon="📊", url_path="grade-summary"),
-            st.Page(attendance.render, title="Attendance", icon="🗒️", url_path="attendance"),
-            st.Page(sf2.render, title="SF2", icon="📄", url_path="sf2"),
-            st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
-            st.Page(term_cards.render, title="Term Cards", icon="🎫", url_path="term-cards"),
-            st.Page(awards.render, title="Awards", icon="🏆", url_path="awards"),
-            st.Page(data_export.render, title="Export", icon="📤", url_path="export"),
-        ]
-    if current_user.has_role("SUBJECT_TEACHER"):
-        pages += [
-            st.Page(
-                gradebook.render, title="Gradebook", icon="📓", url_path="gradebook",
-                default=not pages,
-            ),
-        ]
-    # School Head / read-only viewer (§3F): dashboards, section summaries,
-    # finalized records, and view/print reports — but no page that writes.
-    # The report pages are safe by construction (they only generate
-    # documents); Grade Summary hides its Recompute and Finalize controls
-    # for a read-only account rather than relying on this list alone.
-    if current_user.has_role("SCHOOL_HEAD", "REGISTRAR"):
-        pages += [
-            st.Page(
-                dashboard.render, title="Dashboard", icon="📈", url_path="dashboard",
-                default=not pages,
-            ),
-            st.Page(grade_summary.render, title="Grade Summary", icon="📊", url_path="grade-summary"),
-            st.Page(sf9.render, title="SF9", icon="🧾", url_path="sf9"),
-            st.Page(sf2.render, title="SF2", icon="📄", url_path="sf2"),
-            st.Page(term_cards.render, title="Term Cards", icon="🎫", url_path="term-cards"),
-            st.Page(data_export.render, title="Export", icon="📤", url_path="export"),
-        ]
-
-    # A principal who also advises a section holds two roles, so the same
-    # page can be added twice — Streamlit raises on a duplicate url_path.
-    # Keep the first occurrence, which is also the one that may carry
-    # default=True.
-    seen: set[str] = set()
-    deduped = []
-    for page in pages:
-        if page.url_path in seen:
-            continue
-        seen.add(page.url_path)
-        deduped.append(page)
-    pages = deduped
-
-    if not pages:
-        # Someone whose account exists but has no role yet still gets the
-        # guide — it's the one page that explains what they're waiting for.
+    # A user with only the Help group has no working pages, so say so
+    # rather than landing them on the guide with no explanation.
+    if set(navigation) == {"Help"}:
         pg = st.navigation(
             [
                 st.Page(_render_not_authorized, title="Not authorized", default=True),
@@ -144,10 +192,5 @@ else:
             ]
         )
     else:
-        # Appended last so it never claims `default=True`, and so it sits at
-        # the foot of the sidebar where a help link is looked for.
-        pages.append(
-            st.Page(help_page.render, title="Quick Guide", icon="❓", url_path="help")
-        )
-        pg = st.navigation(pages)
+        pg = st.navigation(navigation)
     pg.run()
