@@ -16,7 +16,7 @@ from app.models.academic_structure import Section
 from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
-from app.pdf_convert import PdfConversionError, is_pdf_available, xlsx_to_pdf
+from app.xlsx_render import page_count, workbook_to_pdf
 from app.sf2_report import (
     build_sf2_workbook,
     paginate,
@@ -164,21 +164,16 @@ def render() -> None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         with col_b:
-            if is_pdf_available():
-                try:
-                    st.download_button(
-                        "Download PDF",
-                        data=xlsx_to_pdf(xlsx_bytes, basename=stem),
-                        file_name=f"{stem}.pdf",
-                        mime="application/pdf",
-                    )
-                except PdfConversionError as exc:
-                    st.error(f"PDF conversion failed — {exc}")
-            else:
-                st.button("Download PDF", disabled=True)
-                st.caption(
-                    "PDF export needs LibreOffice installed on the machine running this "
-                    "app (it converts the filled template without altering the layout). "
-                    "Until then, open the .xlsx and print or export to PDF from Excel — "
-                    "the file is complete and self-contained."
-                )
+            pdf_bytes = workbook_to_pdf(workbook)
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes,
+                file_name=f"{stem}.pdf",
+                mime="application/pdf",
+            )
+            pages = page_count(workbook)
+            st.caption(
+                f"{pages} page(s), landscape. A full roster runs to several pages "
+                "by design — the form is one page wide and as tall as it needs "
+                "to be (§34), so the print stays legible."
+            )

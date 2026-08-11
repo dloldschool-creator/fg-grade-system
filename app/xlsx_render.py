@@ -747,20 +747,36 @@ def draw_worksheet(
     return len(bands)
 
 
-def workbook_to_pdf(workbook, *, page=letter, landscape: bool | None = None, fit: bool = True) -> bytes:
-    """Every visible worksheet, one page each — the drop-in replacement for
-    `pdf_convert.xlsx_to_pdf`, with no external program involved."""
-    buffer = io.BytesIO()
+def _visible_sheets(workbook):
     sheets = [ws for ws in workbook.worksheets if ws.sheet_state == "visible"]
-    if not sheets:
-        sheets = list(workbook.worksheets)
+    return sheets or list(workbook.worksheets)
 
-    first_w, first_h = page_size_for(sheets[0], page, landscape)
-    c = pdfcanvas.Canvas(buffer, pagesize=(first_w, first_h))
-    for worksheet in sheets:
-        width, height = page_size_for(worksheet, page, landscape)
-        c.setPageSize((width, height))
-        draw_worksheet(c, worksheet, width, height, fit=fit)
-        c.showPage()
+
+def workbook_to_pdf(workbook, *, page=letter, landscape: bool | None = None, fit: bool = True) -> bytes:
+    """Every visible worksheet — the replacement for the old
+    LibreOffice conversion, with no external program involved."""
+    return workbooks_to_pdf([workbook], page=page, landscape=landscape, fit=fit)
+
+
+def workbooks_to_pdf(workbooks, *, page=letter, landscape: bool | None = None, fit: bool = True) -> bytes:
+    """Several workbooks into one PDF — a whole section's report cards in
+    a single file.
+
+    Takes an iterable rather than a list so the caller can build each
+    learner's workbook as it is drawn: 40 SF9s rendered this way cost one
+    workbook of memory at a time instead of forty.
+    """
+    buffer = io.BytesIO()
+    c = None
+    for workbook in workbooks:
+        for worksheet in _visible_sheets(workbook):
+            width, height = page_size_for(worksheet, page, landscape)
+            if c is None:
+                c = pdfcanvas.Canvas(buffer, pagesize=(width, height))
+            c.setPageSize((width, height))
+            draw_worksheet(c, worksheet, width, height, fit=fit)
+            c.showPage()
+    if c is None:
+        raise ValueError("nothing to render")
     c.save()
     return buffer.getvalue()

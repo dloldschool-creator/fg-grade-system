@@ -21,6 +21,7 @@ drift between what a teacher sees and what a parent receives.
 """
 
 import os
+from dataclasses import dataclass
 from datetime import date
 
 import openpyxl
@@ -28,11 +29,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.properties import PageSetupProperties
 from sqlalchemy.orm import Session
 
-from app.attendance_engine import ActiveWindow
+from app.attendance_engine import ActiveWindow, Movement, compute_active_window, summarize_attendance
 from app.attendance_service import (
     active_window_for,
     class_days_in_month,
     months_with_class_days,
+    records_for_month,
     summarize_month,
 )
 from app.excel_template import (
@@ -45,10 +47,10 @@ from app.excel_template import (
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.enums import CompletionStatus
 from app.models.grades import AnnualGradeSummary
-from app.models.learners import Enrollment, Learner
+from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear
 from app.models.rbac import User
-from app.report_card import build_learning_area_rows
+from app.report_card import build_learning_area_rows, load_report_context
 
 TEMPLATE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -192,7 +194,9 @@ def _full_name(learner: Learner) -> str:
     return f"{learner.last_name}, {learner.first_name}{middle}{extension}".strip().upper()
 
 
-def _monthly_attendance(session: Session, enrollment: Enrollment, window: ActiveWindow) -> dict:
+def _monthly_attendance(
+    session: Session, enrollment: Enrollment, window: ActiveWindow, context=None
+) -> dict:
     """(month) -> (class_days, present, absent) for months that actually
     have attendance encoded.
 
@@ -209,29 +213,156 @@ def _monthly_attendance(session: Session, enrollment: Enrollment, window: Active
       would read as the learner having missed the whole month.
     """
     result: dict[int, tuple[int, int, int]] = {}
-    for year, month in months_with_class_days(session, enrollment.school_year_id):
-        class_days = class_days_in_month(session, enrollment.school_year_id, year, month)
-        summary = summarize_month(session, enrollment, window, class_days)
+    months = (
+        context.months if context is not None
+        else months_with_class_days(session, enrollment.school_year_id)
+    )
+    for year, month in months:
+        if context is not None:
+            class_days = context.class_days.get((year, month), [])
+            by_id = {d.id: d.calendar_date for d in class_days}
+            statuses = {
+                by_id[day_id]: record.status
+                for (enrollment_id, day_id), record in context.attendance.items()
+                if enrollment_id == enrollment.id and day_id in by_id
+            }
+            summary = summarize_attendance(
+                [d.calendar_date for d in class_days], window, statuses
+            )
+        else:
+            class_days = class_days_in_month(session, enrollment.school_year_id, year, month)
+            summary = summarize_month(session, enrollment, window, class_days)
         if summary.eligible_days == 0 or summary.unencoded_days == summary.eligible_days:
             continue
         result[month] = (summary.eligible_days, summary.days_present, summary.days_absent)
     return result
 
 
-def build_sf9_workbook(session: Session, enrollment_id):
-    """Returns a self-contained openpyxl Workbook for one learner."""
+@dataclass
+class Sf9BatchContext:
+    """Everything a whole section's cards share, fetched once.
+
+    Building one card costs ~43 queries on its own, and at ~85ms per round
+    trip to Supabase that is ~3.6s per learner — 40 cards would take over
+    two minutes. Almost none of it is per-learner: the school, calendar and
+    subject offerings are identical across the section, and the grade data
+    is exactly what `ReportCardContext` already batches.
+
+    Same shape as `report_card.load_report_context` deliberately: single
+    cards pass nothing and get correct behaviour, batches pass a context
+    and pay the fixed cost once.
+    """
+
+    report: object
+    school: object
+    school_year: object
+    sections: dict
+    grade_levels: dict
+    tracks: dict
+    strands: dict
+    months: list
+    class_days: dict
+    summaries: dict
+    windows: dict
+    attendance: dict
+
+
+def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
+    if not enrollments:
+        raise ValueError("no enrollments to build a context for")
+
+    school_year_id = enrollments[0].school_year_id
+    ids = [e.id for e in enrollments]
+
+    sections = {
+        s.id: s for s in session.query(Section)
+        .filter(Section.id.in_({e.section_id for e in enrollments if e.section_id})).all()
+    }
+    grade_levels = {
+        g.id: g for g in session.query(GradeLevel)
+        .filter(GradeLevel.id.in_({e.grade_level_id for e in enrollments if e.grade_level_id})).all()
+    }
+    tracks = {
+        t.id: t for t in session.query(Track)
+        .filter(Track.id.in_({s.track_id for s in sections.values() if s.track_id})).all()
+    } if sections else {}
+    strands = {
+        s.id: s for s in session.query(Strand)
+        .filter(Strand.id.in_({x.strand_id for x in sections.values() if x.strand_id})).all()
+    } if sections else {}
+
+    months = months_with_class_days(session, school_year_id)
+    class_days = {
+        (year, month): class_days_in_month(session, school_year_id, year, month)
+        for year, month in months
+    }
+
+    summaries = {
+        row.enrollment_id: row for row in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_(ids)).all()
+    }
+
+    school_year = session.get(SchoolYear, school_year_id)
+    movements: dict = {}
+    for movement in (
+        session.query(LearnerMovement).filter(LearnerMovement.enrollment_id.in_(ids)).all()
+    ):
+        movements.setdefault(movement.enrollment_id, []).append(movement)
+    windows = {
+        e.id: compute_active_window(
+            [Movement(m.movement_type, m.effective_date) for m in movements.get(e.id, [])],
+            default_start=school_year.start_date if school_year else None,
+        )
+        for e in enrollments
+    }
+
+    every_day = [d.id for days in class_days.values() for d in days]
+    attendance = records_for_month(session, ids, every_day)
+
+    return Sf9BatchContext(
+        report=load_report_context(session, enrollments),
+        school=session.query(School).one_or_none(),
+        school_year=school_year,
+        sections=sections,
+        grade_levels=grade_levels,
+        tracks=tracks,
+        strands=strands,
+        months=months,
+        class_days=class_days,
+        summaries=summaries,
+        windows=windows,
+        attendance=attendance,
+    )
+
+
+def build_sf9_workbook(session: Session, enrollment_id, context: Sf9BatchContext | None = None):
+    """Returns a self-contained openpyxl Workbook for one learner.
+
+    Pass a `context` when building a whole section — otherwise every
+    lookup is repeated per learner.
+    """
     enrollment = session.get(Enrollment, enrollment_id)
     learner = session.get(Learner, enrollment.learner_id)
-    section = session.get(Section, enrollment.section_id)
-    school = session.query(School).one_or_none()
-    school_year = session.get(SchoolYear, enrollment.school_year_id)
-    grade_level = (
-        session.get(GradeLevel, enrollment.grade_level_id) if enrollment.grade_level_id else None
-    )
-    track = session.get(Track, section.track_id) if section and section.track_id else None
-    strand = session.get(Strand, section.strand_id) if section and section.strand_id else None
+    if context is not None:
+        section = context.sections.get(enrollment.section_id)
+        school = context.school
+        school_year = context.school_year
+        grade_level = context.grade_levels.get(enrollment.grade_level_id)
+        track = context.tracks.get(section.track_id) if section and section.track_id else None
+        strand = context.strands.get(section.strand_id) if section and section.strand_id else None
+    else:
+        section = session.get(Section, enrollment.section_id)
+        school = session.query(School).one_or_none()
+        school_year = session.get(SchoolYear, enrollment.school_year_id)
+        grade_level = (
+            session.get(GradeLevel, enrollment.grade_level_id) if enrollment.grade_level_id else None
+        )
+        track = session.get(Track, section.track_id) if section and section.track_id else None
+        strand = session.get(Strand, section.strand_id) if section and section.strand_id else None
 
-    rows = build_learning_area_rows(session, enrollment)
+    rows = build_learning_area_rows(
+        session, enrollment, context.report if context is not None else None
+    )
     if len(rows) > MAX_LEARNING_AREAS:
         raise ValueError(
             f"{_full_name(learner)} has {len(rows)} learning-area rows but the SF9 "
@@ -249,8 +380,8 @@ def build_sf9_workbook(session: Session, enrollment_id):
         grade_level=grade_level, track=track, strand=strand,
     )
     _fill_learning_areas(worksheet, anchors, rows)
-    _fill_general_average(session, worksheet, anchors, enrollment)
-    _fill_attendance(session, worksheet, anchors, enrollment)
+    _fill_general_average(session, worksheet, anchors, enrollment, context)
+    _fill_attendance(session, worksheet, anchors, enrollment, context)
     _fill_transfer_certificate(session, worksheet, anchors, enrollment, section, grade_level)
     _fill_comments(worksheet, anchors, enrollment)
     _apply_print_setup(worksheet)
@@ -426,9 +557,10 @@ def _term_flags(entry) -> int:
     return sum(place for term, place in TERM_FLAG_PLACE.items() if entry.is_offered(term))
 
 
-def _fill_general_average(session, worksheet, anchors, enrollment) -> None:
+def _fill_general_average(session, worksheet, anchors, enrollment, context=None) -> None:
     summary = (
-        session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
+        context.summaries.get(enrollment.id) if context is not None
+        else session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
     )
     write(worksheet, anchors, ROW_GENERAL_AVERAGE, COL_FINAL_GRADE,
           _grade(summary.general_average) if summary else None)
@@ -438,10 +570,13 @@ def _fill_general_average(session, worksheet, anchors, enrollment) -> None:
     write(worksheet, anchors, ROW_GENERAL_AVERAGE, COL_REMARKS, remark)
 
 
-def _fill_attendance(session, worksheet, anchors, enrollment) -> None:
+def _fill_attendance(session, worksheet, anchors, enrollment, context=None) -> None:
     """§35: populate from the attendance data, never re-encoded by hand."""
-    window = active_window_for(session, enrollment)
-    monthly = _monthly_attendance(session, enrollment, window)
+    window = (
+        context.windows.get(enrollment.id) if context is not None
+        else None
+    ) or active_window_for(session, enrollment)
+    monthly = _monthly_attendance(session, enrollment, window, context)
 
     totals = [0, 0, 0]
     for index, month in enumerate(ATTENDANCE_MONTHS):

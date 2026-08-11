@@ -4,12 +4,13 @@ from app.admin_pages._helpers import get_session, render_flashes
 from app.auth import require_role
 from app.excel_template import workbook_to_bytes
 from app.models.academic_structure import Section
+from app.models.enums import CompletionStatus
 from app.models.grades import AnnualGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import SchoolYear
-from app.pdf_convert import PdfConversionError, is_pdf_available, xlsx_to_pdf
 from app.report_card import build_learning_area_rows
-from app.sf9_report import MAX_LEARNING_AREAS, build_sf9_workbook
+from app.sf9_report import MAX_LEARNING_AREAS, build_sf9_workbook, load_sf9_context
+from app.xlsx_render import workbook_to_pdf, workbooks_to_pdf
 
 DASH = "—"
 
@@ -128,7 +129,7 @@ def render() -> None:
             f"_{learner_by_enrollment[enrollment.id].first_name}".replace(" ", "")
         )
         try:
-            xlsx_bytes = workbook_to_bytes(build_sf9_workbook(session, enrollment.id))
+            workbook = build_sf9_workbook(session, enrollment.id)
         except ValueError as exc:
             st.error(str(exc))
             return
@@ -137,24 +138,92 @@ def render() -> None:
         with col_a:
             st.download_button(
                 "Download Excel (.xlsx)",
-                data=xlsx_bytes,
+                data=workbook_to_bytes(workbook),
                 file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         with col_b:
-            if is_pdf_available():
-                try:
-                    st.download_button(
-                        "Download PDF",
-                        data=xlsx_to_pdf(xlsx_bytes, basename=stem),
-                        file_name=f"{stem}.pdf",
-                        mime="application/pdf",
-                    )
-                except PdfConversionError as exc:
-                    st.error(f"PDF conversion failed — {exc}")
-            else:
-                st.button("Download PDF", disabled=True, key="sf9_pdf_disabled")
-                st.caption(
-                    "PDF export needs LibreOffice installed on the machine running this "
-                    "app. Until then, open the .xlsx and print or export from Excel."
-                )
+            st.download_button(
+                "Download PDF",
+                data=workbook_to_pdf(workbook),
+                file_name=f"{stem}.pdf",
+                mime="application/pdf",
+            )
+
+        _batch_section(session, enrollments, learner_by_enrollment, section_by_id[section_choice])
+
+
+def _batch_section(session, enrollments, learner_by_enrollment, section) -> None:
+    """One PDF holding every learner's card, a page each (§35).
+
+    Worth doing in one file rather than a download per learner: an adviser
+    printing 40 cards otherwise clicks 40 times and collates by hand.
+    """
+    st.divider()
+    st.subheader("Print the whole section")
+
+    summaries = {
+        row.enrollment_id: row
+        for row in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_([e.id for e in enrollments]))
+        .all()
+    }
+    complete = [
+        e for e in enrollments
+        if e.id in summaries and summaries[e.id].completion_status == CompletionStatus.COMPLETE
+    ]
+    incomplete = [e for e in enrollments if e not in complete]
+
+    st.caption(
+        f"{len(complete)} of {len(enrollments)} learner(s) have a COMPLETE annual record."
+    )
+    if incomplete:
+        # Not a blocker: an adviser may legitimately want the finished
+        # cards now. But an unencoded subject prints blank, and a blank
+        # cell on a card going home reads as a missing grade rather than
+        # an unfinished one — so name who is affected.
+        st.warning(
+            "These learners aren't COMPLETE and will print with blank cells — "
+            "recompute on Grade Summary first if that's not intended: "
+            + ", ".join(_learner_label(learner_by_enrollment[e.id]) for e in incomplete[:8])
+            + (f" (+{len(incomplete) - 8} more)" if len(incomplete) > 8 else "")
+        )
+
+    only_complete = st.checkbox(
+        "Only include learners with a COMPLETE record",
+        value=bool(incomplete),
+        key="sf9_batch_complete_only",
+    )
+    chosen = complete if only_complete else list(enrollments)
+    if not chosen:
+        st.info("No learners match — nothing to print.")
+        return
+
+    if not st.button(f"Build PDF for {len(chosen)} learner(s)", type="primary"):
+        return
+
+    def _workbooks(context):
+        # Built lazily, one at a time, so a 40-learner section costs one
+        # workbook of memory rather than forty.
+        for enrollment in chosen:
+            yield build_sf9_workbook(session, enrollment.id, context)
+
+    with st.spinner(f"Rendering {len(chosen)} card(s)…"):
+        # One context for the section: without it each card issues ~43
+        # queries, which at ~85ms per round trip is over two minutes for
+        # a full section.
+        context = load_sf9_context(session, chosen)
+        try:
+            data = workbooks_to_pdf(_workbooks(context))
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+
+    st.success(f"{len(chosen)} card(s), {len(data) / 1024:,.0f} KB.")
+    st.download_button(
+        "Download section PDF",
+        data=data,
+        file_name=f"SF9_{section.name.replace(' ', '')}_all.pdf",
+        mime="application/pdf",
+        type="primary",
+    )

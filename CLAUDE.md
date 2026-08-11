@@ -48,10 +48,18 @@ those formulas with values written by our own grading engine via
   backstop only, not the primary enforcement mechanism (service-role
   connections bypass RLS).
 - **PDF generation:** fill official DepEd Excel templates (SF9/SF10/SF2)
-  with `openpyxl` (preserves exact cell layout), then convert to PDF via
-  headless LibreOffice (`soffice --headless --convert-to pdf`). Award
-  certificates and temp cards use a custom template (python-docx or
-  ReportLab).
+  with `openpyxl` (preserves exact cell layout), then render to PDF with
+  **`app/xlsx_render.py`** — pure Python/ReportLab, no external program.
+  Award certificates and temp cards are drawn directly with ReportLab.
+  **LibreOffice was removed** (see the Phase 14 follow-up entry): each
+  `soffice` conversion peaked at 261 MB RSS with no concurrency limit, so
+  three simultaneous downloads exceeded a 1 GB host, and it was the only
+  reason deployment needed OS-level packages at all. `app/pdf_convert.py`
+  is deleted; `requirements.txt` alone now deploys the app.
+  The renderer reads the geometry the *template* carries (merges, widths,
+  borders, fonts, images, page setup) rather than hardcoding any form's
+  layout, so §56's DATA/PRINT-TEMPLATE separation still holds and SF10
+  will render with no new layout code.
 
 ## Non-negotiable business rules
 
@@ -822,6 +830,64 @@ those formulas with values written by our own grading engine via
       per websocket in `st.session_state` and sets no auth cookie, so
       there is no cookie-authenticated form post to forge.
       `pytest tests/` is 222.
+- [x] **LibreOffice removed; SF2/SF9 render in pure Python** (post-Phase-14,
+      user-directed after a deployment costing exercise). Measured, not
+      assumed: `soffice` peaks at **261 MB RSS per conversion** and
+      `xlsx_to_pdf` limited concurrency to nothing, so **three advisers
+      downloading a PDF at once exceeded a 1 GB host** — an OOM restart
+      signs everyone out and loses unsaved grade entry. It was also the
+      only thing forcing OS-level packages into the deployment.
+      **`app/xlsx_render.py`** replaces it. Verified by rendering SF9 and
+      SF2 both ways and comparing, not by eye. **4.4× faster** (0.9s vs
+      4.1s on SF2). `app/pdf_convert.py` is deleted.
+      **Five traps found by that comparison**, each of which produced
+      output that looked plausible:
+      (1) **Column widths are stored as `<col min= max= width=>` ranges
+      keyed by the first letter only.** SF9 has one entry under "P"
+      governing columns 16-26; reading them per letter left eleven columns
+      at the default width, inflating the card from 12.25in to 16.11in and
+      shrinking the whole form to 65% to make it fit.
+      (2) **`#` is an optional digit placeholder, `0` a required one.**
+      Treating them alike printed SF2's No. column (`#.###`) as "1.000";
+      ignoring number formats entirely printed its percentages as "1"
+      instead of "100.00%".
+      (3) **A `OneCellAnchor` carries its size in `ext`, not a `to`
+      marker.** Falling back to the image's natural pixel size drew the
+      school seal ~10in wide across the header.
+      (4) **`fitToWidth`/`fitToHeight` are page *counts*, and 0 means
+      "as many as needed".** SF2 is `fitToWidth=1, fitToHeight=0` — one
+      page wide, unlimited tall — and hides unused learner rows, so a
+      3-learner section renders short while a full one is 15.4 x 22.6in.
+      Forcing one page meant 35% scale, printing 5pt text at 1.8pt.
+      **Test with a full roster, never the seeded 3-learner section.**
+      (5) **`_wrap` must preserve leading whitespace.** `COMPONENT_INDENT`
+      is ten leading spaces and is what makes the G11 language pair read
+      as two components of one parent area (§16); `text.split()` drops it.
+      SF9's block-out for non-offered terms is now written as a **direct
+      fill as well as** via the template's conditional formatting, because
+      the renderer draws what a cell says rather than evaluating CF. This
+      is **not** the Phase 10 bug — that was `PatternFill(fill_type=None)`
+      to *clear* a fill, which serialises onto OOXML fill index 1, always
+      gray125. Nothing clears; an offered term is left untouched, and the
+      colour is read from the template's own rule (#595959) rather than
+      hardcoded.
+      **Batch print** ("Print the whole section" on the SF9 page) renders
+      every learner's card into one PDF, a page each, warning about any
+      learner whose record isn't COMPLETE (blank cells on a card going
+      home read as missing grades). Building it exposed the N+1 one layer
+      above `ReportCardContext`: **one SF9 costs ~43 queries**, ~3.6s at
+      Tokyo latency, so 40 cards took over two minutes. **`Sf9BatchContext`
+      / `load_sf9_context`** batches the school, calendar, offerings,
+      summaries and movement windows — **43 queries per learner → 4**,
+      and a full section is ~35s instead of ~170s. `tests/test_query_cost.py`
+      locks the shape in.
+      Fonts fall back to metric-compatible base-14 faces (Arial →
+      Helvetica). Worth knowing: **the old pipeline substituted fonts
+      too** — it only looked exact locally because Windows has Arial,
+      Carlito and Aparajita installed; a Linux server substitutes either
+      way. `register_font_file()` can embed real TTFs if that ever
+      matters.
+      `pytest tests/` is 246.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

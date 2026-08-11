@@ -1,8 +1,8 @@
 """Award certificate PDF (§40) — direct ReportLab generation, matching
 the layout the user supplied as a reference image. This is a new custom
 design with no pre-existing official DepEd template to preserve pixel-for-
-pixel (unlike SF9/SF2), so it's generated directly rather than through the
-openpyxl-fill-then-LibreOffice-convert pipeline used for those forms.
+pixel (unlike SF9/SF2), so the layout lives here rather than in a template
+file rendered by `app/xlsx_render.py`.
 
 Two output shapes share one drawing routine:
 

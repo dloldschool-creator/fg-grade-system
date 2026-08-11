@@ -118,6 +118,31 @@ def test_a_whole_section_costs_no_more_than_one_learner(session, roster):
     )
 
 
+def test_batch_sf9_costs_far_less_per_learner_than_a_single_card(session, roster):
+    """Printing a whole section's report cards (§35) hit the same N+1 the
+    report-card rows already had, one layer up: building one SF9 costs
+    ~43 queries of its own — the school, calendar, offerings and summaries
+    are all refetched per learner even though they're identical across the
+    section. At 85ms a round trip that is ~3.6s per card, so forty cards
+    took over two minutes.
+    """
+    from app.sf9_report import build_sf9_workbook, load_sf9_context
+
+    with QueryCounter() as single:
+        build_sf9_workbook(session, roster[0].id)
+
+    with QueryCounter() as batched:
+        context = load_sf9_context(session, roster)
+        for enrollment in roster:
+            build_sf9_workbook(session, enrollment.id, context)
+
+    per_learner = (batched.count - 0) / len(roster)
+    assert per_learner < single.count / 2, (
+        f"{len(roster)} cards cost {batched.count} queries ({per_learner:.1f} each) "
+        f"against {single.count} for one — the batch context isn't holding"
+    )
+
+
 def test_connection_pool_is_sized_for_concurrent_teachers():
     """~40 teachers share this pool, and Streamlit runs each session in
     its own thread. The old 5+10 default queued requests as soon as a

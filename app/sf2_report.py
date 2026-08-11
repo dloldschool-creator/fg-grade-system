@@ -514,8 +514,8 @@ def _fill_learner_block(worksheet, anchors, rows, first_row: int, class_days) ->
         else:
             # Clear the leftover sample data and hide the row. Hiding is
             # what keeps unused rows off both the Excel print-out and the
-            # PDF — LibreOffice honours the same hidden flag, so one
-            # mechanism covers both exports.
+            # PDF — `app/xlsx_render.py` gives a hidden row zero height,
+            # so one mechanism covers both exports.
             worksheet.row_dimensions[row_number].hidden = True
             write(worksheet, anchors, row_number, COL_NO, offset + 1)
             write(worksheet, anchors, row_number, COL_NAME, None)
