@@ -13,6 +13,7 @@ from app.admin_pages import (
     enrollment,
     gradebook,
     grade_summary,
+    help as help_page,
     grading_policy,
     learners,
     school_info,
@@ -103,10 +104,19 @@ else:
         ]
 
     if not pages:
+        # Someone whose account exists but has no role yet still gets the
+        # guide — it's the one page that explains what they're waiting for.
         pg = st.navigation(
-            [st.Page(_render_not_authorized, title="Not authorized", default=True)],
-            position="hidden",
+            [
+                st.Page(_render_not_authorized, title="Not authorized", default=True),
+                st.Page(help_page.render, title="Quick Guide", icon="❓", url_path="help"),
+            ]
         )
     else:
+        # Appended last so it never claims `default=True`, and so it sits at
+        # the foot of the sidebar where a help link is looked for.
+        pages.append(
+            st.Page(help_page.render, title="Quick Guide", icon="❓", url_path="help")
+        )
         pg = st.navigation(pages)
     pg.run()

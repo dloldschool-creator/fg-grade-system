@@ -888,6 +888,28 @@ those formulas with values written by our own grading engine via
       way. `register_font_file()` can embed real TTFs if that ever
       matters.
       `pytest tests/` is 246.
+- [x] **In-app Quick Guide** (`app/admin_pages/help.py`) — reachable by
+      every role, and by a user with no role yet (it's the one page that
+      explains what they're waiting for). Deliberately **not** a feature
+      tour: every entry is a place where doing the natural thing produces
+      a wrong record rather than an error — blank-is-not-zero, LATE/CUTTING
+      still count as present, editing a SUBMITTED grade reverts it to
+      DRAFT, "Prepare this month's sheet" must be re-run after a late
+      enrollee, Section Offerings is the source of truth, the backup
+      excludes login accounts. Content is data, not markup, so the
+      sections a user needs show first.
+      It also answers the question this codebase is most likely to
+      generate: **why the G11 language pair shows no Final Grade on the
+      report card but two separate rows on the term card** (§16 vs §17 —
+      exact opposites, both correct).
+      `tests/test_help.py` keeps it honest: role codes must exist, every
+      role with screens must be covered, and both halves of the language
+      rule must stay explained.
+      **Surfaced while writing it:** `ATTENDANCE_ENCODER` and
+      `SCHOOL_HEAD` are seeded roles with **no pages wired**, so granting
+      either alone lands the user on "not authorized". The guide says so
+      and suggests the interim workaround; building their screens is still
+      open.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
