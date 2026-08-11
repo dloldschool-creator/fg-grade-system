@@ -21,18 +21,23 @@ side follows.
 import calendar as _calendar
 import io
 import os
-from copy import copy
 from datetime import date, timedelta
 
 import openpyxl
-from openpyxl.cell.cell import Cell
-from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.properties import PageSetupProperties
 from sqlalchemy.orm import Session
 
-from app.attendance_engine import CONSECUTIVE_ABSENCE_WARNING, EXIT_MOVEMENTS
+from app.excel_template import (
+    anchor_map,
+    assert_no_external_links,
+    clear_column,
+    replicate_images,
+    strip_external_formulas,
+    workbook_to_bytes,
+    write,
+    write_ref,
+)
 from app.attendance_service import (
     class_days_in_month,
     roster_for_month,
@@ -203,79 +208,6 @@ def first_friday_on_or_after(start: date) -> date:
 # --- Template handling ----------------------------------------------------
 
 
-def _formula_text(value) -> str | None:
-    if isinstance(value, ArrayFormula):
-        return value.text
-    if isinstance(value, str) and value.startswith("="):
-        return value
-    return None
-
-
-def _anchor_map(worksheet) -> dict:
-    """Maps every covered (row, col) to the top-left anchor of its merged
-    range.
-
-    Necessary because openpyxl raises on any write to a merged cell that
-    isn't the anchor, and this template's merge layout **differs row by
-    row**: a day column that anchors a merge on the weekday row may sit
-    mid-merge on the date row or on a learner row. Resolving the anchor
-    per (row, col) is the only reliable way to write into the grid.
-    """
-    anchors: dict = {}
-    for merged in worksheet.merged_cells.ranges:
-        top_left = (merged.min_row, merged.min_col)
-        for row in range(merged.min_row, merged.max_row + 1):
-            for col in range(merged.min_col, merged.max_col + 1):
-                anchors[(row, col)] = top_left
-    return anchors
-
-
-def _write(worksheet, anchors: dict, row: int, col: int, value) -> None:
-    target_row, target_col = anchors.get((row, col), (row, col))
-    worksheet.cell(target_row, target_col).value = value
-
-
-def _write_ref(worksheet, anchors: dict, coordinate: str, value) -> None:
-    cell = worksheet[coordinate]
-    _write(worksheet, anchors, cell.row, cell.column, value)
-
-
-def strip_external_formulas(worksheet) -> int:
-    """Blanks every cell whose formula references the external workbook
-    (`[1]`). Returns how many were cleared. Formatting, merges and images
-    are untouched — only the cell values go."""
-    cleared = 0
-    for row in worksheet.iter_rows():
-        for cell in row:
-            text = _formula_text(cell.value)
-            if text and "[1]" in text:
-                cell.value = None
-                cleared += 1
-    return cleared
-
-
-def assert_no_external_links(workbook) -> None:
-    """Guard: a generated SF2 must never still point at the school's
-    master workbook. Raises rather than silently shipping a file that
-    prompts to update links or shows stale numbers."""
-    remaining = []
-    for worksheet in workbook.worksheets:
-        for row in worksheet.iter_rows():
-            for cell in row:
-                text = _formula_text(cell.value)
-                if text and "[1]" in text:
-                    remaining.append(f"{worksheet.title}!{cell.coordinate}")
-    if remaining:
-        raise AssertionError(
-            f"{len(remaining)} external-link formula(s) survived, e.g. {remaining[:5]}"
-        )
-    if getattr(workbook, "_external_links", None):
-        raise AssertionError("workbook still declares an external link book")
-
-
-# --- Data assembly --------------------------------------------------------
-
-
 def _learner_rows(session: Session, section_id, school_year_id, year: int, month: int, class_days):
     """One dict per learner on this month's sheet, already split by sex and
     in SF2's order (male then female, alphabetical) — `roster_for_month`
@@ -389,7 +321,7 @@ def build_sf2_workbook(
         sheets.append(extra)
     if page_count > 1:
         base.title = f"{SHEET_NAME} p1"
-        _replicate_images(base, sheets[1:])
+        replicate_images(base, sheets[1:])
 
     term = _term_for_month(session, school_year_id, class_days)
     adviser = session.get(User, section.adviser_user_id) if section.adviser_user_id else None
@@ -397,7 +329,7 @@ def build_sf2_workbook(
 
     for page_index, worksheet in enumerate(sheets):
         strip_external_formulas(worksheet)
-        anchors = _anchor_map(worksheet)
+        anchors = anchor_map(worksheet)
         _fill_header(
             session,
             worksheet,
@@ -429,50 +361,12 @@ def build_sf2_workbook(
     return workbook
 
 
-def _replicate_images(base, copies) -> None:
-    """Puts the header logos on every page of a multi-page SF2.
-
-    Two openpyxl quirks make this less obvious than it looks:
-
-    1. `Workbook.copy_worksheet` copies values, styles and merges but
-       **silently drops images**, so page 2 would print without the DepEd
-       and school seals while page 1 looked fine.
-    2. A loaded image's bytes can only be read **once** — `_data()`
-       consumes the underlying BytesIO and leaves it closed. Sharing one
-       image object (or a shallow copy of it) across two sheets therefore
-       saves the first and raises "I/O operation on closed file" on the
-       second.
-
-    So the bytes are captured once up front and a brand-new Image, with
-    its own live buffer and its own anchor, is built for every sheet —
-    including the base, whose original buffer the capture just spent.
-    """
-    if not base._images:
-        return
-    captured = [
-        (image._data(), image.anchor, image.width, image.height) for image in base._images
-    ]
-
-    def rebuild():
-        rebuilt = []
-        for data, anchor, width, height in captured:
-            image = XLImage(io.BytesIO(data))
-            image.anchor = copy(anchor)
-            image.width, image.height = width, height
-            rebuilt.append(image)
-        return rebuilt
-
-    base._images = rebuild()
-    for sheet in copies:
-        sheet._images = rebuild()
-
-
 def _clear_print_control_column(worksheet) -> None:
-    """Blanks the source workbook's print-macro helper column."""
-    for row in range(1, worksheet.max_row + 1):
-        cell = worksheet.cell(row, COL_PRINT_CONTROL)
-        if isinstance(cell, Cell):  # skip MergedCell, which is read-only
-            cell.value = None
+    """Blanks the source workbook's print-macro helper column — it holds
+    "Select Month in" and a HYPERLINK to a 'PRINT CONTROL' sheet that
+    doesn't exist here. That hyperlink is a *local* formula, so unlike
+    the [1]-prefixed ones it survives external-link stripping."""
+    clear_column(worksheet, COL_PRINT_CONTROL)
 
 
 def _widen_summary_percentage_columns(worksheet) -> None:
@@ -545,15 +439,15 @@ def _track_and_strand(session: Session, section: Section):
 
 def _fill_header(session, worksheet, anchors, *, school, section, school_year, term, track, strand,
                  year, month, class_day_count, adviser):
-    _write_ref(worksheet, anchors, CELL_SCHOOL_NAME, school.school_name if school else "")
-    _write_ref(worksheet, anchors, CELL_SCHOOL_ID, school.deped_school_id if school else "")
-    _write_ref(worksheet, anchors, CELL_DISTRICT, getattr(school, "district", "") or "")
-    _write_ref(worksheet, anchors, CELL_DIVISION, school.schools_division if school else "")
-    _write_ref(worksheet, anchors, CELL_REGION, school.region if school else "")
-    _write_ref(worksheet, anchors, CELL_TERM, term.name if term else "")
-    _write_ref(worksheet, anchors, CELL_SCHOOL_YEAR, school_year.name if school_year else "")
-    _write_ref(worksheet, anchors, CELL_GRADE_LEVEL, _grade_level_label(session, section))
-    _write_ref(
+    write_ref(worksheet, anchors, CELL_SCHOOL_NAME, school.school_name if school else "")
+    write_ref(worksheet, anchors, CELL_SCHOOL_ID, school.deped_school_id if school else "")
+    write_ref(worksheet, anchors, CELL_DISTRICT, getattr(school, "district", "") or "")
+    write_ref(worksheet, anchors, CELL_DIVISION, school.schools_division if school else "")
+    write_ref(worksheet, anchors, CELL_REGION, school.region if school else "")
+    write_ref(worksheet, anchors, CELL_TERM, term.name if term else "")
+    write_ref(worksheet, anchors, CELL_SCHOOL_YEAR, school_year.name if school_year else "")
+    write_ref(worksheet, anchors, CELL_GRADE_LEVEL, _grade_level_label(session, section))
+    write_ref(
         worksheet,
         anchors,
         CELL_TRACK_STRAND,
@@ -561,11 +455,11 @@ def _fill_header(session, worksheet, anchors, *, school, section, school_year, t
             part for part in [track.name if track else "", strand.name if strand else ""] if part
         ),
     )
-    _write_ref(worksheet, anchors, CELL_MONTH, _calendar.month_name[month])
-    _write_ref(worksheet, anchors, CELL_SECTION, section.name)
-    _write_ref(worksheet, anchors, CELL_DAYS_OF_CLASSES, f"No. of Days of Classes: {class_day_count}")
-    _write_ref(worksheet, anchors, CELL_ADVISER, adviser.full_name.upper() if adviser else "")
-    _write_ref(worksheet, anchors, CELL_SCHOOL_HEAD, (school.school_head_name or "").upper() if school else "")
+    write_ref(worksheet, anchors, CELL_MONTH, _calendar.month_name[month])
+    write_ref(worksheet, anchors, CELL_SECTION, section.name)
+    write_ref(worksheet, anchors, CELL_DAYS_OF_CLASSES, f"No. of Days of Classes: {class_day_count}")
+    write_ref(worksheet, anchors, CELL_ADVISER, adviser.full_name.upper() if adviser else "")
+    write_ref(worksheet, anchors, CELL_SCHOOL_HEAD, (school.school_head_name or "").upper() if school else "")
 
 
 def _grade_level_label(session: Session, section) -> str:
@@ -586,14 +480,14 @@ def _fill_day_headers(worksheet, anchors, class_days) -> None:
     table header, so a populated one prints raw dates over the form.
     """
     for index, column in enumerate(DAY_COLS):
-        _write(worksheet, anchors, ROW_DATE_SCAFFOLD, column, None)
+        write(worksheet, anchors, ROW_DATE_SCAFFOLD, column, None)
         if index < len(class_days):
             day = class_days[index].calendar_date
-            _write(worksheet, anchors, ROW_DAY_NUMBER, column, day.day)
-            _write(worksheet, anchors, ROW_WEEKDAY, column, WEEKDAY_LETTERS[day.weekday()])
+            write(worksheet, anchors, ROW_DAY_NUMBER, column, day.day)
+            write(worksheet, anchors, ROW_WEEKDAY, column, WEEKDAY_LETTERS[day.weekday()])
         else:
             for row in (ROW_DAY_NUMBER, ROW_WEEKDAY):
-                _write(worksheet, anchors, row, column, None)
+                write(worksheet, anchors, row, column, None)
 
 
 def _fill_learner_block(worksheet, anchors, rows, first_row: int, class_days) -> None:
@@ -604,31 +498,31 @@ def _fill_learner_block(worksheet, anchors, rows, first_row: int, class_days) ->
             # Explicitly unhide: a sheet copied from an already-filled page
             # inherits its hidden flags.
             worksheet.row_dimensions[row_number].hidden = False
-            _write(worksheet, anchors, row_number, COL_NO, offset + 1)
-            _write(worksheet, anchors, row_number, COL_NAME, entry["name"])
+            write(worksheet, anchors, row_number, COL_NO, offset + 1)
+            write(worksheet, anchors, row_number, COL_NAME, entry["name"])
             for index, column in enumerate(DAY_COLS):
-                _write(
+                write(
                     worksheet,
                     anchors,
                     row_number,
                     column,
                     entry["marks"][index] if index < len(class_days) else None,
                 )
-            _write(worksheet, anchors, row_number, COL_ABSENT, entry["absent"])
-            _write(worksheet, anchors, row_number, COL_PRESENT, entry["present"])
-            _write(worksheet, anchors, row_number, COL_REMARKS, entry["remarks"] or None)
+            write(worksheet, anchors, row_number, COL_ABSENT, entry["absent"])
+            write(worksheet, anchors, row_number, COL_PRESENT, entry["present"])
+            write(worksheet, anchors, row_number, COL_REMARKS, entry["remarks"] or None)
         else:
             # Clear the leftover sample data and hide the row. Hiding is
             # what keeps unused rows off both the Excel print-out and the
             # PDF — LibreOffice honours the same hidden flag, so one
             # mechanism covers both exports.
             worksheet.row_dimensions[row_number].hidden = True
-            _write(worksheet, anchors, row_number, COL_NO, offset + 1)
-            _write(worksheet, anchors, row_number, COL_NAME, None)
+            write(worksheet, anchors, row_number, COL_NO, offset + 1)
+            write(worksheet, anchors, row_number, COL_NAME, None)
             for column in DAY_COLS:
-                _write(worksheet, anchors, row_number, column, None)
+                write(worksheet, anchors, row_number, column, None)
             for column in (COL_ABSENT, COL_PRESENT, COL_REMARKS):
-                _write(worksheet, anchors, row_number, column, None)
+                write(worksheet, anchors, row_number, column, None)
 
 
 def _present_on(entry, index: int) -> bool:
@@ -643,7 +537,7 @@ def _fill_daily_totals(worksheet, anchors, males, females, class_days) -> None:
     for index, column in enumerate(DAY_COLS):
         if index >= len(class_days):
             for row in (ROW_MALE_TOTAL, ROW_FEMALE_TOTAL, ROW_COMBINED_TOTAL):
-                _write(worksheet, anchors, row, column, None)
+                write(worksheet, anchors, row, column, None)
             continue
         day = class_days[index].calendar_date
         male_total = sum(
@@ -652,9 +546,9 @@ def _fill_daily_totals(worksheet, anchors, males, females, class_days) -> None:
         female_total = sum(
             1 for e in females if e["window"].contains(day) and _present_on(e, index)
         )
-        _write(worksheet, anchors, ROW_MALE_TOTAL, column, male_total)
-        _write(worksheet, anchors, ROW_FEMALE_TOTAL, column, female_total)
-        _write(worksheet, anchors, ROW_COMBINED_TOTAL, column, male_total + female_total)
+        write(worksheet, anchors, ROW_MALE_TOTAL, column, male_total)
+        write(worksheet, anchors, ROW_FEMALE_TOTAL, column, female_total)
+        write(worksheet, anchors, ROW_COMBINED_TOTAL, column, male_total + female_total)
 
 
 def _write_summary_row(worksheet, anchors, row: int, male: float, female: float, total=None) -> None:
@@ -667,9 +561,9 @@ def _write_summary_row(worksheet, anchors, row: int, male: float, female: float,
     if isinstance(computed_total, float):
         # Averages summed as floats otherwise land as 2.7800000000000002.
         computed_total = round(computed_total, 4)
-    _write(worksheet, anchors, row, COL_SUMMARY_M, male)
-    _write(worksheet, anchors, row, COL_SUMMARY_F, female)
-    _write(worksheet, anchors, row, COL_SUMMARY_TOTAL, computed_total)
+    write(worksheet, anchors, row, COL_SUMMARY_M, male)
+    write(worksheet, anchors, row, COL_SUMMARY_F, female)
+    write(worksheet, anchors, row, COL_SUMMARY_TOTAL, computed_total)
 
 
 def _fill_summary(session, worksheet, anchors, males, females, class_days, school_year, year, month) -> None:
@@ -759,9 +653,3 @@ def _late_enrolled(entry, year: int, month: int) -> bool:
     if window.start is None:
         return False
     return window.start.year == year and window.start.month == month
-
-
-def workbook_to_bytes(workbook) -> bytes:
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()

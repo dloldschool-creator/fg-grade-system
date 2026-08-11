@@ -5,6 +5,7 @@ import streamlit as st
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.grading_service import recompute_enrollment_grades
+from app.report_card import build_learning_area_rows
 from app.models.academic_structure import Section
 from app.models.enums import CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
 from app.models.grades import (
@@ -149,67 +150,20 @@ def _learner_detail(session, current_user, enrollment: Enrollment):
                 f"{term_names.get(ts.term_id, 'Term')} Average", str(_fmt(ts.term_average))
             )
 
-    finals = {f.subject_id: f for f in session.query(SubjectFinalGrade).filter_by(enrollment_id=enrollment.id).all()}
-    combined_results = (
-        session.query(CombinedLearningAreaResult).filter_by(enrollment_id=enrollment.id).all()
-    )
-    term_grades_by_subject = _term_grades_by_subject(session, enrollment)
-
-    rows = []
-    handled_subject_ids = set()
-
-    # Combined learning areas first, each followed by its indented
-    # component rows — matches the SF9 display rule (§16): the parent row
-    # shows the COMBINED term grades and Final Grade; each component row
-    # shows its OWN term grades but its Final Grade cell stays BLANK.
-    for area_result in combined_results:
-        area = session.get(CombinedLearningArea, area_result.combined_learning_area_id)
-        components = (
-            session.query(CombinedLearningAreaComponent)
-            .filter_by(combined_learning_area_id=area_result.combined_learning_area_id)
-            .order_by(CombinedLearningAreaComponent.display_order)
-            .all()
-        )
-        rows.append(
-            {
-                "Learning Area": area.name,
-                "Term 1": _fmt(area_result.term1_combined),
-                "Term 2": _fmt(area_result.term2_combined),
-                "Term 3": _fmt(area_result.term3_combined),
-                "Final Grade": _fmt(area_result.final_grade),
-                "Remark": area_result.remark.value if area_result.remark else DASH,
-            }
-        )
-        for component in components:
-            subject = session.get(Subject, component.subject_id)
-            tg = term_grades_by_subject.get(component.subject_id, {})
-            rows.append(
-                {
-                    "Learning Area": f"     {subject.official_name}",
-                    "Term 1": _fmt(tg.get(1)),
-                    "Term 2": _fmt(tg.get(2)),
-                    "Term 3": _fmt(tg.get(3)),
-                    "Final Grade": "",  # blank on purpose — §16
-                    "Remark": "",
-                }
-            )
-            handled_subject_ids.add(component.subject_id)
-
-    for subject_id, final in finals.items():
-        if subject_id in handled_subject_ids:
-            continue
-        subject = session.get(Subject, subject_id)
-        tg = term_grades_by_subject.get(subject_id, {})
-        rows.append(
-            {
-                "Learning Area": subject.official_name,
-                "Term 1": _fmt(tg.get(1)),
-                "Term 2": _fmt(tg.get(2)),
-                "Term 3": _fmt(tg.get(3)),
-                "Final Grade": _fmt(final.final_grade),
-                "Remark": final.remark.value if final.remark else DASH,
-            }
-        )
+    # Rows come from app/report_card.py, the single implementation of the
+    # §16 combined-language display rule — shared with the generated SF9
+    # so the screen and the printed form can never disagree.
+    rows = [
+        {
+            "Learning Area": row.display_name,
+            "Term 1": _fmt(row.term_grades.get(1)),
+            "Term 2": _fmt(row.term_grades.get(2)),
+            "Term 3": _fmt(row.term_grades.get(3)),
+            "Final Grade": "" if row.is_component else _fmt(row.final_grade),
+            "Remark": "" if row.is_component else (row.remark or DASH),
+        }
+        for row in build_learning_area_rows(session, enrollment)
+    ]
 
     if rows:
         st.table(rows)

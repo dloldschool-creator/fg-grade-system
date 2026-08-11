@@ -8,6 +8,7 @@ from datetime import date
 import openpyxl
 import pytest
 
+from app.excel_template import anchor_map, replicate_images, workbook_to_bytes
 from app.models.enums import AttendanceStatus, EnrollmentStatus
 from app.sf2_report import (
     COL_PRINT_CONTROL,
@@ -20,17 +21,14 @@ from app.sf2_report import (
     ROW_DATE_SCAFFOLD,
     SHEET_NAME,
     TEMPLATE_PATH,
-    _anchor_map,
     _apply_print_setup,
     _fill_day_headers,
     _widen_summary_percentage_columns,
-    _replicate_images,
     first_friday_on_or_after,
     movement_remark,
     page_slice,
     paginate,
     printed_code,
-    workbook_to_bytes,
 )
 
 
@@ -152,7 +150,7 @@ def test_extra_pages_keep_the_header_logos():
     extra.title = "p2"
     assert extra._images == [], "copy_worksheet is expected to drop images"
 
-    _replicate_images(base, [extra])
+    replicate_images(base, [extra])
     assert len(base._images) == 2
     assert len(extra._images) == 2
 
@@ -221,7 +219,7 @@ def test_date_scaffold_row_is_cleared_not_populated():
     assert "$14" in str(worksheet.cell(16, DAY_COLS[0]).value)
     assert "$14" in str(worksheet.cell(17, DAY_COLS[0]).value)
 
-    _fill_day_headers(worksheet, _anchor_map(worksheet), [])
+    _fill_day_headers(worksheet, anchor_map(worksheet), [])
     for column in DAY_COLS:
         assert worksheet.cell(ROW_DATE_SCAFFOLD, column).value is None
 
