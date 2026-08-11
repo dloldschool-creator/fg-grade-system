@@ -5,7 +5,10 @@ browser tab, so logging in again is needed after either. Not solved this
 pass — see docs/schema.md / CLAUDE.md history for why.
 """
 
+import base64
+import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import streamlit as st
 
@@ -95,31 +98,120 @@ def logout() -> None:
     st.session_state.pop(SESSION_KEY, None)
 
 
+SEAL_PATH = os.path.join(os.path.dirname(__file__), "assets", "fgnmhs_seal.png")
+
+# Shown if the school record can't be read (first run before seeding, or
+# the database being unreachable) — the sign-in page should still render
+# something sensible rather than an error.
+FALLBACK_SCHOOL_NAME = "Francisco G. Nepomuceno Memorial High School"
+
+_LOGIN_STYLES = """
+<style>
+  /* Scoped to .login-heading, which only the sign-in page draws. */
+  .login-heading { text-align: center; margin-bottom: 0.25rem; }
+  /* The seal is an <img> inside this block rather than st.image(), so it
+     inherits the centring above. Targeting Streamlit's own image wrapper
+     with CSS is brittle — its test id and DOM nesting change between
+     releases, and it didn't centre reliably here. */
+  .login-heading img.seal {
+      width: 96px; height: auto;
+      display: block; margin: 0 auto 0.35rem auto;
+  }
+  .login-heading h1 {
+      font-size: 1.55rem; line-height: 1.3; font-weight: 700;
+      margin: 0.6rem 0 0.2rem 0;
+  }
+  .login-heading p { margin: 0; opacity: 0.75; font-size: 0.95rem; }
+  .login-heading .eyebrow {
+      text-transform: uppercase; letter-spacing: 0.14em;
+      font-size: 0.7rem; opacity: 0.6;
+  }
+</style>
+"""
+
+
+@lru_cache(maxsize=1)
+def _seal_img_tag() -> str:
+    """The seal as an inline data URI so it can live inside the centred
+    heading block. Cached — the file never changes at runtime, and this
+    would otherwise re-read and re-encode on every rerun."""
+    if not os.path.exists(SEAL_PATH):
+        return ""
+    with open(SEAL_PATH, "rb") as handle:
+        encoded = base64.b64encode(handle.read()).decode("ascii")
+    return f'<img class="seal" src="data:image/png;base64,{encoded}" alt="" />'
+
+
+def _school_display_name() -> str:
+    """Reads the school name so renaming it on School Info flows through
+    to the sign-in page. Falls back rather than raising: if the database
+    is unreachable the page should still render (login will fail with a
+    clear message when submitted, which is more useful than a stack
+    trace on load)."""
+    try:
+        from app.models.organization import School
+
+        session = SessionLocal()
+        try:
+            school = session.query(School).first()
+            return school.school_name if school else FALLBACK_SCHOOL_NAME
+        finally:
+            session.close()
+    except Exception:
+        return FALLBACK_SCHOOL_NAME
+
+
 def login_form() -> None:
-    st.title("FGNMHS Grading System — Admin Login")
-    with st.form("login_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Log in")
+    st.markdown(_LOGIN_STYLES, unsafe_allow_html=True)
+
+    # Constrain the form to a readable column — the app runs in "wide"
+    # layout, which would otherwise stretch two inputs across the screen.
+    _, centre, _ = st.columns([1, 1.4, 1])
+    with centre:
+        st.markdown(
+            f"""
+            <div class="login-heading">
+              {_seal_img_tag()}
+              <div class="eyebrow">Senior High School</div>
+              <h1>{_school_display_name()}</h1>
+              <p>Grading, Attendance &amp; Forms System</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
+        with st.form("login_form"):
+            email = st.text_input("Email", placeholder="name@deped.gov.ph")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Sign in", use_container_width=True)
+
+        st.caption(
+            "Use the account issued to you by the school. If you were given a "
+            "temporary password, you can change it from the sidebar once signed in."
+        )
 
     if not submitted:
         return
 
-    if not email or not password:
-        st.error("Enter both email and password.")
-        return
+    # Errors render in the same narrow column as the form, not full-width
+    # across the wide layout.
+    with centre:
+        if not email or not password:
+            st.error("Enter both email and password.")
+            return
 
-    try:
-        response = get_anon_client().auth.sign_in_with_password(
-            {"email": email, "password": password}
-        )
-    except Exception as exc:
-        st.error(f"Login failed: {exc}")
-        return
+        try:
+            response = get_anon_client().auth.sign_in_with_password(
+                {"email": email, "password": password}
+            )
+        except Exception as exc:
+            st.error(f"Sign-in failed: {exc}")
+            return
 
-    if response.user is None or response.session is None:
-        st.error("Login failed — check your email and password.")
-        return
+        if response.user is None or response.session is None:
+            st.error("Sign-in failed — check your email and password.")
+            return
 
     full_name = (response.user.user_metadata or {}).get("full_name", "")
     st.session_state[SESSION_KEY] = _load_or_provision_user(
