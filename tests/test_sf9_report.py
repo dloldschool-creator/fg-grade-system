@@ -21,6 +21,7 @@ from app.sf9_report import (
     COL_TERM,
     COL_TERM_OFFERED_FLAGS,
     LEARNING_AREA_FIRST_ROW,
+    LEARNING_AREA_LAST_ROW,
     MAX_LEARNING_AREAS,
     MONTH_ABBREVIATIONS,
     SHEET_NAME,
@@ -271,23 +272,51 @@ def test_unused_rows_get_no_flag_so_they_stay_blank():
         assert read(offset) is None
 
 
-def test_no_hard_fills_are_written_over_the_template():
-    """Regression: the block-out belongs to the template's OWN conditional
-    formatting. Painting fills by hand instead produced grey on every
-    grade — a "no fill" PatternFill serialises onto OOXML fill index 1,
-    which is always gray125. The output should declare no solid fill at
-    all, and keep the template's three rule blocks."""
+def test_a_non_offered_term_is_blocked_out_and_an_offered_one_is_left_alone():
+    """The block-out is now written as a direct fill as well as via the
+    template's rules, because `app/xlsx_render.py` draws what a cell says
+    rather than evaluating conditional formatting.
+
+    The original bug this guards against was never "painting a fill" — it
+    was *clearing* one: `PatternFill(fill_type=None)` serialises onto OOXML
+    fill index 1, which is always gray125, so cells meant to be cleared
+    came out grey. So the invariant is that an offered term is **left
+    untouched**, never assigned a fill of any kind.
+    """
     workbook = openpyxl.load_workbook(TEMPLATE_PATH)
     worksheet = workbook[SHEET_NAME]
     strip_external_formulas(worksheet)
     assert len(worksheet.conditional_formatting) == 3
     _fill_learning_areas(worksheet, anchor_map(worksheet), [_one_term("Biology 1", 1)])
 
+    row = LEARNING_AREA_FIRST_ROW
+    offered = worksheet.cell(row=row, column=COL_TERM[1])
+    blocked = worksheet.cell(row=row, column=COL_TERM[2])
+
+    assert offered.fill.fill_type is None, "an offered term must keep the template's own styling"
+    assert blocked.fill.fill_type == "solid"
+    assert "595959" in str(blocked.fill.start_color.rgb), "must use the template's own block-out colour"
+
+
+def test_the_block_out_never_produces_the_gray125_default():
+    """The exact Phase 10 failure: any fill that serialises onto OOXML
+    fill index 1 comes back as gray125 and paints cells that should have
+    been left clear."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+    strip_external_formulas(worksheet)
+    _fill_learning_areas(worksheet, anchor_map(worksheet), [_one_term("Biology 1", 1)])
+
     saved = workbook_to_bytes(workbook)
     styles = zipfile.ZipFile(io.BytesIO(saved)).read("xl/styles.xml").decode()
-    assert 'patternType="solid"' not in styles
+    for row in range(LEARNING_AREA_FIRST_ROW, LEARNING_AREA_LAST_ROW + 1):
+        for column in COL_TERM.values():
+            cell = worksheet.cell(row=row, column=column)
+            assert cell.fill.fill_type != "gray125"
+    assert "gray125" in styles, "index 1 always exists; nothing may reference it"
+
     sheet = zipfile.ZipFile(io.BytesIO(saved)).read("xl/worksheets/sheet1.xml").decode("utf-8", "replace")
-    assert sheet.count("<conditionalFormatting") == 3
+    assert sheet.count("<conditionalFormatting") == 3, "the template's own rules must survive"
 
 
 # --- Certificate of Transfer ----------------------------------------------

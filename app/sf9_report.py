@@ -24,7 +24,7 @@ import os
 from datetime import date
 
 import openpyxl
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.properties import PageSetupProperties
 from sqlalchemy.orm import Session
 
@@ -130,6 +130,47 @@ PRINT_AREA = "A1:AA42"
 # greys out every grade on the card — which is exactly what happened.
 COL_TERM_OFFERED_FLAGS = 14  # N
 TERM_FLAG_PLACE = {1: 100, 2: 10, 3: 1}
+
+# The flags above drive the template's conditional formatting, which Excel
+# and LibreOffice both evaluate. `app/xlsx_render.py` does not — it draws
+# what a cell says, and evaluating CF formulas would mean a formula
+# interpreter. So the same block-out is *also* written as a direct fill,
+# which every renderer honours.
+#
+# This is not the Phase 10 bug. That was `PatternFill(fill_type=None)` to
+# *clear* a fill, which serialises onto OOXML fill index 1 — always
+# gray125 — so cleared cells came out grey. Nothing here ever clears: an
+# offered term is simply left untouched.
+#
+# The colour and the white text are read from the template's own rule
+# rather than hardcoded, so the official styling stays the template's to
+# define (§56) even though Python decides which cells it lands on.
+_FALLBACK_BLOCKOUT_RGB = "FF595959"
+
+
+def _blockout_style(worksheet):
+    """(fill, font colour) the template uses for a non-offered term."""
+    for formatting in worksheet.conditional_formatting:
+        for rule in formatting.rules:
+            dxf = getattr(rule, "dxf", None)
+            if dxf is None or dxf.fill is None:
+                continue
+            colour = getattr(getattr(dxf.fill, "bgColor", None), "rgb", None)
+            if not colour or not isinstance(colour, str):
+                continue
+            font_colour = getattr(getattr(dxf.font, "color", None), "rgb", None) if dxf.font else None
+            return (
+                PatternFill(fill_type="solid", start_color=colour, end_color=colour),
+                str(font_colour) if isinstance(font_colour, str) else "FFFFFFFF",
+            )
+    return (
+        PatternFill(
+            fill_type="solid",
+            start_color=_FALLBACK_BLOCKOUT_RGB,
+            end_color=_FALLBACK_BLOCKOUT_RGB,
+        ),
+        "FFFFFFFF",
+    )
 
 MAX_LEARNING_AREAS = LEARNING_AREA_LAST_ROW - LEARNING_AREA_FIRST_ROW + 1
 
@@ -330,6 +371,8 @@ def _fill_learning_areas(worksheet, anchors, rows) -> None:
     leftover rows are cleared rather than hidden, keeping the form's
     printed shape intact.
     """
+    blockout_fill, blockout_font = _blockout_style(worksheet)
+
     for index in range(MAX_LEARNING_AREAS):
         row_number = LEARNING_AREA_FIRST_ROW + index
         if index < len(rows):
@@ -341,6 +384,18 @@ def _fill_learning_areas(worksheet, anchors, rows) -> None:
                     worksheet, anchors, row_number, column,
                     _grade(entry.term_grades.get(term_number)) if offered else None,
                 )
+                # Only ever paints; never clears. `offered_terms` is what
+                # tells "subject doesn't run that term" apart from "runs
+                # but not yet encoded" — identical in term_grades, opposite
+                # in meaning, and the whole reason this block-out exists.
+                if not offered:
+                    cell = worksheet.cell(row=row_number, column=column)
+                    existing = cell.font
+                    cell.fill = blockout_fill
+                    cell.font = Font(
+                        name=existing.name, sz=existing.sz, b=existing.b,
+                        i=existing.i, color=blockout_font,
+                    )
             # The template's conditional formatting blocks out whichever
             # terms these flags mark as not offered.
             write(worksheet, anchors, row_number, COL_TERM_OFFERED_FLAGS, _term_flags(entry))
