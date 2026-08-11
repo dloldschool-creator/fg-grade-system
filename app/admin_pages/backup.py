@@ -1,6 +1,9 @@
 """Administrative backup page (§55). Super Admin only — the download is
 every learner's full record in one file (§54)."""
 
+import os
+import tempfile
+
 import streamlit as st
 
 from app import audit_service
@@ -9,8 +12,37 @@ from app.auth import require_role
 from app.backup_service import backup_filename, generate_backup
 from app.models.organization import School
 
-BACKUP_KEY = "backup_bytes"
+PATH_KEY = "backup_path"
 COUNTS_KEY = "backup_counts"
+SIZE_KEY = "backup_size"
+
+
+def _store(data: bytes, counts: dict) -> None:
+    """Spills the archive to a temp file and keeps only its path in
+    session state.
+
+    The previous version kept the zip itself in `st.session_state`, which
+    pins it for the life of the session — one admin sitting on the page
+    held the whole database in memory until they signed out. Harmless at
+    13MB; at years of 1,200-learner data it is the largest single object
+    the app would ever allocate.
+    """
+    previous = st.session_state.get(PATH_KEY)
+    if previous and os.path.exists(previous):
+        try:
+            os.unlink(previous)  # never accumulate copies of the whole database
+        except OSError:
+            pass
+
+    handle = tempfile.NamedTemporaryFile(prefix="fgnmhs-backup-", suffix=".zip", delete=False)
+    try:
+        handle.write(data)
+    finally:
+        handle.close()
+
+    st.session_state[PATH_KEY] = handle.name
+    st.session_state[COUNTS_KEY] = counts
+    st.session_state[SIZE_KEY] = len(data)
 
 
 def render() -> None:
@@ -47,27 +79,33 @@ without restoring anything.
         with st.spinner("Reading every table…"):
             with get_session() as session:
                 data, counts = generate_backup(session, taken_by=current_user.full_name)
-        st.session_state[BACKUP_KEY] = data
-        st.session_state[COUNTS_KEY] = counts
+        _store(data, counts)
 
-    data = st.session_state.get(BACKUP_KEY)
-    if data is None:
+    path = st.session_state.get(PATH_KEY)
+    if not path or not os.path.exists(path):
         return
 
     counts = st.session_state.get(COUNTS_KEY, {})
+    size = st.session_state.get(SIZE_KEY, 0)
     col1, col2, col3 = st.columns(3)
     col1.metric("Tables", len(counts))
     col2.metric("Rows", f"{sum(counts.values()):,}")
-    col3.metric("Size", f"{len(data) / 1024:,.0f} KB")
+    col3.metric("Size", f"{size / 1024:,.0f} KB")
 
     filename = backup_filename()
-    if st.download_button(
-        "Download backup (.zip)",
-        data=data,
-        file_name=filename,
-        mime="application/zip",
-        type="primary",
-    ):
+    # Streamlit needs the bytes at render time either way, but reading
+    # them from disk keeps the copy transient. Holding them in
+    # st.session_state pinned it for the whole session — fine at 13MB,
+    # a real problem once years of 1,200-learner data are in it.
+    with open(path, "rb") as handle:
+        clicked = st.download_button(
+            "Download backup (.zip)",
+            data=handle,
+            file_name=filename,
+            mime="application/zip",
+            type="primary",
+        )
+    if clicked:
         # §55 asks for an audit trail on backups, and §54 makes a copy of
         # every learner record leaving the system exactly the kind of event
         # worth being able to account for later.
@@ -82,7 +120,7 @@ without restoring anything.
                     "file": filename,
                     "tables": len(counts),
                     "rows": sum(counts.values()),
-                    "bytes": len(data),
+                    "bytes": size,
                 },
             )
             try_commit(session, "Backup download recorded in the audit log.")

@@ -945,6 +945,32 @@ those formulas with values written by our own grading engine via
       holding SCHOOL_HEAD *and* REGISTRAR was getting the same pages
       twice.
       `pytest tests/` is 272.
+- [x] **Deployment prep (Phase 15).** `docs/deployment.md` (first deploy)
+      and `docs/operations.md` (updating, migrations, adding a template,
+      adding a teacher, what to do when it breaks) — written for the ICT
+      Coordinator rather than a developer, since that's who will run them
+      while live.
+      **`tests/test_deployment_contract.py` keeps the docs honest**: every
+      env var the code reads must appear in `.env.example`, every required
+      secret must appear in the deployment doc, no secret value may be
+      committed, `.env` must stay gitignored, the entrypoint must stay at
+      the repo root, and **no module under `app/` may import `subprocess`
+      or mention `soffice`** — that last one is what stops the OS-level
+      packaging problem creeping back after LibreOffice's removal.
+      It caught one real drift immediately: `.env.example` documented
+      `DB_POOL_MAX_OVERFLOW` where the code reads `DB_MAX_OVERFLOW`.
+      **Backup memory fixed**: the page kept the whole zip in
+      `st.session_state`, which pins it for the life of the session. It
+      now spills to a temp file and keeps only the path, deleting the
+      previous file each time so copies of the entire database never
+      accumulate.
+      **Answered while here: `terms.submission_deadline` is stored but
+      never read by any code.** Encoding is gated purely by the manual
+      OPEN/CLOSED toggle, so a term can be reopened at any time past due
+      and nothing ever auto-closes — nobody can be locked out by the
+      calendar. Documented in the runbook, since "a teacher can't type a
+      grade" will otherwise be diagnosed as a bug.
+      `pytest tests/` is 299.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
@@ -973,4 +999,7 @@ those formulas with values written by our own grading engine via
 13. Excel import/export migration tooling — done (learners + term grades; §52 exports in full)
 14. Audit logs, backups, security hardening — done (HTTPS + rate limiting
     deliberately left to 15; see the Phase 14 status entry)
-15. Automated tests, deployment ← **we are here**
+15. Automated tests, deployment ← **we are here.** Runbooks written
+    (`docs/deployment.md`, `docs/operations.md`); the deploy itself needs
+    the user's GitHub/Streamlit accounts. Real data migration and an
+    end-to-end dress rehearsal are the remaining work before go-live.
