@@ -72,8 +72,13 @@ def test_the_entrypoint_is_where_the_docs_say():
 def test_the_runbook_covers_the_operations_that_bite():
     """Each of these is a procedure that goes wrong destructively if
     improvised: migration ordering, template replacement, and the
-    encoding toggle a teacher will phone about."""
-    for topic in ("alembic upgrade head", "sf-templates/", "submission_deadline"):
+    encoding toggle a teacher will phone about.
+
+    Matched on what a coordinator would actually search for, not on
+    column names — the runbook is deliberately written without Python
+    identifiers in it.
+    """
+    for topic in ("alembic upgrade head", "sf-templates/", "OPEN / CLOSED"):
         assert topic in OPERATIONS, f"operations.md does not cover {topic}"
 
 

@@ -64,6 +64,13 @@ BY_ROLE = {
                 "press Submit a second time.",
             ),
             (
+                "A deadline warning doesn't stop you",
+                "If the Gradebook says you're past the submission deadline, you "
+                "can still save and submit — it's telling you, not blocking you. "
+                "What *does* stop you is encoding being closed, which is a "
+                "separate setting and says so plainly.",
+            ),
+            (
                 "If you can't type anything, encoding is closed",
                 "Grade encoding is opened and closed per term by the Super "
                 "Admin. A closed term is read-only for everyone. Ask for it to "

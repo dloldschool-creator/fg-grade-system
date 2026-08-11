@@ -62,6 +62,26 @@ def render() -> None:
                         t_end = col2.date_input(
                             "End", value=term.end_date, key=f"term_end_{term.id}"
                         )
+                        # Advisory only: nothing in the app enforces it.
+                        # Encoding is gated purely by the toggle below, so
+                        # a term can stay open long past its deadline on
+                        # purpose — the date just tells teachers they're
+                        # late, via a banner on the Gradebook.
+                        deadline = st.date_input(
+                            "Submission deadline (optional)",
+                            value=term.submission_deadline,
+                            key=f"term_deadline_{term.id}",
+                            help="Shows a 'past the deadline' warning on the Gradebook "
+                            "once it passes. It does not close encoding — use the "
+                            "setting below for that.",
+                        )
+                        clear_deadline = st.checkbox(
+                            "No deadline for this term",
+                            value=term.submission_deadline is None,
+                            key=f"term_no_deadline_{term.id}",
+                            help="A date box can't be emptied once set, so tick this "
+                            "to remove a deadline.",
+                        )
                         encoding_status = st.selectbox(
                             "Grade encoding",
                             options=[s.value for s in GradeEncodingStatus],
@@ -75,6 +95,7 @@ def render() -> None:
                         if st.form_submit_button(f"Save {term.name}"):
                             term.start_date = t_start
                             term.end_date = t_end
+                            term.submission_deadline = None if clear_deadline else deadline
                             term.grade_encoding_status = GradeEncodingStatus(encoding_status)
                             session.commit()
                             flash("success", f"{term.name} saved.")

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import streamlit as st
@@ -35,6 +35,46 @@ def _round_grade(value: float | None) -> Decimal | None:
     if value is None:
         return None
     return round_half_up(Decimal(str(value)))
+
+
+def days_past_deadline(deadline: date | None, today: date | None = None) -> int | None:
+    """How many days late encoding is, or None when it isn't (or when the
+    term has no deadline set).
+
+    Kept separate from the drawing so the boundary is testable: on the
+    deadline itself nothing is late, and the day after is one day late.
+    """
+    if deadline is None:
+        return None
+    overdue = ((today or date.today()) - deadline).days
+    return overdue if overdue > 0 else None
+
+
+def _deadline_banner(term) -> None:
+    """Warns once the submission deadline has passed.
+
+    `terms.submission_deadline` gates nothing — encoding is controlled
+    only by the OPEN/CLOSED toggle, and a Super Admin may leave a term
+    open well past its deadline on purpose. So this informs rather than
+    blocks: a teacher who is late should know, without being stopped from
+    doing the thing they are late with.
+    """
+    overdue = days_past_deadline(term.submission_deadline)
+    if overdue is None:
+        if term.submission_deadline:
+            st.caption(
+                f"Submission deadline for {term.name}: "
+                f"{term.submission_deadline:%d %B %Y}."
+            )
+        return
+
+    st.warning(
+        f"**Past the submission deadline.** Grades for {term.name} were due "
+        f"{term.submission_deadline:%d %B %Y} — {overdue} day"
+        f"{'s' if overdue != 1 else ''} ago. Encoding is still open, so you can "
+        "save and submit as normal, but let your school head know.",
+        icon="⏰",
+    )
 
 
 def render() -> None:
@@ -81,6 +121,8 @@ def render() -> None:
                 "on the School Years & Terms page before you can enter grades."
             )
             return
+
+        _deadline_banner(term)
 
         enrollments = (
             session.query(Enrollment)

@@ -119,21 +119,29 @@ a new form can always exercise something none of them did.
 
 ---
 
-## 5. Grade encoding after a deadline
+## 5. Deadlines and grade encoding
 
-`terms.submission_deadline` is **recorded but not enforced** — no code
-reads it. Encoding is controlled only by the OPEN/CLOSED toggle on
-**School Years & Terms**, set by a Super Admin.
+These are two separate settings on **School Years & Terms**, and it
+matters that they are:
+
+**Submission deadline** — advisory. Once it passes, the Gradebook shows
+a teacher a "past the submission deadline" warning saying how many days
+late they are. It does **not** stop them encoding. Leave it blank (tick
+"No deadline for this term") and no warning ever appears.
+
+**Grade encoding: OPEN / CLOSED** — the actual gate. Only a Super Admin
+changes it, and nothing changes it automatically.
 
 So:
 
 - A term can be reopened at any time, past due or not.
-- Nothing ever closes a term automatically, so nobody can be locked out
-  by the calendar.
-- Reopening is an ordinary setting change, not an audited reopen — that
-  term applies to *finalized records*, which is a different thing.
+- Nothing ever closes a term by the calendar, so nobody gets locked out.
+- Reopening encoding is an ordinary setting change, not the audited
+  reopen — that one applies to *finalized records*, which is different.
 
-If a teacher says they cannot type a grade, check that toggle first.
+If a teacher says they cannot type a grade, check the OPEN/CLOSED
+toggle first. If they say they are being told they are late, that is the
+deadline doing its job and nothing is blocked.
 
 ---
 
