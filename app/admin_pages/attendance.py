@@ -3,6 +3,7 @@ import calendar as _calendar
 import pandas as pd
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.attendance_service import (
     bump_version,
@@ -99,10 +100,27 @@ def _save_grid(session, roster, class_days, edited: pd.DataFrame, user_id) -> No
                 )
                 changed += 1
             elif record.status != status:
+                previous_status = record.status
                 record.status = status
                 record.encoded_by_user_id = user_id
                 record.version += 1
                 changed += 1
+                # §50 asks for attendance "altered after initial entry" —
+                # so the create branch above isn't logged (that IS the
+                # initial entry), only a change to what a day already said.
+                audit_service.record(
+                    session,
+                    action=audit_service.ATTENDANCE_CHANGED,
+                    object_type="attendance_records",
+                    object_id=record.id,
+                    user_id=user_id,
+                    previous={"status": previous_status},
+                    new={
+                        "status": status,
+                        "learner": f"{learner.last_name}, {learner.first_name}",
+                        "date": day.calendar_date,
+                    },
+                )
 
     if invalid:
         flash(
@@ -151,6 +169,16 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
                         st.error("A reason is required.")
                     else:
                         reopen_month(session, status, current_user.id, reason.strip())
+                        audit_service.record(
+                            session,
+                            action=audit_service.ATTENDANCE_MONTH_REOPENED,
+                            object_type="attendance_month_status",
+                            object_id=status.id,
+                            user_id=current_user.id,
+                            previous={"status": FinalizationState.FINALIZED},
+                            new={"status": status.status, "year": year, "month": month},
+                            reason=reason.strip(),
+                        )
                         try_commit(session, "Reopened — attendance is editable again.")
                         st.rerun()
         else:
@@ -195,6 +223,20 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
         if st.button("Finalize month", disabled=not can_finalize, type="primary"):
             row = get_or_create_month_status(session, section_id, school_year_id, year, month)
             finalize_month(session, row, current_user.id)
+            audit_service.record(
+                session,
+                action=audit_service.ATTENDANCE_MONTH_FINALIZED,
+                object_type="attendance_month_status",
+                object_id=row.id,
+                user_id=current_user.id,
+                new={
+                    "status": row.status,
+                    "year": year,
+                    "month": month,
+                    "roster_size": report["roster_size"],
+                    "class_days": report["class_day_count"],
+                },
+            )
             try_commit(session, "Month finalized — attendance is now read-only.")
             st.rerun()
 

@@ -3,6 +3,7 @@ from datetime import date
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, stateful_tabs, try_commit
 from app.auth import require_role
 from app.models.academic_structure import Section
@@ -158,7 +159,7 @@ def _bulk_enroll_tab(session, adviser_user_id):
                 st.rerun()
 
 
-def _roster_tab(session, adviser_user_id):
+def _roster_tab(session, adviser_user_id, current_user):
     school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
     if not school_years:
         return
@@ -269,6 +270,7 @@ def _roster_tab(session, adviser_user_id):
                 remarks = st.text_input("Remarks", key=f"mv_remarks_{enrollment.id}")
 
                 if st.form_submit_button("Log movement"):
+                    previous_status = enrollment.enrollment_status
                     session.add(
                         LearnerMovement(
                             enrollment_id=enrollment.id,
@@ -283,6 +285,24 @@ def _roster_tab(session, adviser_user_id):
                     )
                     enrollment.enrollment_status = EnrollmentStatus(movement_type)
                     enrollment.version += 1
+                    # §50 names "learner transferred" and "learner dropped"
+                    # specifically; both arrive through this one form, so
+                    # every movement type is logged rather than a subset.
+                    audit_service.record(
+                        session,
+                        action=audit_service.LEARNER_MOVEMENT_RECORDED,
+                        object_type="enrollments",
+                        object_id=enrollment.id,
+                        user_id=current_user.id,
+                        previous={"enrollment_status": previous_status},
+                        new={
+                            "enrollment_status": movement_type,
+                            "effective_date": effective_date,
+                            "receiving_school": receiving_school or None,
+                            "previous_school": previous_school or None,
+                        },
+                        reason=details or remarks or None,
+                    )
                     try_commit(session, "Movement logged.")
                     st.rerun()
 
@@ -306,4 +326,4 @@ def render() -> None:
         elif choice == "Bulk Enroll":
             _bulk_enroll_tab(session, adviser_user_id)
         elif choice == "Section Roster / Movements":
-            _roster_tab(session, adviser_user_id)
+            _roster_tab(session, adviser_user_id, current_user)

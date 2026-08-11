@@ -4,6 +4,7 @@ from decimal import Decimal
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes
 from app.auth import require_role
 from app.grading_engine import round_half_up
@@ -160,32 +161,61 @@ def render() -> None:
                 changed = 0
                 reverted = 0
                 touched_enrollment_ids = []
+                # (row, action, previous, new) — recorded after one flush
+                # below, since a brand-new row has no id until then.
+                pending_audits = []
                 for enrollment_id, raw_value in grade_inputs.items():
                     grade_value = _round_grade(raw_value)
                     existing = existing_grades.get(enrollment_id)
                     if existing is None:
                         if grade_value is None:
                             continue  # nothing entered, nothing to create
-                        session.add(
-                            TermGrade(
-                                enrollment_id=enrollment_id,
-                                section_subject_offering_id=offering.id,
-                                term_id=term.id,
-                                official_grade=grade_value,
-                                status=GradeWorkflowStatus.DRAFT,
-                            )
+                        created = TermGrade(
+                            enrollment_id=enrollment_id,
+                            section_subject_offering_id=offering.id,
+                            term_id=term.id,
+                            official_grade=grade_value,
+                            status=GradeWorkflowStatus.DRAFT,
+                        )
+                        session.add(created)
+                        pending_audits.append(
+                            (created, audit_service.GRADE_CREATED, None, {"official_grade": grade_value})
                         )
                         changed += 1
                         touched_enrollment_ids.append(enrollment_id)
                     elif existing.official_grade != grade_value:
+                        previous = {
+                            "official_grade": existing.official_grade,
+                            "status": existing.status,
+                        }
                         existing.official_grade = grade_value
                         if existing.status == GradeWorkflowStatus.SUBMITTED:
                             existing.status = GradeWorkflowStatus.DRAFT
                             reverted += 1
                         existing.version += 1
+                        pending_audits.append(
+                            (
+                                existing,
+                                audit_service.GRADE_CHANGED,
+                                previous,
+                                {"official_grade": grade_value, "status": existing.status},
+                            )
+                        )
                         changed += 1
                         touched_enrollment_ids.append(enrollment_id)
                 try:
+                    if pending_audits:
+                        session.flush()
+                        for row, action, previous, new in pending_audits:
+                            audit_service.record(
+                                session,
+                                action=action,
+                                object_type="term_grades",
+                                object_id=row.id,
+                                user_id=current_user.id,
+                                previous=previous,
+                                new=new,
+                            )
                     session.commit()
                     for enrollment_id in touched_enrollment_ids:
                         recompute_enrollment_grades(session, enrollment_id)
@@ -211,6 +241,18 @@ def render() -> None:
                         existing.version += 1
                         submitted_count += 1
                         touched_enrollment_ids.append(enrollment_id)
+                        audit_service.record(
+                            session,
+                            action=audit_service.GRADE_SUBMITTED,
+                            object_type="term_grades",
+                            object_id=existing.id,
+                            user_id=current_user.id,
+                            previous={"status": GradeWorkflowStatus.DRAFT},
+                            new={
+                                "status": GradeWorkflowStatus.SUBMITTED,
+                                "official_grade": existing.official_grade,
+                            },
+                        )
                 session.commit()
                 for enrollment_id in touched_enrollment_ids:
                     recompute_enrollment_grades(session, enrollment_id)

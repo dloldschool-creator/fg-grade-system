@@ -3,6 +3,7 @@ from datetime import date
 
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.attendance_service import (
     WORKBOOK_CLASS_DAY_TARGETS,
@@ -142,6 +143,20 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                         if changed_class_day:
                             day.is_override = True
                             day.overridden_by_user_id = current_user.id
+                            # §50 lists a calendar change as auditable, and
+                            # the note doubles as the required reason —
+                            # which is why the empty-note branch above
+                            # refuses the save.
+                            audit_service.record(
+                                session,
+                                action=audit_service.CALENDAR_DAY_CHANGED,
+                                object_type="academic_calendar_dates",
+                                object_id=day.id,
+                                user_id=current_user.id,
+                                previous={"is_class_day": not is_class_day},
+                                new={"is_class_day": is_class_day, "date": day.calendar_date},
+                                reason=note.strip(),
+                            )
                             # Any flip renumbers the whole year — the
                             # sequence is a running count, so a gap here
                             # shifts every later day.

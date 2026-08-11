@@ -7,6 +7,7 @@ pass — see docs/schema.md / CLAUDE.md history for why.
 
 import base64
 import os
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -18,6 +19,15 @@ from app.models.rbac import Role, User, UserRole
 from app.supabase_clients import get_anon_client
 
 SESSION_KEY = "auth_user"
+LAST_SEEN_KEY = "auth_last_seen"
+
+# §53's "inactivity/session timeout where appropriate". Teachers encode
+# grades on shared staffroom machines, so an abandoned tab shouldn't stay
+# signed in — but the window has to be long enough to survive a class
+# period of reading a roster without typing. 60 minutes is the compromise;
+# override with SESSION_TIMEOUT_MINUTES.
+SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
+TIMED_OUT_FLAG = "auth_timed_out"
 
 
 @dataclass
@@ -87,7 +97,26 @@ def _load_or_provision_user(
 
 
 def get_current_user() -> AuthUser | None:
-    return st.session_state.get(SESSION_KEY)
+    """Also enforces the inactivity timeout (§53).
+
+    Every page calls this through `require_role`, and Streamlit re-runs the
+    whole script on each interaction — so this function sees every action
+    the user takes, which makes it the natural place to both check the
+    idle window and refresh it. A session that has gone past the window is
+    cleared here rather than merely hidden, so the tokens go too."""
+    user = st.session_state.get(SESSION_KEY)
+    if user is None:
+        return None
+
+    now = time.time()
+    last_seen = st.session_state.get(LAST_SEEN_KEY)
+    if last_seen is not None and (now - last_seen) > SESSION_TIMEOUT_MINUTES * 60:
+        logout()
+        st.session_state[TIMED_OUT_FLAG] = True
+        return None
+
+    st.session_state[LAST_SEEN_KEY] = now
+    return user
 
 
 def logout() -> None:
@@ -96,6 +125,7 @@ def logout() -> None:
     except Exception:
         pass  # best-effort — clearing local session state is what actually matters
     st.session_state.pop(SESSION_KEY, None)
+    st.session_state.pop(LAST_SEEN_KEY, None)
 
 
 SEAL_PATH = os.path.join(os.path.dirname(__file__), "assets", "fgnmhs_seal.png")
@@ -181,6 +211,12 @@ def login_form() -> None:
         )
         st.write("")
 
+        if st.session_state.pop(TIMED_OUT_FLAG, False):
+            st.info(
+                f"You were signed out after {SESSION_TIMEOUT_MINUTES} minutes of "
+                "inactivity. Please sign in again."
+            )
+
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="name@deped.gov.ph")
             password = st.text_input("Password", type="password")
@@ -221,6 +257,7 @@ def login_form() -> None:
         response.session.access_token,
         response.session.refresh_token,
     )
+    st.session_state[LAST_SEEN_KEY] = time.time()
     st.rerun()
 
 

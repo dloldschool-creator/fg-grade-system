@@ -4,8 +4,10 @@ from app.admin_pages import (
     academic_calendar,
     academic_structure,
     attendance,
+    audit_log,
     award_policy,
     awards,
+    backup,
     data_export,
     data_import,
     enrollment,
@@ -69,6 +71,8 @@ else:
             st.Page(award_policy.render, title="Award Policy", icon="🏅", url_path="award-policy"),
             st.Page(data_import.render, title="Import from Excel", icon="📥", url_path="import"),
             st.Page(users.render, title="Users & Roles", icon="👥", url_path="users"),
+            st.Page(audit_log.render, title="Audit Log", icon="🧭", url_path="audit-log"),
+            st.Page(backup.render, title="Backup", icon="💾", url_path="backup"),
         ]
     # Learner Masterlist, Enrollment, and Grade Summary are all reachable
     # by Registrar and by Adviser — DepEd advisers pick up

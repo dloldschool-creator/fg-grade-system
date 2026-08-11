@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.import_pipeline import (
@@ -178,6 +179,17 @@ def render() -> None:
             record_validation(session, job, mapping, result)
             written = spec.commit(session, result.parsed, current_user.id)
             record_confirmation(session, job, written)
+            # `import_jobs` already records the run in detail; this entry
+            # puts it on the same timeline as every other sensitive change,
+            # so the audit log alone answers "what happened to this data".
+            audit_service.record(
+                session,
+                action=audit_service.DATA_IMPORTED,
+                object_type="import_jobs",
+                object_id=job.id,
+                user_id=current_user.id,
+                new={"job_type": spec.job_type, "file": uploaded.name, "rows_written": written},
+            )
             if try_commit(session, f"Imported {written} row(s)."):
                 st.session_state[f"validated_{spec.job_type}"] = False
                 st.rerun()

@@ -1,6 +1,13 @@
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, try_commit, try_delete
+from app import audit_service
+from app.admin_pages._helpers import (
+    flush_or_rollback,
+    get_session,
+    render_flashes,
+    try_commit,
+    try_delete,
+)
 from app.auth import require_role
 from app.models.academic_structure import Section
 from app.models.enums import OfferingStatus
@@ -81,7 +88,7 @@ def _seed_from_profile(session, section: Section, terms: list[Term]):
 
 
 def render() -> None:
-    require_role("SUPER_ADMIN")
+    current_user = require_role("SUPER_ADMIN")
     st.title("Section Subject Offerings")
     st.caption(
         "**Single source of truth** for what a learner is actually graded on (§48) — "
@@ -164,13 +171,52 @@ def render() -> None:
                     delete = col2.form_submit_button("Delete")
 
                     if save:
+                        previous, new = audit_service.changes(
+                            {
+                                "subject_category": cat_by_id[offering.subject_category_id].name,
+                                "status": offering.status,
+                                "is_required": offering.is_required,
+                            },
+                            {
+                                "subject_category": cat_by_id[category_choice].name,
+                                "status": OfferingStatus(status_choice),
+                                "is_required": required,
+                            },
+                        )
                         offering.subject_category_id = category_choice
                         offering.status = OfferingStatus(status_choice)
                         offering.is_required = required
                         offering.version += 1
+                        # Only when something actually differs — §48 makes
+                        # this table the source of truth for what a learner
+                        # is graded on, so the log should read as a list of
+                        # real changes, not one row per Save click.
+                        if new:
+                            audit_service.record(
+                                session,
+                                action=audit_service.SUBJECT_OFFERING_CHANGED,
+                                object_type="section_subject_offerings",
+                                object_id=offering.id,
+                                user_id=current_user.id,
+                                previous={**previous, "subject": subject.official_name},
+                                new=new,
+                            )
                         try_commit(session, "Saved.")
                         st.rerun()
                     if delete:
+                        audit_service.record(
+                            session,
+                            action=audit_service.SUBJECT_OFFERING_CHANGED,
+                            object_type="section_subject_offerings",
+                            object_id=offering.id,
+                            user_id=current_user.id,
+                            previous={
+                                "subject": subject.official_name,
+                                "status": offering.status,
+                                "is_required": offering.is_required,
+                            },
+                            new={"deleted": True},
+                        )
                         try_delete(session, offering, subject.official_name)
                         st.rerun()
 
@@ -204,16 +250,30 @@ def render() -> None:
             status_choice = st.selectbox("Status", options=[s.value for s in OfferingStatus])
 
             if st.form_submit_button("Add"):
-                session.add(
-                    SectionSubjectOffering(
-                        school_year_id=sy_choice,
-                        section_id=section.id,
-                        subject_id=subject_choice,
-                        term_id=term_choice,
-                        subject_category_id=category_choice,
-                        is_required=is_required,
-                        status=OfferingStatus(status_choice),
-                    )
+                added = SectionSubjectOffering(
+                    school_year_id=sy_choice,
+                    section_id=section.id,
+                    subject_id=subject_choice,
+                    term_id=term_choice,
+                    subject_category_id=category_choice,
+                    is_required=is_required,
+                    status=OfferingStatus(status_choice),
                 )
-                try_commit(session, f"Added {all_subjects[subject_choice].official_name}.")
+                session.add(added)
+                if flush_or_rollback(session):
+                    audit_service.record(
+                        session,
+                        action=audit_service.SUBJECT_OFFERING_CHANGED,
+                        object_type="section_subject_offerings",
+                        object_id=added.id,
+                        user_id=current_user.id,
+                        new={
+                            "subject": all_subjects[subject_choice].official_name,
+                            "term": term_by_id[term_choice].name,
+                            "is_required": is_required,
+                            "status": OfferingStatus(status_choice),
+                            "created": True,
+                        },
+                    )
+                    try_commit(session, f"Added {all_subjects[subject_choice].official_name}.")
                 st.rerun()

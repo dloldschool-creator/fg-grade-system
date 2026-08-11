@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
+from app import audit_service
 from app.academic_record_service import capture_academic_record, get_academic_record
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
@@ -66,10 +67,27 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
                         latest_record.reopened_at = now
                         latest_record.reopen_reason = reason
                         term_grades = session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
+                        reverted = 0
                         for tg in term_grades:
                             if tg.status == GradeWorkflowStatus.FINALIZED:
                                 tg.status = GradeWorkflowStatus.DRAFT
                                 tg.version += 1
+                                reverted += 1
+                        # §50 requires a reason on a reopen, which is why
+                        # the empty-reason branch above returns first.
+                        audit_service.record(
+                            session,
+                            action=audit_service.GRADE_REOPENED,
+                            object_type="enrollments",
+                            object_id=enrollment.id,
+                            user_id=current_user.id,
+                            previous={"status": FinalizationRecordStatus.FINALIZED},
+                            new={
+                                "status": FinalizationRecordStatus.REOPENED,
+                                "term_grades_reverted_to_draft": reverted,
+                            },
+                            reason=reason,
+                        )
                         try_commit(session, "Reopened — term grades reverted to DRAFT for re-submission.")
                         st.rerun()
         return
@@ -102,6 +120,17 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
         # is copied now, so renaming a subject or editing the grading
         # policy in a later year can't rewrite this one.
         capture_academic_record(session, enrollment.id, current_user.id)
+        audit_service.record(
+            session,
+            action=audit_service.GRADE_FINALIZED,
+            object_type="enrollments",
+            object_id=enrollment.id,
+            user_id=current_user.id,
+            new={
+                "general_average": summary.general_average,
+                "term_grades_finalized": len(term_grades),
+            },
+        )
         try_commit(
             session,
             "Finalized — grades are read-only until an audited reopen, and the "

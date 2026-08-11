@@ -1,5 +1,6 @@
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes
 from app.auth import require_role
 from app.models.rbac import Role, User, UserRole
@@ -7,7 +8,7 @@ from app.user_provisioning import UserProvisioningError, provision_user
 
 
 def render() -> None:
-    require_role("SUPER_ADMIN")
+    current_user = require_role("SUPER_ADMIN")
     st.title("Users & Roles")
     render_flashes()
 
@@ -27,6 +28,15 @@ def render() -> None:
                     "Active", value=user.is_active, key=f"user_active_{user.id}"
                 )
                 if is_active != user.is_active:
+                    audit_service.record(
+                        session,
+                        action=audit_service.USER_ROLES_CHANGED,
+                        object_type="users",
+                        object_id=user.id,
+                        user_id=current_user.id,
+                        previous={"is_active": user.is_active, "user": user.email},
+                        new={"is_active": is_active},
+                    )
                     user.is_active = is_active
                     session.commit()
                     st.rerun()
@@ -46,6 +56,20 @@ def render() -> None:
                     for grant in grants:
                         if grant.role_id not in selected_set:
                             session.delete(grant)
+                    new_codes = {role_by_id[r].code for r in selected_set}
+                    if new_codes != current_codes:
+                        # §50's "user permission changed" — the one entry
+                        # that explains how somebody came to be able to do
+                        # everything else in this log.
+                        audit_service.record(
+                            session,
+                            action=audit_service.USER_ROLES_CHANGED,
+                            object_type="users",
+                            object_id=user.id,
+                            user_id=current_user.id,
+                            previous={"roles": sorted(current_codes), "user": user.email},
+                            new={"roles": sorted(new_codes)},
+                        )
                     session.commit()
                     flash("success", "Roles updated.")
                     st.rerun()

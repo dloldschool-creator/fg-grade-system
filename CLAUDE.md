@@ -741,6 +741,87 @@ those formulas with values written by our own grading engine via
       rejected import is also something an administrator may need to
       account for.
       `pytest tests/` is 204.
+- [x] Phase 14 (Audit logs, backups, security hardening) built; not yet
+      clicked through by the user. `audit_logs` existed since Phase 1 but
+      **nothing wrote to it**, so CLAUDE.md rule 8 was unmet until now.
+      **`app/audit_service.py`** — `record()` appends an entry to the
+      *caller's* session and deliberately does **not** commit: the entry
+      belongs to the same transaction as the change it describes, so a
+      change that rolls back leaves no misleading trail (this is what
+      makes the offering-delete case correct — a delete refused by an
+      `ON DELETE RESTRICT` FK rolls back its own audit row with it).
+      Actions are module constants, not free strings, so the viewer can
+      filter on them and a typo can't invent a new action.
+      `REASON_REQUIRED` (reopen ×2, award override, calendar change)
+      **raises** on a blank reason rather than writing a row that can't
+      answer "why" — a page reaching that is a bug in the page.
+      `jsonable()` exists because JSONB can't take the types that
+      actually appear in a before/after pair: Decimal grades, dates,
+      UUIDs, Enums. A whole Decimal becomes an `int` (93, not "93.00" —
+      the DB column is `Numeric(5,2)` but grades are integral by
+      construction), and **None stays None**, never the string "None" —
+      rule 2 at the audit boundary.
+      IP and user agent come from `st.context.ip_address` /
+      `st.context.headers`, wrapped so a script, test or background job
+      (no request to describe) records None rather than failing. Audit
+      logging must never be why a legitimate change fails.
+      **Wired into every change §50 enumerates**: grade created/changed/
+      submitted (Gradebook), finalized/reopened (Grade Summary),
+      attendance altered, month finalized/reopened (Attendance), learner
+      movement (Enrollment), subject offering changed (Section
+      Offerings), calendar day changed (Academic Calendar), award
+      override set/cleared (**inside `award_service`, not the page**, so
+      no caller can override an award without leaving an entry), user
+      roles/active changed (Users & Roles), bulk import (Import).
+      **The one deliberate omission: creating an attendance record isn't
+      logged, only changing one.** §50 says "attendance altered after
+      initial entry", and the "Prepare this month's sheet" button
+      materialises a PRESENT row per learner × class day — logging those
+      would bury every real correction under thousands of rows.
+      **`app/admin_pages/audit_log.py`** (Super Admin only) — read-only
+      viewer, filterable by category/action/user. There is no delete
+      control, no edit control, and no "clear old entries" button
+      anywhere; `audit_service` exposes no delete function at all. §50
+      requires the history to outlive the people it records, and the
+      structural guarantee is stronger than a permission check. A test
+      asserts the module never grows one.
+      **Session timeout (§53)** in `app/auth.py`: 60 minutes idle
+      (`SESSION_TIMEOUT_MINUTES`), enforced in `get_current_user()` —
+      which is the right hook precisely *because* Streamlit re-runs the
+      whole script on every interaction, so it sees every action the user
+      takes and can both check and refresh the window there. A timed-out
+      session is cleared, not hidden, so the tokens go too; the login
+      page then says why.
+      **`app/backup_service.py` + `app/admin_pages/backup.py`** (§55) —
+      one CSV per table in a zip, plus a `MANIFEST.txt` with row counts
+      and restore steps. Files are numbered in
+      `Base.metadata.sorted_tables` order, which SQLAlchemy sorts by FK
+      dependency, so **restoring in file order never violates a foreign
+      key** (and reverse order is the safe delete order). CSV rather
+      than `pg_dump` because it needs no matching Postgres version and no
+      binary on the operator's machine, and stays readable long after
+      this app is gone. Downloading is audit-logged (§54 — a copy of
+      every learner record leaving the system).
+      **The thing to not misunderstand about that file: it is NOT a
+      complete disaster-recovery backup.** Supabase's own automated
+      backups are, and are what you restore from after a real failure —
+      this dump can't see the `auth` schema, so it contains the school's
+      records but **not its logins**. Both the page and the manifest say
+      so, and a test asserts the manifest keeps saying so.
+      Honest §53 status, since the section is a checklist and only part
+      of it is application code: **done** — secure auth (Supabase, we
+      never store or hash a password ourselves), RBAC, server-side
+      permission checks (Streamlit is server-rendered; there is no client
+      the checks could be moved to), safe ORM queries, no guessable
+      report URLs (§54 — PDFs are generated in-process and streamed,
+      never stored at a path), inactivity timeout, backup, audit trail.
+      **Not done, and deliberately deferred to Phase 15 (deployment):**
+      HTTPS termination, and rate limiting beyond what Supabase Auth
+      already applies to login attempts. **Not applicable:** CSRF and
+      secure-cookie hardening — the app holds session state server-side
+      per websocket in `st.session_state` and sets no auth cookie, so
+      there is no cookie-authenticated form post to forge.
+      `pytest tests/` is 222.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
@@ -767,5 +848,6 @@ those formulas with values written by our own grading engine via
 11. Temporary SF10 — record layer done; report BLOCKED on the template file
 12. Temp cards and certificates — done
 13. Excel import/export migration tooling — done (learners + term grades; §52 exports in full)
-14. Audit logs, backups, security hardening ← **we are here**
-15. Automated tests, deployment
+14. Audit logs, backups, security hardening — done (HTTPS + rate limiting
+    deliberately left to 15; see the Phase 14 status entry)
+15. Automated tests, deployment ← **we are here**

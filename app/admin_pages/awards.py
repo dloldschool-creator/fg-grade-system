@@ -307,7 +307,7 @@ def render() -> None:
                 if award.is_override:
                     st.warning(f"Manually overridden by an admin: {award.override_reason}")
                     if st.button("Clear override", key=f"clear_override_{award.id}"):
-                        clear_award_override(session, award)
+                        clear_award_override(session, award, current_user.id)
                         flash("success", "Override cleared — will recompute on next run.")
                         st.rerun()
 

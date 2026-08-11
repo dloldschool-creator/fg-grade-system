@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app import audit_service
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
 from app.models.enums import AwardResult, AwardScope, CompletionStatus
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
@@ -211,17 +212,43 @@ def set_award_override(
 ) -> None:
     """Manual override (§40, §67 — administrator overrides require an
     audit-log reason). Marking is_override=True is what makes future
-    compute_award_eligibility calls leave this row alone."""
+    compute_award_eligibility calls leave this row alone.
+
+    The audit entry is written here rather than in the page so that no
+    caller can override an award without leaving one behind."""
+    previous = {"award_result": learner_award.award_result, "award_name": learner_award.award_name}
     learner_award.award_result = award_result
     learner_award.award_name = award_name
     learner_award.is_override = True
     learner_award.override_by_user_id = override_by_user_id
     learner_award.override_reason = override_reason
     learner_award.reason = f"Manually overridden: {override_reason}"
+    audit_service.record(
+        session,
+        action=audit_service.AWARD_OVERRIDDEN,
+        object_type="learner_awards",
+        object_id=learner_award.id,
+        user_id=override_by_user_id,
+        previous=previous,
+        new={"award_result": award_result, "award_name": award_name},
+        reason=override_reason,
+    )
     session.commit()
 
 
-def clear_award_override(session: Session, learner_award: LearnerAward) -> None:
+def clear_award_override(session: Session, learner_award: LearnerAward, cleared_by_user_id=None) -> None:
+    audit_service.record(
+        session,
+        action=audit_service.AWARD_OVERRIDE_CLEARED,
+        object_type="learner_awards",
+        object_id=learner_award.id,
+        user_id=cleared_by_user_id,
+        previous={
+            "award_result": learner_award.award_result,
+            "override_reason": learner_award.override_reason,
+        },
+        new={"is_override": False},
+    )
     learner_award.is_override = False
     learner_award.override_by_user_id = None
     learner_award.override_reason = None
