@@ -288,6 +288,26 @@ def summarize_month(
 # --------------------------------------------------------------------------
 
 
+def bump_version(row) -> None:
+    """Increments an optimistic-concurrency `version`, safely on a row
+    that hasn't been flushed yet.
+
+    `VersionMixin` declares `default=1`, but that's an **INSERT-time**
+    default applied by SQLAlchemy during flush — not a Python attribute
+    default. On a row just built by `get_or_create_month_status` and only
+    `session.add()`-ed, `row.version` is still None, so a bare
+    `row.version += 1` raises TypeError. Starting from 0 leaves a brand-new
+    row at version 1 and an existing one at n+1, which is what both cases
+    should be.
+
+    Every other `.version += 1` in the codebase runs on a row loaded from
+    the database (inside an `else:` after a `one_or_none()` miss), so this
+    only matters where a get-or-create result is modified in the same
+    request.
+    """
+    row.version = (row.version or 0) + 1
+
+
 def get_month_status(
     session: Session, section_id, year: int, month: int
 ) -> AttendanceMonthStatus | None:
@@ -394,7 +414,7 @@ def finalize_month(session: Session, status: AttendanceMonthStatus, user_id) -> 
     status.status = FinalizationState.FINALIZED
     status.finalized_by_user_id = user_id
     status.finalized_at = datetime.now(timezone.utc)
-    status.version += 1
+    bump_version(status)
 
 
 def reopen_month(
@@ -404,4 +424,4 @@ def reopen_month(
     status.reopened_by_user_id = user_id
     status.reopened_at = datetime.now(timezone.utc)
     status.reopen_reason = reason
-    status.version += 1
+    bump_version(status)

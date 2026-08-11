@@ -305,3 +305,28 @@ def test_summary_respects_the_active_window():
     assert summary.days_present == 3
     assert summary.unencoded_days == 0
     assert summary.attendance_end == date(2026, 9, 9)
+
+
+# --------------------------------------------------------------------------
+# Optimistic-concurrency version bumping
+# --------------------------------------------------------------------------
+
+
+def test_bump_version_handles_an_unflushed_row():
+    """`VersionMixin` sets `default=1` as an INSERT-time default, not a
+    Python attribute default, so a row that's only been session.add()-ed
+    still has version None. A bare `+= 1` raised TypeError there — the
+    crash hit on Attendance's "Prepare / refresh this month's sheet",
+    which creates the month-status row and updates it in one go."""
+    from app.attendance_service import bump_version
+    from app.models.attendance import AttendanceMonthStatus
+
+    fresh = AttendanceMonthStatus()
+    assert fresh.version is None  # not 1, until the INSERT happens
+    bump_version(fresh)
+    assert fresh.version == 1  # a brand-new row lands on 1, not 2
+
+    existing = AttendanceMonthStatus()
+    existing.version = 4
+    bump_version(existing)
+    assert existing.version == 5

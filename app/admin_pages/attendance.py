@@ -5,6 +5,7 @@ import streamlit as st
 
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.attendance_service import (
+    bump_version,
     class_days_in_month,
     finalize_month,
     get_month_status,
@@ -187,7 +188,7 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
         if st.button("Mark for review", disabled=current_state == FinalizationState.FOR_REVIEW):
             row = get_or_create_month_status(session, section_id, school_year_id, year, month)
             row.status = FinalizationState.FOR_REVIEW
-            row.version += 1
+            bump_version(row)
             try_commit(session, "Marked for review.")
             st.rerun()
     with col_b:
@@ -269,7 +270,7 @@ def render() -> None:
             row = get_or_create_month_status(session, section_choice, sy_choice, year, month)
             if row.status == FinalizationState.NOT_STARTED:
                 row.status = FinalizationState.OPEN
-                row.version += 1
+                bump_version(row)
             if try_commit(
                 session,
                 f"Added {created} attendance row(s) defaulting to Present.",
