@@ -13,11 +13,15 @@ import pytest
 
 from app.excel_template import strip_external_formulas
 from app.sf2_report import TEMPLATE_PATH as SF2_TEMPLATE
+from app.sf2_report import _apply_print_setup as _apply_sf2_print_setup
 from app.sf9_report import TEMPLATE_PATH as SF9_TEMPLATE
+from app.sf9_report import _apply_print_setup as _apply_sf9_print_setup
 from app.xlsx_render import (
     apply_number_format,
     column_dimension_map,
     column_width_to_points,
+    page_count,
+    plan_pages,
     resolve_font,
     sheet_geometry,
     workbook_to_pdf,
@@ -114,9 +118,25 @@ def test_unavailable_fonts_fall_back_to_metric_compatible_faces():
 # --- End-to-end ------------------------------------------------------------
 
 
-def _render(path, sheet):
+def _prepared(path, sheet):
+    """A worksheet in the state the real pipeline renders it in.
+
+    Both templates ship with **no `<pageSetup>` at all** — orientation,
+    fit-to-page and margins are applied by the report module. Rendering the
+    raw file measures a configuration that never reaches a printer.
+    """
     workbook = openpyxl.load_workbook(path)
-    strip_external_formulas(workbook[sheet])
+    worksheet = workbook[sheet]
+    strip_external_formulas(worksheet)
+    if sheet == "SF9":
+        _apply_sf9_print_setup(worksheet)
+    else:
+        _apply_sf2_print_setup(worksheet)
+    return workbook, worksheet
+
+
+def _render(path, sheet):
+    workbook, _ = _prepared(path, sheet)
     return workbook_to_pdf(workbook)
 
 
@@ -138,8 +158,46 @@ def test_sf9_renders_landscape_on_a_single_page():
     renderer that quietly spills onto a second page defeats it."""
     data = _render(SF9_TEMPLATE, "SF9")
     assert _page_count(data) == 1
-    # ReportLab records the page box verbatim; SF9 is landscape Letter.
-    assert b"792" in data and b"612" in data
+    workbook, _ = _prepared(SF9_TEMPLATE, "SF9")
+    assert page_count(workbook) == 1
+
+
+def test_a_full_section_paginates_instead_of_shrinking_to_fit():
+    """SF2 sets fitToWidth=1 with fitToHeight=0 — one page wide, as many
+    pages tall as needed — and the form hides unused learner rows, so a
+    3-learner section is short and a full one is 22.6in tall. Forcing that
+    onto a single page needs 35% scale, which prints the form's 5pt text
+    at 1.8pt: present on the page, and unreadable.
+    """
+    _, worksheet = _prepared(SF2_TEMPLATE, "SF2")
+    for row in range(18, 68):  # every learner row the template allows
+        worksheet.row_dimensions[row].hidden = False
+
+    scale, bands = plan_pages(worksheet, 792, 612, sheet_geometry(worksheet))
+    assert len(bands) > 1, "a full roster must paginate, not shrink"
+    assert scale > 0.5, "scale must stay legible once it paginates"
+
+
+def test_a_form_that_fits_exactly_does_not_spill_one_row():
+    """SF9 pins both fitToWidth and fitToHeight to 1 and fills 575.9pt of
+    its 576pt page. Without a break tolerance the last row lands on a
+    second, nearly empty sheet."""
+    _, worksheet = _prepared(SF9_TEMPLATE, "SF9")
+    _, bands = plan_pages(worksheet, 792, 612, sheet_geometry(worksheet))
+    assert len(bands) == 1
+
+
+def test_a_component_row_keeps_its_indent_when_wrapped():
+    """`report_card.COMPONENT_INDENT` is ten leading spaces, and that
+    indent is what shows the Grade 11 language pair as two components of
+    one parent learning area (§16). A plain split() drops it and the card
+    reads as three unrelated subjects."""
+    from app.report_card import COMPONENT_INDENT
+    from app.xlsx_render import _wrap
+
+    text = f"{COMPONENT_INDENT}Mabisang Komunikasyon"
+    lines = _wrap(text, "Helvetica", 8, 200)
+    assert lines[0].startswith(COMPONENT_INDENT)
 
 
 def test_the_renderer_needs_no_external_program():

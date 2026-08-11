@@ -51,6 +51,11 @@ DEFAULT_ROW_HEIGHT = 15.0  # points
 # small horizontal padding.
 TEXT_INSET = 2.0
 
+# Slack when deciding whether one more row still fits on the page. See
+# plan_pages — without it, a form scaled to exactly fill its page spills a
+# single row onto a second one.
+PAGE_BREAK_TOLERANCE = 0.5
+
 
 def column_width_to_points(width: float | None) -> float:
     if width is None:
@@ -278,19 +283,37 @@ def _rgb(color) -> tuple[float, float, float] | None:
 
 
 def _wrap(text: str, font: str, size: float, max_width: float) -> list[str]:
+    """Word-wraps while preserving leading whitespace.
+
+    That indent is load-bearing, not cosmetic: `report_card` marks a
+    combined-language component row with ten leading spaces
+    (`COMPONENT_INDENT`), which is what shows a parent learning area and
+    its two components as a hierarchy on the SF9 (§16). A plain
+    `text.split()` throws it away and the card reads as three unrelated
+    subjects.
+    """
     if max_width <= 0:
         return [text]
+    indent = text[: len(text) - len(text.lstrip())]
+    indent_width = pdfmetrics.stringWidth(indent, font, size) if indent else 0.0
+
     lines, current = [], ""
     for word in text.split():
         candidate = f"{current} {word}".strip()
-        if pdfmetrics.stringWidth(candidate, font, size) <= max_width or not current:
+        allowed = max_width - (indent_width if not lines else 0)
+        if pdfmetrics.stringWidth(candidate, font, size) <= allowed or not current:
             current = candidate
         else:
             lines.append(current)
             current = word
     if current:
         lines.append(current)
-    return lines or [""]
+    if not lines:
+        return [text]
+    # Only the first line carries the indent — a wrapped continuation
+    # lining up under it would read as a further level of nesting.
+    lines[0] = indent + lines[0]
+    return lines
 
 
 def _draw_cell_fill(c, cell, x, y, w, h) -> None:
@@ -470,7 +493,7 @@ def _draw_cell_text(c, cell, x, y, w, h, *, overflow: float | None = None) -> No
         cursor -= leading
 
 
-def _draw_images(c, worksheet, geometry, flip) -> None:
+def _draw_images(c, worksheet, geometry, flip, first_row: int = 1, last_row: int | None = None) -> None:
     """Places the DepEd shield and the school seal.
 
     An anchor gives a cell plus an EMU offset, so the position has to be
@@ -484,6 +507,9 @@ def _draw_images(c, worksheet, geometry, flip) -> None:
             continue
         col = min(marker.col + 1, geometry.max_col)
         row = min(marker.row + 1, geometry.max_row)
+        # Each seal is drawn once, on the page its anchor row falls in.
+        if row < first_row or (last_row is not None and row > last_row):
+            continue
         x = geometry.col_x[col] + marker.colOff / EMU_PER_POINT
         top = geometry.row_y[row] + marker.rowOff / EMU_PER_POINT
 
@@ -571,6 +597,76 @@ def render_worksheet_to_pdf(
     return buffer.getvalue()
 
 
+def page_count(workbook, *, page=letter, landscape: bool | None = None) -> int:
+    """How many pages the workbook will print to, without rendering it."""
+    total = 0
+    for worksheet in workbook.worksheets:
+        if worksheet.sheet_state != "visible":
+            continue
+        width, height = page_size_for(worksheet, page, landscape)
+        _, bands = plan_pages(worksheet, width, height, sheet_geometry(worksheet))
+        total += len(bands)
+    return total
+
+
+def _margins(worksheet) -> tuple[float, float, float, float]:
+    m = worksheet.page_margins
+    return (
+        (m.left or 0.25) * 72, (m.right or 0.25) * 72,
+        (m.top or 0.25) * 72, (m.bottom or 0.25) * 72,
+    )
+
+
+def plan_pages(worksheet, page_width: float, page_height: float, geometry: Geometry):
+    """Decides the scale and the row bands each page carries.
+
+    `fitToWidth` / `fitToHeight` are counts of pages, not booleans, and a
+    zero means "as many as it takes". SF9 sets both to 1 and must land on
+    a single sheet. **SF2 sets fitToWidth=1 and fitToHeight=0** — one page
+    wide, unlimited pages tall — because a full 50-learner roster is
+    15.4 x 22.6in. Squashing that onto one page needs 35% scale, which
+    prints the form's 5pt text at 1.8pt: present, and unreadable.
+    """
+    left, right, top, bottom = _margins(worksheet)
+    available_w = page_width - left - right
+    available_h = page_height - top - bottom
+
+    setup = worksheet.page_setup
+    fit_enabled = bool(getattr(worksheet.sheet_properties.pageSetUpPr, "fitToPage", False))
+    fit_w = setup.fitToWidth if setup.fitToWidth is not None else (1 if fit_enabled else 0)
+    fit_h = setup.fitToHeight if setup.fitToHeight is not None else (1 if fit_enabled else 0)
+
+    if not fit_enabled and setup.scale:
+        scale = float(setup.scale) / 100
+    else:
+        candidates = []
+        if fit_w:
+            candidates.append(available_w * fit_w / geometry.width)
+        if fit_h:
+            candidates.append(available_h * fit_h / geometry.height)
+        scale = min(candidates + [1.0]) if candidates else 1.0
+
+    # Break on row boundaries, never through the middle of one.
+    #
+    # The tolerance matters: when fitToHeight pins the scale so the form
+    # exactly fills the page, the scaled heights sum to a hair over the
+    # limit in floating point and the final row spills to a second, nearly
+    # empty page. SF9 fits in 575.94pt of 576 and did precisely that.
+    # Half a point is far below anything visible and well under one row.
+    bands: list[tuple[int, int]] = []
+    start = 1
+    used = 0.0
+    for row in range(1, geometry.max_row + 1):
+        height = geometry.row_h[row] * scale
+        if used > 0 and used + height > available_h + PAGE_BREAK_TOLERANCE:
+            bands.append((start, row - 1))
+            start = row
+            used = 0.0
+        used += height
+    bands.append((start, geometry.max_row))
+    return scale, bands
+
+
 def draw_worksheet(
     c,
     worksheet,
@@ -580,70 +676,75 @@ def draw_worksheet(
     max_row: int | None = None,
     max_col: int | None = None,
     fit: bool = True,
-) -> None:
-    setup = worksheet.page_setup
-    margins = worksheet.page_margins
-    left = (margins.left or 0.25) * 72
-    right = (margins.right or 0.25) * 72
-    top = (margins.top or 0.25) * 72
-    bottom = (margins.bottom or 0.25) * 72
-
+) -> int:
+    """Draws the worksheet, starting a new page per row band. Returns the
+    number of pages drawn; the caller owns the final `showPage`."""
+    left, right, top, bottom = _margins(worksheet)
     geometry = sheet_geometry(worksheet, max_row, max_col)
     available_w = page_width - left - right
     available_h = page_height - top - bottom
 
-    scale = 1.0
-    if fit and geometry.width > 0 and geometry.height > 0:
-        scale = min(available_w / geometry.width, available_h / geometry.height, 1.0)
-    elif setup.scale:
-        scale = float(setup.scale) / 100
-
-    content_w = geometry.width * scale
-    content_h = geometry.height * scale
-
-    # printOptions horizontal/verticalCentered — the templates rely on this
-    # and without it the form parks against the left margin.
-    options = worksheet.print_options
-    offset_x = left + ((available_w - content_w) / 2 if options.horizontalCentered else 0)
-    offset_y = top + ((available_h - content_h) / 2 if options.verticalCentered else 0)
-
-    c.saveState()
-    c.translate(offset_x, page_height - offset_y)
-    c.scale(scale, scale)
-
-    def flip(top_y: float) -> float:
-        return -top_y
+    if fit:
+        scale, bands = plan_pages(worksheet, page_width, page_height, geometry)
+    else:
+        scale, bands = 1.0, [(1, geometry.max_row)]
 
     spans = merged_spans(worksheet)
     covered = covered_cells(worksheet)
+    options = worksheet.print_options
+    content_w = geometry.width * scale
 
-    # Fills first, then borders, then text — so a border is never painted
-    # over by the neighbouring cell's background.
-    for pass_name in ("fill", "border", "text"):
-        for row in range(1, geometry.max_row + 1):
-            for col in range(1, geometry.max_col + 1):
-                if (row, col) in covered:
-                    continue
-                rowspan, colspan = spans.get((row, col), (1, 1))
-                x = geometry.col_x[col]
-                y = flip(geometry.row_y[row])
-                w = sum(geometry.col_w[col:col + colspan])
-                h = sum(geometry.row_h[row:row + rowspan])
-                if w <= 0 or h <= 0:
-                    continue
-                cell = worksheet.cell(row=row, column=col)
-                if pass_name == "fill":
-                    _draw_cell_fill(c, cell, x, y, w, h)
-                elif pass_name == "border":
-                    _draw_cell_borders(c, cell, x, y, w, h)
-                else:
-                    _draw_cell_text(
-                        c, cell, x, y, w, h,
-                        overflow=overflow_width(worksheet, geometry, row, col, colspan, covered),
-                    )
+    for index, (first_row, last_row) in enumerate(bands):
+        if index:
+            c.showPage()
 
-    _draw_images(c, worksheet, geometry, flip)
-    c.restoreState()
+        band_top = geometry.row_y[first_row]
+        band_height = (geometry.row_y[last_row] + geometry.row_h[last_row] - band_top) * scale
+
+        offset_x = left + ((available_w - content_w) / 2 if options.horizontalCentered else 0)
+        # Vertical centring applies to a single-page form; on a paginated
+        # one it would float each band's rows away from the page edge and
+        # make the break look like a layout error.
+        centre_v = options.verticalCentered and len(bands) == 1
+        offset_y = top + ((available_h - band_height) / 2 if centre_v else 0)
+
+        c.saveState()
+        c.translate(offset_x, page_height - offset_y)
+        c.scale(scale, scale)
+
+        def flip(top_y: float, _band_top=band_top) -> float:
+            return -(top_y - _band_top)
+
+        # Fills first, then borders, then text — so a border is never
+        # painted over by the neighbouring cell's background.
+        for pass_name in ("fill", "border", "text"):
+            for row in range(first_row, last_row + 1):
+                for col in range(1, geometry.max_col + 1):
+                    if (row, col) in covered:
+                        continue
+                    rowspan, colspan = spans.get((row, col), (1, 1))
+                    x = geometry.col_x[col]
+                    y = flip(geometry.row_y[row])
+                    w = sum(geometry.col_w[col:col + colspan])
+                    h = sum(geometry.row_h[row:row + rowspan])
+                    if w <= 0 or h <= 0:
+                        continue
+                    cell = worksheet.cell(row=row, column=col)
+                    if pass_name == "fill":
+                        _draw_cell_fill(c, cell, x, y, w, h)
+                    elif pass_name == "border":
+                        _draw_cell_borders(c, cell, x, y, w, h)
+                    else:
+                        _draw_cell_text(
+                            c, cell, x, y, w, h,
+                            overflow=overflow_width(worksheet, geometry, row, col, colspan, covered),
+                        )
+
+        # Images belong to the band whose rows they start in.
+        _draw_images(c, worksheet, geometry, flip, first_row, last_row)
+        c.restoreState()
+
+    return len(bands)
 
 
 def workbook_to_pdf(workbook, *, page=letter, landscape: bool | None = None, fit: bool = True) -> bytes:
