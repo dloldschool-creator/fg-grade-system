@@ -10,12 +10,20 @@ import pytest
 
 from app.models.enums import AttendanceStatus, EnrollmentStatus
 from app.sf2_report import (
+    COL_PRINT_CONTROL,
+    COL_SUMMARY_F,
+    COL_SUMMARY_M,
     DAY_COLS,
     FEMALE_FIRST_ROW,
     MALE_FIRST_ROW,
     ROWS_PER_SEX,
+    ROW_DATE_SCAFFOLD,
     SHEET_NAME,
     TEMPLATE_PATH,
+    _anchor_map,
+    _apply_print_setup,
+    _fill_day_headers,
+    _widen_summary_percentage_columns,
     _replicate_images,
     first_friday_on_or_after,
     movement_remark,
@@ -167,3 +175,79 @@ def test_template_has_enough_day_columns_for_any_month():
         assert worksheet.cell(17, column).value is not None
     assert len(DAY_COLS) == 25
     assert len(DAY_COLS) >= 23
+
+
+# --- Export presentation --------------------------------------------------
+
+
+def test_print_control_column_exists_in_the_template():
+    """The source workbook drove its own print macros from column CC
+    ("Select Month in" plus a HYPERLINK to a 'PRINT CONTROL' sheet). The
+    hyperlink is a *local* formula, so it survives external-link
+    stripping and has to be cleared deliberately — this asserts the
+    column is really the one being cleared."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+    assert worksheet.cell(2, COL_PRINT_CONTROL).value == "Select Month in"
+    assert "PRINT CONTROL" in str(worksheet.cell(3, COL_PRINT_CONTROL).value)
+
+
+def test_print_setup_is_landscape_and_fits_the_width():
+    """The template ships with no <pageSetup> at all, so without this the
+    79-column form prints portrait at 100% across several pages.
+    `fitToWidth` also does nothing unless the sheet's `fitToPage`
+    property is set, which is easy to miss."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+    _apply_print_setup(worksheet)
+
+    assert worksheet.page_setup.orientation == "landscape"
+    assert worksheet.page_setup.fitToWidth == 1
+    assert worksheet.page_setup.fitToHeight == 0  # may run to a second sheet
+    assert worksheet.sheet_properties.pageSetUpPr.fitToPage is True
+    # Print area stops before the helper column.
+    assert "$CA$112" in worksheet.print_area
+
+
+def test_date_scaffold_row_is_cleared_not_populated():
+    """Row 14 held date serials that the template's day-number and
+    weekday rows read via formula. Those rows are written as plain values
+    now, so nothing references row 14 — and since it sits above the table
+    header, leaving dates there prints them over the form."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+
+    # The template's own formulas confirm what the row was for.
+    assert "$14" in str(worksheet.cell(16, DAY_COLS[0]).value)
+    assert "$14" in str(worksheet.cell(17, DAY_COLS[0]).value)
+
+    _fill_day_headers(worksheet, _anchor_map(worksheet), [])
+    for column in DAY_COLS:
+        assert worksheet.cell(ROW_DATE_SCAFFOLD, column).value is None
+
+
+def test_summary_percentage_columns_are_wide_enough():
+    """Excel renders a *numeric* cell as ### when it's too narrow (text
+    would just overflow into the neighbour). The template gives the M and
+    F figures under 4 characters, which is fine for the counts but not
+    for "100.00%" at seven — so both percentage rows printed as ###."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+
+    def width(*columns):
+        return sum(
+            worksheet.column_dimensions[openpyxl.utils.get_column_letter(c)].width or 8.43
+            for c in columns
+        )
+
+    # The defect, as shipped.
+    assert width(COL_SUMMARY_M, COL_SUMMARY_M + 1) < 7
+    assert width(COL_SUMMARY_F) < 7
+
+    _widen_summary_percentage_columns(worksheet)
+
+    needed = len("100.00%")
+    assert width(COL_SUMMARY_M, COL_SUMMARY_M + 1) >= needed
+    assert width(COL_SUMMARY_F) >= needed
+    # The wide Total column is left alone.
+    assert worksheet.column_dimensions["BX"].width == 13.0

@@ -25,9 +25,11 @@ from copy import copy
 from datetime import date, timedelta
 
 import openpyxl
+from openpyxl.cell.cell import Cell
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.worksheet.properties import PageSetupProperties
 from sqlalchemy.orm import Session
 
 from app.attendance_engine import CONSECUTIVE_ABSENCE_WARNING, EXIT_MOVEMENTS
@@ -62,7 +64,25 @@ COL_ABSENT = 61  # BI
 COL_PRESENT = 64  # BL
 COL_REMARKS = 68  # BP
 
-ROW_DATES = 14  # date serials the template's own day/weekday rows read from
+# Helper column the source workbook used to drive its own print macros —
+# it holds "Select Month in" and a HYPERLINK to a 'PRINT CONTROL' sheet
+# that doesn't exist here. The hyperlink is a *local* formula, so unlike
+# the [1]-prefixed ones it survives external-link stripping and has to be
+# cleared explicitly.
+COL_PRINT_CONTROL = 81  # CC
+
+# Rightmost column carrying real form content (the summary box's merges
+# run out to CA). Everything past this is helper scaffolding, so the print
+# area stops here.
+COL_LAST_PRINTED = 79  # CA
+ROW_LAST_PRINTED = 112
+
+# Scaffolding row: in the source workbook this held date serials that the
+# day-number and weekday rows read via formula (`=DAY(K$14)` and
+# `=CHOOSE(WEEKDAY(K$14,2),…)`). We write those two rows as plain values
+# instead, so nothing references row 14 any more — it's cleared rather
+# than populated, otherwise raw dates print above the table header.
+ROW_DATE_SCAFFOLD = 14
 ROW_DAY_NUMBER = 16
 ROW_WEEKDAY = 17
 MALE_FIRST_ROW, MALE_LAST_ROW = 18, 42
@@ -313,9 +333,13 @@ def _learner_rows(session: Session, section_id, school_year_id, year: int, month
 
 
 def _display_name(learner) -> str:
+    """Uppercased at render time as well as on save. Names are normalized
+    to uppercase when stored (`normalize_name`), but this keeps any row
+    predating that rule — or edited directly in the database — printing
+    consistently with the rest of the form."""
     middle = f" {learner.middle_name}" if getattr(learner, "middle_name", None) else ""
     extension = f" {learner.extension_name}" if getattr(learner, "extension_name", None) else ""
-    return f"{learner.last_name}, {learner.first_name}{middle}{extension}".strip()
+    return f"{learner.last_name}, {learner.first_name}{middle}{extension}".strip().upper()
 
 
 def _movement_counts(session: Session, rows, year: int, month: int) -> dict:
@@ -394,6 +418,9 @@ def build_sf2_workbook(
         _fill_learner_block(worksheet, anchors, page_slice(females, page_index), FEMALE_FIRST_ROW, class_days)
         _fill_daily_totals(worksheet, anchors, males, females, class_days)
         _fill_summary(session, worksheet, anchors, males, females, class_days, school_year, year, month)
+        _clear_print_control_column(worksheet)
+        _widen_summary_percentage_columns(worksheet)
+        _apply_print_setup(worksheet)
 
     # Drop the link to the school's master workbook entirely, so the file
     # opens without an "update links?" prompt.
@@ -438,6 +465,60 @@ def _replicate_images(base, copies) -> None:
     base._images = rebuild()
     for sheet in copies:
         sheet._images = rebuild()
+
+
+def _clear_print_control_column(worksheet) -> None:
+    """Blanks the source workbook's print-macro helper column."""
+    for row in range(1, worksheet.max_row + 1):
+        cell = worksheet.cell(row, COL_PRINT_CONTROL)
+        if isinstance(cell, Cell):  # skip MergedCell, which is read-only
+            cell.value = None
+
+
+def _widen_summary_percentage_columns(worksheet) -> None:
+    """Widens the summary box's M and F sub-columns so percentages fit.
+
+    Excel shows `###` when a *numeric* cell is too narrow (unlike text,
+    which just overflows into the neighbour). The template gives the M
+    figure BU+BV = 3.9 characters and the F figure BW = 3.8, which is
+    fine for the counts but not for "100.00%" at seven characters — so
+    both percentage rows rendered as ###. The Total column (BX:CA, ~15.6)
+    was always wide enough, which is why only two of the three showed it.
+
+    Widening rather than dropping to a `0%` format keeps the two decimals
+    the official form reports for Percentage of Attendance. The form
+    prints fit-to-width, so the extra ~7 characters just scale the sheet
+    very slightly.
+    """
+    worksheet.column_dimensions[get_column_letter(COL_SUMMARY_M + 1)].width = 7.5  # BV
+    worksheet.column_dimensions[get_column_letter(COL_SUMMARY_F)].width = 7.5  # BW
+
+
+def _apply_print_setup(worksheet) -> None:
+    """Landscape, scaled to fit the form's width on one page.
+
+    The template ships with **no `<pageSetup>` element at all**, so
+    without this Excel falls back to portrait at 100% and the 79-column
+    form spills across several pages. `fitToWidth` only takes effect when
+    the sheet's `fitToPage` property is also set — setting the page-setup
+    field alone silently does nothing.
+
+    Height is left unconstrained (`fitToHeight = 0`) so a long form can
+    still run onto a second sheet of paper rather than being squashed
+    illegibly.
+
+    Paper size is deliberately not set: the template doesn't specify one,
+    and DepEd forms get printed on A4, Letter or Folio depending on the
+    office, so whatever the printer defaults to is a better guess than
+    anything hardcoded here.
+    """
+    worksheet.page_setup.orientation = "landscape"
+    worksheet.page_setup.fitToWidth = 1
+    worksheet.page_setup.fitToHeight = 0
+    worksheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    worksheet.print_area = (
+        f"A1:{get_column_letter(COL_LAST_PRINTED)}{ROW_LAST_PRINTED}"
+    )
 
 
 def _term_for_month(session: Session, school_year_id, class_days):
@@ -497,17 +578,21 @@ def _grade_level_label(session: Session, section) -> str:
 
 
 def _fill_day_headers(worksheet, anchors, class_days) -> None:
-    """Writes the date, day-of-month and weekday letter for each class day,
-    and blanks any unused day slot so a short month doesn't inherit the
-    template's leftovers."""
+    """Writes the day-of-month number and weekday letter for each class
+    day, blanks any unused day slot so a short month doesn't inherit the
+    template's leftovers, and clears the date scaffolding row.
+
+    The scaffold row is always cleared, never written: it sits above the
+    table header, so a populated one prints raw dates over the form.
+    """
     for index, column in enumerate(DAY_COLS):
+        _write(worksheet, anchors, ROW_DATE_SCAFFOLD, column, None)
         if index < len(class_days):
             day = class_days[index].calendar_date
-            _write(worksheet, anchors, ROW_DATES, column, day)
             _write(worksheet, anchors, ROW_DAY_NUMBER, column, day.day)
             _write(worksheet, anchors, ROW_WEEKDAY, column, WEEKDAY_LETTERS[day.weekday()])
         else:
-            for row in (ROW_DATES, ROW_DAY_NUMBER, ROW_WEEKDAY):
+            for row in (ROW_DAY_NUMBER, ROW_WEEKDAY):
                 _write(worksheet, anchors, row, column, None)
 
 
@@ -516,6 +601,9 @@ def _fill_learner_block(worksheet, anchors, rows, first_row: int, class_days) ->
         row_number = first_row + offset
         if offset < len(rows):
             entry = rows[offset]
+            # Explicitly unhide: a sheet copied from an already-filled page
+            # inherits its hidden flags.
+            worksheet.row_dimensions[row_number].hidden = False
             _write(worksheet, anchors, row_number, COL_NO, offset + 1)
             _write(worksheet, anchors, row_number, COL_NAME, entry["name"])
             for index, column in enumerate(DAY_COLS):
@@ -530,8 +618,11 @@ def _fill_learner_block(worksheet, anchors, rows, first_row: int, class_days) ->
             _write(worksheet, anchors, row_number, COL_PRESENT, entry["present"])
             _write(worksheet, anchors, row_number, COL_REMARKS, entry["remarks"] or None)
         else:
-            # Keep the printed row number (the blank form shows 1..25) but
-            # clear everything else.
+            # Clear the leftover sample data and hide the row. Hiding is
+            # what keeps unused rows off both the Excel print-out and the
+            # PDF — LibreOffice honours the same hidden flag, so one
+            # mechanism covers both exports.
+            worksheet.row_dimensions[row_number].hidden = True
             _write(worksheet, anchors, row_number, COL_NO, offset + 1)
             _write(worksheet, anchors, row_number, COL_NAME, None)
             for column in DAY_COLS:
