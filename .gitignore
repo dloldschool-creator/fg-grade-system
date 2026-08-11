@@ -1,6 +1,10 @@
 # Secrets — never commit
 .env
 supabase.txt
+# Streamlit's conventional secrets file. Nothing uses it today (config
+# comes from .env via app/database.py), but it's the first place someone
+# would put a credential, so it's ignored before that can happen.
+.streamlit/secrets.toml
 
 # Python
 __pycache__/

@@ -1,0 +1,46 @@
+# Streamlit configuration for the FGNMHS grading system.
+#
+# The theme lives here rather than in per-page CSS so it applies to every
+# page at once and needs no rework as pages are added. Only keys this
+# Streamlit version actually supports are set — an unknown key logs a
+# warning on every start.
+
+[theme]
+# DepEd blue, matching the school seal. The same value is used by the
+# award certificates and term cards (`_BLUE` in app/certificate_generator.py
+# and app/term_card.py), so screen and print agree.
+primaryColor = "#1B4F9C"
+
+base = "light"
+backgroundColor = "#FFFFFF"
+# Sidebar, table headers and other inset surfaces. A faint blue-grey
+# rather than plain grey, so it reads as part of the same palette.
+secondaryBackgroundColor = "#F1F4F9"
+textColor = "#1C1F26"
+linkColor = "#1B4F9C"
+
+# Softer than Streamlit's default divider, which is heavy against the
+# many tables this app renders.
+borderColor = "#DDE3EC"
+showWidgetBorder = true
+baseRadius = "medium"
+
+font = "sans-serif"
+
+[theme.sidebar]
+# The navigation carries the school's colour; the content area stays
+# white so grade tables and report previews are read on a neutral field.
+backgroundColor = "#F1F4F9"
+primaryColor = "#1B4F9C"
+borderColor = "#DDE3EC"
+
+[server]
+# Streamlit's uploader default is 200MB. Nothing here is bigger than a
+# CSV masterlist or an Excel template, and a smaller cap limits what a
+# mistaken upload can cost.
+maxUploadSize = 25
+
+[browser]
+# Usage stats are off by default in recent versions; stated explicitly
+# because this app handles learner records.
+gatherUsageStats = false
