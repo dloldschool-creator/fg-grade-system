@@ -15,11 +15,14 @@ by whoever is setting the system up. So it lives here, next to
 **Nothing is deleted without `--confirm`.** The default run only reports
 what it would remove.
 
-    python -m scripts.purge_test_data --learner 107041140016
-    python -m scripts.purge_test_data --section "STEM - A"
-    python -m scripts.purge_test_data --user teacher@example.com
-    python -m scripts.purge_test_data --all-learners
-    python -m scripts.purge_test_data --all-learners --confirm
+Run with the project's own Python — a bare `python` is the system one
+and has none of the project's packages installed:
+
+    .venv\\Scripts\\python.exe -m scripts.purge_test_data --learner 107041140016
+    .venv\\Scripts\\python.exe -m scripts.purge_test_data --section "STEM - A"
+    .venv\\Scripts\\python.exe -m scripts.purge_test_data --user teacher@example.com
+    .venv\\Scripts\\python.exe -m scripts.purge_test_data --all-learners
+    .venv\\Scripts\\python.exe -m scripts.purge_test_data --all-learners --confirm
 
 Users are mostly *not* blocked: every historical reference to a user
 (who submitted a grade, who finalized a month) is `ON DELETE SET NULL`,

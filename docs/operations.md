@@ -4,6 +4,13 @@ Written for the person who keeps this running — the ICT Coordinator, not
 a developer. Every procedure assumes the app is live and teachers are
 using it, because from Term 1 onwards it is.
 
+> **Always use the project's own Python**, `.venv\Scripts\python.exe`,
+> never a bare `python`. The project's packages are installed in that
+> virtual environment; the system Python has none of them and fails with
+> `ModuleNotFoundError: No module named 'sqlalchemy'`. The form below
+> works from both Command Prompt and PowerShell, run from the project
+> folder.
+
 ---
 
 ## 1. The shape of a deployment
@@ -62,7 +69,7 @@ shell. That is deliberate: it keeps schema changes a decision rather
 than a side effect of pushing code.
 
 ```bash
-./.venv/Scripts/python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
 **Order matters, and getting it backwards causes an outage.**
@@ -108,7 +115,7 @@ USE ONLY** (§36.3).
 ### Checking a new template before trusting it
 
 ```bash
-./.venv/Scripts/python.exe -m pytest tests/test_xlsx_render.py -q
+.venv\Scripts\python.exe -m pytest tests/test_xlsx_render.py -q
 ```
 
 Then generate one form and compare it against the school's own Excel
@@ -162,22 +169,22 @@ For clearing test data before the real migration, there is a script. It
 never runs from the app, and deletes nothing without `--confirm`:
 
 ```bash
-python -m scripts.purge_test_data --all-learners
+.venv\Scripts\python.exe -m scripts.purge_test_data --all-learners
 ```
 
 That is a dry run — it lists what it would remove. Add `--confirm` to
 actually delete. Other targets:
 
 ```bash
-python -m scripts.purge_test_data --learner 107041140016
+.venv\Scripts\python.exe -m scripts.purge_test_data --learner 107041140016
 ```
 
 ```bash
-python -m scripts.purge_test_data --section "STEM - A"
+.venv\Scripts\python.exe -m scripts.purge_test_data --section "STEM - A"
 ```
 
 ```bash
-python -m scripts.purge_test_data --user teacher@example.com
+.venv\Scripts\python.exe -m scripts.purge_test_data --user teacher@example.com
 ```
 
 Order matters and the script enforces it: a section refuses to go while
