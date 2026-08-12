@@ -1032,7 +1032,16 @@ those formulas with values written by our own grading engine via
 13. Excel import/export migration tooling — done (learners + term grades; §52 exports in full)
 14. Audit logs, backups, security hardening — done (HTTPS + rate limiting
     deliberately left to 15; see the Phase 14 status entry)
-15. Automated tests, deployment ← **we are here.** Runbooks written
-    (`docs/deployment.md`, `docs/operations.md`); the deploy itself needs
-    the user's GitHub/Streamlit accounts. Real data migration and an
-    end-to-end dress rehearsal are the remaining work before go-live.
+15. Automated tests, deployment — **DEPLOYED 2026-08-12** to Streamlit
+    Community Cloud from GitHub (branch `master`, entrypoint
+    `streamlit_app.py`, secrets in the app's Settings panel). Pre-flight
+    was clean: `.env` never in history, no schema drift (`alembic check`
+    at `f00c90460cb9`), no OS-level dependencies.
+    **The app is now live, so treat every change as a live change** —
+    `git push` redeploys, a restart signs everyone out and loses unsaved
+    grade entry, and migrations must follow the ordering in
+    `docs/operations.md`. Deploy outside encoding hours.
+    ← **Remaining before real use:** migrating the real ~1,200 learners
+    (the database still holds 6 test learners), teacher accounts and
+    assignments, and an end-to-end dress rehearsal on one section.
+    Term 1 closes **15 September 2026**.
