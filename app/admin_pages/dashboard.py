@@ -17,7 +17,7 @@ from sqlalchemy import func
 
 from app.admin_pages._helpers import get_session, render_flashes
 from app.auth import require_role
-from app.models.academic_structure import GradeLevel, Section
+from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceMonthStatus
 from app.models.enums import CompletionStatus, EnrollmentStatus, FinalizationState
 from app.models.grades import AnnualGradeSummary, TermGrade
@@ -37,11 +37,19 @@ DASH = "—"
 
 
 def _enrollment_overview(session, sy_id) -> list[dict]:
-    sections = session.query(Section).filter_by(school_year_id=sy_id).order_by(Section.name).all()
+    """One row per section, carrying its grade level, track and strand.
+
+    Sorted by grade level, then track, then strand, then section name, so
+    the rows arrive already grouped the way the page displays them and
+    the way SF4 reports them.
+    """
+    sections = session.query(Section).filter_by(school_year_id=sy_id).all()
     if not sections:
         return []
 
     grade_levels = {g.id: g for g in session.query(GradeLevel).all()}
+    tracks = {t.id: t for t in session.query(Track).all()}
+    strands = {s.id: s for s in session.query(Strand).all()}
     enrollments = session.query(Enrollment).filter_by(school_year_id=sy_id).all()
 
     by_section: dict = {}
@@ -64,16 +72,50 @@ def _enrollment_overview(session, sy_id) -> list[dict]:
             if e.id in summaries and summaries[e.id].completion_status == CompletionStatus.COMPLETE
         )
         grade_level = grade_levels.get(section.grade_level_id)
+        track = tracks.get(section.track_id)
+        strand = strands.get(section.strand_id)
         rows.append(
             {
+                # Kept for grouping and ordering, dropped before display.
+                "_grade_order": grade_level.display_order if grade_level else 0,
+                "_grade": grade_level.name if grade_level else DASH,
+                "Track": track.name if track else DASH,
+                "Strand": strand.name if strand else DASH,
                 "Section": section.name,
-                "Grade": grade_level.name if grade_level else DASH,
                 "Active": len(active),
                 "On roll": len(members),
                 "Records complete": f"{complete} / {len(active)}" if active else DASH,
             }
         )
+
+    rows.sort(key=lambda r: (r["_grade_order"], r["Track"], r["Strand"], r["Section"]))
     return rows
+
+
+DISPLAY_COLUMNS = ["Track", "Strand", "Section", "Active", "On roll", "Records complete"]
+
+
+def _render_sections(rows: list[dict]) -> None:
+    """A table per grade level, ordered by track then strand within each.
+
+    Grouped rather than one flat list because that is how the school
+    thinks about it and how SF4 reports it — and with thirty sections a
+    single table is a wall of names.
+    """
+    for grade in dict.fromkeys(row["_grade"] for row in rows):
+        block = [row for row in rows if row["_grade"] == grade]
+        active = sum(row["Active"] for row in block)
+        strands = len({row["Strand"] for row in block})
+
+        st.markdown(
+            f"**{grade}** — {len(block)} section(s), {strands} strand(s), "
+            f"{active:,} active learner(s)"
+        )
+        st.dataframe(
+            pd.DataFrame([{k: row[k] for k in DISPLAY_COLUMNS} for row in block]),
+            hide_index=True,
+            use_container_width=True,
+        )
 
 
 def _encoding_progress(session, sy_id) -> list[dict]:
@@ -182,7 +224,7 @@ def render() -> None:
 
         st.divider()
         st.subheader("Sections")
-        st.dataframe(pd.DataFrame(sections), hide_index=True, use_container_width=True)
+        _render_sections(sections)
 
         st.divider()
         st.subheader("Grade encoding")
