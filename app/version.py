@@ -37,11 +37,12 @@ def _read(path: str) -> str | None:
         return None
 
 
-def commit_sha() -> str:
-    """The full SHA of the checked-out commit, or "unknown".
+def disk_commit_sha() -> str:
+    """The commit currently checked out on disk.
 
-    An explicit APP_VERSION wins, so a host that deploys without a `.git`
-    directory can still report something useful.
+    Not necessarily the code that is running: a host can pull a new commit
+    without restarting the process, in which case the files have moved on
+    and the loaded modules have not.
     """
     override = os.environ.get("APP_VERSION")
     if override:
@@ -71,9 +72,28 @@ def commit_sha() -> str:
     return UNKNOWN
 
 
+# Captured once, at import, so it names the commit whose code is actually
+# loaded in this process. Reading it fresh on every call was wrong in the
+# one case that matters: a host that pulls a new commit without restarting
+# reports the new SHA while still running the old modules, which is
+# indistinguishable from a successful deploy.
+_LOADED_SHA = disk_commit_sha()
+
+
+def commit_sha() -> str:
+    """The commit this running process was started from."""
+    return _LOADED_SHA
+
+
 def short_sha() -> str:
     sha = commit_sha()
     return sha if sha == UNKNOWN else sha[:7]
+
+
+def restart_pending() -> bool:
+    """True when newer code is on disk than the process is running."""
+    current = disk_commit_sha()
+    return current != UNKNOWN and current != _LOADED_SHA
 
 
 def uptime() -> str:
@@ -97,4 +117,13 @@ def uptime() -> str:
 
 
 def version_line() -> str:
-    return "%s · %s" % (short_sha(), uptime())
+    """Both facts describe the *running* process, so they cannot disagree.
+
+    When newer code is waiting on disk the line says so outright — that is
+    the state a version line exists to make visible, and the one that
+    otherwise looks exactly like a deploy that worked.
+    """
+    line = "%s · %s" % (short_sha(), uptime())
+    if restart_pending():
+        line += " · ⚠ %s is on disk — restart to load it" % disk_commit_sha()[:7]
+    return line
