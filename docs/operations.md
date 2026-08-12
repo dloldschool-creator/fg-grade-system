@@ -205,7 +205,35 @@ undo.
 
 ---
 
-## 7. Adding a teacher mid-year
+## 7. Importing learners and grades
+
+Generate the blank templates:
+
+```bash
+.venv\Scripts\python.exe -m scripts.make_import_templates
+```
+
+They land in `import-templates\` next to the project — one for learners,
+one for term grades. Each has three sheets: **Data** (the only one the
+importer reads), **Instructions**, and **Reference**, which lists the
+exact section and subject names currently in the system.
+
+**Regenerate after adding sections or subjects**, so the Reference sheet
+matches. Section and subject names must match exactly or the row is
+rejected.
+
+The templates are built from the importer's own column definitions, so
+they cannot drift from what it accepts. The LRN column is pre-formatted
+as text: Excel otherwise turns a 12-digit LRN into 1.07041E+11 and
+destroys the leading zero.
+
+Import learners **before** enrolling them — the learner import creates
+records only; enrolment into a section is a separate step on the
+Enrollment page.
+
+---
+
+## 8. Adding a teacher mid-year
 
 1. **Users & Roles** → Add User. A temporary password is shown **once** —
    copy it before leaving the page.
@@ -217,7 +245,7 @@ undo.
 
 ---
 
-## 8. When something goes wrong
+## 9. When something goes wrong
 
 **"I can't log in."** Sessions end after 60 minutes idle, and refreshing
 the browser signs you out. Sign in again. If the password is genuinely
@@ -238,7 +266,7 @@ Log.
 
 ---
 
-## 9. Before each term closes
+## 10. Before each term closes
 
 1. Advisers finalize every attendance month (**Attendance** page).
 2. Teachers submit all grades; check the **Dashboard** for terms still
