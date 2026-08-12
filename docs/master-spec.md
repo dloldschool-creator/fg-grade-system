@@ -2699,3 +2699,81 @@ Before implementing any rule that is ambiguous, compare:
 4. the applicable current DepEd issuance.
 
 When there is a discrepancy, show it as a configuration/validation issue rather than silently making assumptions.
+
+---
+
+# 77. SF4 MODULE
+
+Create a School Form 4 report generator (SF4-SHS, Monthly Learners' Movement and Attendance).
+
+Added after the original specification was written. Numbered 77 so that every existing section reference stays valid.
+
+Allow selection of:
+
+- School Year
+- Report Month
+
+Changing the report month must regenerate the whole report. No other selection is required.
+
+SF4 is **school-wide**, not per section. One row per Track/Strand actually in use, grouped by grade level:
+
+- Grade 11 rows, followed by TOTAL FOR GRADE 11
+- Grade 12 rows, followed by TOTAL FOR GRADE 12
+- GRAND TOTAL
+
+Every figure is reported as **Male / Female / Total**.
+
+Automatically populate:
+
+- School Name
+- School ID
+- District/Division/Region
+- School Year
+- For the Month of
+- Registered Learners as of the end of the month
+- Attendance daily average
+- Attendance percentage for the month
+- Dropped Out, Transferred Out, Transferred In, Shifted Out, Shifted In
+
+Each of the five movement columns is reported three times:
+
+- **(A)** cumulative number as of the previous month;
+- **(B)** total for the month;
+- **(A+B)** cumulative number as of the end of the month.
+
+## 77.1 Period independence
+
+SF4 reports a **month**. Its figures depend only on dates — who was on the roll on the last class day, which movements were dated inside the month, and attendance across that month's class days.
+
+It therefore does **not** depend on whether the school year is divided into quarters, semesters, or terms, and the official form must **not** be redesigned to accommodate the school's three-term structure.
+
+The form's one period-shaped field, "Semester", is populated with the **term that contains the reporting month**. Where a month spans two terms, the earlier term is named.
+
+## 77.2 Counting rules
+
+These must match the attendance module exactly, so that SF2 and SF4 never disagree about the same month:
+
+- **Registered learners** are those still on the roll on the **last class day** of the month. A learner who transferred out mid-month still appears on that month's SF2 with a remark (§32), but is **not** registered at the end of the month.
+- **LATE and CUTTING count as days present** (§30).
+- Attendance is measured against each learner's **eligible** class days, never the section's calendar total (§31).
+- **Percentages must never be summed across sexes.** The Total percentage is recomputed from the combined present and eligible days. Summing produces impossible figures such as 162%.
+- An unused Track/Strand row prints **blank**, not as a row of zeros — a zero is a reported figure, an empty cell is not (§65).
+
+## 77.3 Output
+
+Generate:
+
+- preview;
+- Excel (.xlsx) download.
+
+**No PDF is required.** SF4 is submitted as a file rather than printed.
+
+## 77.4 Performance
+
+SF4 aggregates every learner in the school. Its data access must not scale with enrollment: all rows are fetched in batched queries and aggregated in memory, so the query count is a fixed handful regardless of school size.
+
+## 77.5 Related forms not yet specified
+
+SF5-A and SF5-B are **not** covered by this specification. Both are structured around 1st and 2nd semesters, which cannot be filled honestly from a three-term school year. They are deferred pending an updated form from the Schools Division.
+
+Note that SF5-A carries its own guidelines and indicator definitions inside the template (Complete/Incomplete, Regular/Irregular, and the exclusion of learners who are No Longer in School). Those definitions are authoritative when the form is eventually built and must not be re-derived.

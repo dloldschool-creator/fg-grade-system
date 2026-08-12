@@ -971,7 +971,11 @@ those formulas with values written by our own grading engine via
       calendar. Documented in the runbook, since "a teacher can't type a
       grade" will otherwise be diagnosed as a bug.
       `pytest tests/` is 299.
-- [x] **SF4 (Monthly Learners' Movement and Attendance)** built —
+- [x] **SF4 (Monthly Learners' Movement and Attendance)** built — spec
+      **§77**, appended at the end of `docs/master-spec.md` rather than
+      inserted near SF2 (§34) so no existing section number shifted; the
+      codebase references §NN everywhere. Added with the user's explicit
+      approval — **never add scope to master-spec.md without asking.**
       `app/sf4_report.py`, `app/admin_pages/sf4.py`, **Excel only** (no
       PDF: it's submitted as a file, so the conversion would be dead
       weight). School-wide, one row per Track/Strand: rows 12-22 Grade 11,

@@ -1,8 +1,8 @@
-"""SF4-SHS — Monthly Learners' Movement and Attendance.
+"""SF4-SHS — Monthly Learners' Movement and Attendance (§77).
 
 Fills `sf-templates/SF4-template.xlsx` and hands back a workbook. **Excel
-only** — no PDF path, by decision: this one is submitted as a file rather
-than printed, so the conversion would be dead weight.
+only** (§77.3) — no PDF path, by decision: this one is submitted as a
+file rather than printed, so the conversion would be dead weight.
 
 **Why this form works with three terms when SF5 doesn't.** SF4 reports a
 *month*: headcounts on the last class day, movements dated inside the
