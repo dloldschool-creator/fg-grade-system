@@ -81,7 +81,7 @@ def render() -> None:
         if school_years:
             sy_by_id = {sy.id: sy for sy in school_years}
             school_year_id = st.selectbox(
-                "School year to enrol into",
+                "School year to enroll into",
                 options=[sy.id for sy in school_years],
                 format_func=lambda v: sy_by_id[v].name,
                 help="Only used by the optional Section column. Learners with no "

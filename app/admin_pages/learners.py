@@ -204,11 +204,20 @@ def _validate_learner_row(row: dict) -> tuple[dict | None, str | None]:
 
 def _bulk_upload_section(session) -> None:
     with st.expander("Bulk-add from CSV"):
+        st.info(
+            "**Adding a whole year group? Use Import from Excel instead.** "
+            "It uses a ready-made template, checks every row before saving "
+            "anything, and can enroll each learner into their section at the "
+            "same time. This CSV upload is the quick option for a small batch, "
+            "and it only creates learners — you enroll them afterwards.",
+            icon="💡",
+        )
         st.caption(
-            f"Columns: `{LEARNER_CSV_COLUMNS}` (header row required). "
-            "last_name, first_name, sex, birthdate are required; the rest may be blank. "
-            "sex must be MALE or FEMALE; birthdate as YYYY-MM-DD. Section assignment isn't "
-            "part of this upload — enroll imported learners afterward on the Enrollment page."
+            f"One row per learner, with this header row: `{LEARNER_CSV_COLUMNS}`\n\n"
+            "**last_name**, **first_name**, **sex** and **birthdate** are required — "
+            "the rest can be left empty. Sex must be MALE or FEMALE, and birthdate "
+            "must be written as YYYY-MM-DD (for example 2009-01-15). "
+            "Type the LRN as text so it keeps any leading zero."
         )
         uploaded = st.file_uploader("CSV file", type="csv", key="learner_csv")
         if uploaded is None:

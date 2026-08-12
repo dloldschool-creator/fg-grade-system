@@ -159,11 +159,13 @@ BY_ROLE = {
                 "the status alone doesn't.",
             ),
             (
-                "Importing a learner does not enrol them",
-                "The learner import creates the person's record only. Putting "
-                "them into a section for the school year is a separate step on "
-                "the **Enrollment** page, which has a multiselect for doing a "
-                "whole batch at once. A learner who is imported but not "
+                "Fill in the Section column and the import enrolls them too",
+                "On the learner template the **Section** column is optional. "
+                "Fill it in and each learner is created *and* placed in that "
+                "section in one step. Leave it blank and only the record is "
+                "created — you then enroll them on the **Enrollment** page, "
+                "which can do a whole batch at once.\n\n"
+                "It matters which you did: a learner who exists but isn't "
                 "enrolled appears in the masterlist and nowhere else — no "
                 "gradebook, no SF2, no report card.",
             ),
