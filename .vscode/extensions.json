@@ -1,0 +1,13 @@
+// VS Code offers these once, the first time the project is opened.
+// Nothing here is required — the project builds and runs without them.
+{
+  "recommendations": [
+    // Python language support: the interpreter picker, the test
+    // explorer, and go-to-definition across app/ and tests/.
+    "ms-python.python",
+    // Reads the .xlsx templates in a grid inside the editor, which is
+    // useful when checking a DepEd form's cell layout against the
+    // constants in sf2_report.py / sf9_report.py / sf4_report.py.
+    "grapecity.gc-excelviewer"
+  ]
+}

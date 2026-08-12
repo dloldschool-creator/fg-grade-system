@@ -1,0 +1,48 @@
+// Project settings for VS Code. Committed deliberately: these are
+// conventions for the project, not personal preferences.
+{
+  // --- Encoding -----------------------------------------------------
+  // The source files contain section signs and em-dashes throughout
+  // (§16, §34 …). Letting an editor guess the encoding is how those
+  // become "Â§" and "â€”" — it has happened to this repo more than once,
+  // via tools that read UTF-8 as Windows-1252 and wrote it back.
+  // Pinning it removes the guess.
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+  "files.insertFinalNewline": true,
+
+  // --- Python -------------------------------------------------------
+  // Always the project's own interpreter. A bare `python` is the system
+  // one and has none of the project's packages, which surfaces as
+  // "ModuleNotFoundError: No module named 'sqlalchemy'".
+  "python.defaultInterpreterPath": ".venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+
+  // --- Tests --------------------------------------------------------
+  // Note that much of the suite talks to the live Supabase database and
+  // rolls back, so a full run takes a minute or two rather than seconds.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+
+  // --- Noise --------------------------------------------------------
+  // Hidden from the explorer and from search, so a find across the
+  // project doesn't return thousands of hits from the virtualenv.
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/sf-templates/*.xlsx": true
+  },
+
+  // Excel templates and the seal are binary; opening them in the editor
+  // is never what you want.
+  "files.associations": {
+    "*.xlsx": "binary"
+  }
+}
