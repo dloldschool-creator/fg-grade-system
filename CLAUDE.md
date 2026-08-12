@@ -106,6 +106,49 @@ those formulas with values written by our own grading engine via
     Excel workbook actually operates. Do not re-add assessment-level entry
     without discussion.
 
+## If DepEd reverts to four quarters
+
+Asked 2026-08-12; audited then, so trust this map over a fresh guess.
+**The core is already period-agnostic; four places bake "three" into
+structure rather than logic.**
+
+Already fine, no change needed:
+
+- `terms` is a **table**, not a constant — a school year takes as many
+  term rows as you give it.
+- `compute_subject_final_grade(term_grades, required_terms)` and the
+  Term/General Average take the term set as a **parameter**, sourced from
+  each subject's real `section_subject_offerings`. That is why electives
+  running one or two terms already work; a fourth flows the same path.
+- Attendance, the audit trail, RBAC, and the permanent academic record
+  never count terms.
+- **SF2 and SF4 are unaffected** — they report a *month*. Same reasoning
+  that let SF4 be built while SF5 waits (§77.1).
+
+Would need work — the four touchpoints:
+
+1. **Four tables have physical `term1/2/3` columns**: `enrollments`
+   (`termN_adviser_comment`), `subject_profile_subjects`
+   (`termN_active`), `combined_learning_area_results` (`termN_combined`),
+   `learner_academic_record_subjects` (`offered_termN`, `termN_grade`).
+   Adding `term4_*` alongside is an **additive** migration, so it deploys
+   without downtime (see `docs/operations.md`).
+2. **`sf9_report.COL_TERM = {1: 8, 2: 9, 3: 10}`** — the official SF9 has
+   three term columns. A four-quarter form is a *different DepEd
+   template*, not a config change.
+3. **`sf9_report.TERM_FLAG_PLACE = {1: 100, 2: 10, 3: 1}`** — the
+   block-out helper is a 3-digit code (§35 notes); a fourth term has
+   nowhere to go in it.
+4. **UI laid out as three**: the adviser-comment boxes on Enrollment, and
+   the term card.
+
+**Scope: days, not a rewrite** — and note that a reversion ships new
+official SF9/SF10 templates anyway, so item 2 is work the reversion
+creates rather than overhead this design imposes. Historical three-term
+years stay correct because `learner_academic_records` freezes them as
+**text, not references** (§38) — designed for subject renames, but it
+protects against this too.
+
 ## Current status
 
 - [x] Stack decided (see above)
