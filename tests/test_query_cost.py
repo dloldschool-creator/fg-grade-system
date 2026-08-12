@@ -143,6 +143,30 @@ def test_batch_sf9_costs_far_less_per_learner_than_a_single_card(session, roster
     )
 
 
+def test_sf4_costs_a_fixed_number_of_queries_for_the_whole_school(session):
+    """SF4 aggregates every learner in the school, so a per-learner query
+    would be the worst offender in the app: 1,200 learners at ~85ms is
+    minutes. The count must not depend on how many learners exist."""
+    from app.attendance_service import months_with_class_days
+    from app.models.organization import SchoolYear
+    from app.sf4_report import build_sf4_workbook
+
+    school_year = session.query(SchoolYear).first()
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no months with class days")
+    year, month = months[0]
+
+    build_sf4_workbook(session, school_year.id, year, month)  # warm the metadata
+    with QueryCounter() as counter:
+        build_sf4_workbook(session, school_year.id, year, month)
+
+    assert counter.count <= 15, (
+        f"SF4 issued {counter.count} queries; it should be a flat handful "
+        "regardless of school size"
+    )
+
+
 def test_connection_pool_is_sized_for_concurrent_teachers():
     """~40 teachers share this pool, and Streamlit runs each session in
     its own thread. The old 5+10 default queued requests as soon as a

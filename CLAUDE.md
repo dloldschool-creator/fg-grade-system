@@ -971,6 +971,35 @@ those formulas with values written by our own grading engine via
       calendar. Documented in the runbook, since "a teacher can't type a
       grade" will otherwise be diagnosed as a bug.
       `pytest tests/` is 299.
+- [x] **SF4 (Monthly Learners' Movement and Attendance)** built —
+      `app/sf4_report.py`, `app/admin_pages/sf4.py`, **Excel only** (no
+      PDF: it's submitted as a file, so the conversion would be dead
+      weight). School-wide, one row per Track/Strand: rows 12-22 Grade 11,
+      23 total, 24-34 Grade 12, 35 total, 36 grand total; every figure an
+      M/F/T triple.
+      **Why SF4 could be built while SF5 waits.** The official SHS forms
+      are semester-shaped and this school runs three terms. SF4 reports a
+      *month* — headcounts on the last class day, movements dated inside
+      the month, attendance over the month's class days — none of which
+      depends on how the year is divided, so nothing is reinterpreted.
+      Its one period-shaped field, "Semester", carries the term the month
+      falls in. **SF5-A and SF5-B are deliberately not built**: both have
+      1st/2nd-semester summary tables that cannot be filled honestly from
+      three terms, and the user is waiting on the division's updated
+      form. Their templates are in `sf-templates/` ready for then.
+      **The percentage trap resurfaced and was caught by inspecting the
+      output, not by a test**: `Tally.total` sums male+female, right for
+      counts and for a daily average, wrong for a percentage — 62.5% male
+      and 100% female came out as 162.5%. Percentages now set
+      `total_override` and recompute from the underlying days. SF2 hit
+      exactly this and reported 200%.
+      Cost is **11 queries flat** for the whole school (~1s), because
+      every fetch is one `IN (...)` — a per-learner query here would be
+      the worst offender in the app at 1,200 learners.
+      `tests/test_sf4_report.py` pins the counting rules against plain
+      collections (no database), including that a mid-month transfer-out
+      is *not* registered at month end even though SF2 still lists them
+      that month (§32), and that LATE/CUTTING count as present (§30).
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

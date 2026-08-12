@@ -22,6 +22,7 @@ from app.admin_pages import (
     section_offerings,
     sections,
     sf2,
+    sf4,
     sf9,
     subject_catalog,
     subject_profiles,
@@ -90,6 +91,9 @@ GROUPS = [
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
             (sf2, "SF2", "📄", "sf2",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            # School-wide rather than per-section, and signed by the
+            # School Head — so no adviser entry.
+            (sf4, "SF4", "📈", "sf4", ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
             (term_cards, "Term Cards", "🎫", "term-cards",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
             (awards, "Awards", "🏆", "awards",
