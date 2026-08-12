@@ -31,6 +31,7 @@ from app.admin_pages import (
     users,
 )
 from app.auth import change_password_form, get_current_user, login_form, logout
+from app.version import version_line
 
 st.set_page_config(page_title="FGNMHS Grading System", layout="wide")
 
@@ -183,6 +184,10 @@ else:
         if st.button("Log out"):
             logout()
             st.rerun()
+        # Which commit is live and how long it has been up — so "did my
+        # push deploy?" is answerable at a glance rather than by hunting
+        # for a changed word in the UI.
+        st.caption(version_line())
 
     navigation = build_navigation(current_user)
 

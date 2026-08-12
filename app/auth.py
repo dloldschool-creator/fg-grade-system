@@ -248,6 +248,12 @@ def login_form() -> None:
             "Use the account issued to you by the school. If you were given a "
             "temporary password, you can change it from the sidebar once signed in."
         )
+        # Also shown here, not just in the sidebar: after a push the first
+        # thing you see is this page, and checking whether the deploy
+        # landed shouldn't require signing in first.
+        from app.version import version_line
+
+        st.caption(version_line())
 
     if not submitted:
         return

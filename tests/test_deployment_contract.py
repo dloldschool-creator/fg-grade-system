@@ -5,6 +5,7 @@ environment-variable name is discovered at 7am on the morning the app is
 supposed to be live, by someone who cannot read the source to check.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -86,13 +87,47 @@ def test_no_os_level_dependency_crept_back_in():
     """The whole deployment story is "pip install and run". Shelling out
     to an external binary would quietly reintroduce the packaging problem
     that removing LibreOffice solved — and it would fail on the host
-    rather than here."""
+    rather than here.
+
+    Parsed rather than grepped: a docstring is allowed to *explain* the
+    rule without tripping it, which a substring search cannot tell apart
+    from breaking it.
+    """
+    import ast
+
+    banned = {"subprocess", "os.system", "popen"}
     offenders = []
     for path in (ROOT / "app").rglob("*.py"):
-        source = path.read_text(encoding="utf-8")
-        code = "\n".join(
-            line for line in source.splitlines() if not line.lstrip().startswith("#")
-        )
-        if "subprocess" in code or "soffice" in code:
-            offenders.append(path.relative_to(ROOT).as_posix())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                names = {(node.module or "").split(".")[0]}
+            elif isinstance(node, ast.Attribute):
+                names = {node.attr}
+            else:
+                continue
+            if names & banned:
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}: {sorted(names & banned)}")
+
+    # `soffice` only ever appears as a string, so it still needs a text
+    # check — but only outside docstrings and comments.
+    for path in (ROOT / "app").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if "soffice" in node.value and not _is_docstring(tree, node):
+                    offenders.append(f"{path.relative_to(ROOT).as_posix()}: soffice literal")
+
     assert not offenders, f"external-process dependency in {offenders}"
+
+
+def _is_docstring(tree, node) -> bool:
+    for parent in ast.walk(tree):
+        body = getattr(parent, "body", None)
+        if isinstance(body, list) and body:
+            first = body[0]
+            if isinstance(first, ast.Expr) and first.value is node:
+                return True
+    return False
