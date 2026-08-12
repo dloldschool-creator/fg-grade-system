@@ -2,7 +2,7 @@ from datetime import date
 
 import streamlit as st
 
-from app.admin_pages._helpers import flash, get_session, render_flashes
+from app.admin_pages._helpers import flash, get_session, render_flashes, section_picker
 from app.auth import require_role
 from app.award_service import clear_award_override, compute_award_eligibility, set_award_override
 from app.certificate_generator import (
@@ -10,7 +10,6 @@ from app.certificate_generator import (
     generate_award_certificate,
     generate_award_certificates_2up,
 )
-from app.models.academic_structure import Section
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
 from app.models.enums import AwardResult, AwardScope
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
@@ -176,22 +175,12 @@ def render() -> None:
         )
         school_year = sy_by_id[sy_choice]
 
-        section_query = session.query(Section).filter_by(school_year_id=sy_choice)
-        if adviser_user_id is not None:
-            section_query = section_query.filter_by(adviser_user_id=adviser_user_id)
-        sections = section_query.order_by(Section.name).all()
-        if not sections:
-            st.warning(
-                "You're not the adviser of any section for this school year yet."
-                if adviser_user_id
-                else "No sections for this school year yet."
-            )
-            return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
+        section = section_picker(
+            session, sy_choice, key="awards", adviser_user_id=adviser_user_id
         )
-        section = section_by_id[section_choice]
+        if section is None:
+            return
+        section_choice = section.id
         adviser = session.get(User, section.adviser_user_id) if section.adviser_user_id else None
 
         policy_versions = (

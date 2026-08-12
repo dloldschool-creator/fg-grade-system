@@ -3,7 +3,7 @@ import calendar as _calendar
 import pandas as pd
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes
+from app.admin_pages._helpers import get_session, render_flashes, section_picker
 from app.attendance_service import (
     class_days_in_month,
     get_month_status,
@@ -12,7 +12,6 @@ from app.attendance_service import (
     summarize_month,
 )
 from app.auth import require_role
-from app.models.academic_structure import Section
 from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
@@ -82,21 +81,13 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        sections_query = session.query(Section).filter_by(school_year_id=sy_choice)
-        if adviser_scoped:
-            sections_query = sections_query.filter_by(adviser_user_id=current_user.id)
-        sections = sections_query.order_by(Section.name).all()
-        if not sections:
-            st.warning(
-                "You're not the adviser of any section for this school year yet."
-                if adviser_scoped
-                else "No sections for this school year yet."
-            )
-            return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
+        section = section_picker(
+            session, sy_choice, key="sf2",
+            adviser_user_id=current_user.id if adviser_scoped else None,
         )
+        if section is None:
+            return
+        section_choice = section.id
 
         months = months_with_class_days(session, sy_choice)
         if not months:
@@ -152,7 +143,7 @@ def render() -> None:
 
         workbook = build_sf2_workbook(session, section_choice, sy_choice, year, month)
         xlsx_bytes = workbook_to_bytes(workbook)
-        stem = f"SF2_{section_by_id[section_choice].name.replace(' ', '')}_{year}-{month:02d}"
+        stem = f"SF2_{section.name.replace(' ', '')}_{year}-{month:02d}"
 
         col_a, col_b = st.columns(2)
         with col_a:

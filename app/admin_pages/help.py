@@ -205,12 +205,6 @@ BY_ROLE = {
                 "SF9, SF2 and Term Cards are all available, including the "
                 "whole-section SF9 print. Printing changes nothing.",
             ),
-            (
-                "If you also advise a section, you edit normally",
-                "The read-only limit follows the account, not the title. "
-                "Holding School Head alongside Adviser or Registrar gives you "
-                "that role's editing rights as usual.",
-            ),
         ],
     ),
     "SUPER_ADMIN": (

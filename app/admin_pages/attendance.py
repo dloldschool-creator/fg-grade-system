@@ -4,7 +4,13 @@ import pandas as pd
 import streamlit as st
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    flash,
+    get_session,
+    render_flashes,
+    section_picker,
+    try_commit,
+)
 from app.attendance_service import (
     bump_version,
     class_days_in_month,
@@ -20,7 +26,6 @@ from app.attendance_service import (
     validate_month,
 )
 from app.auth import require_role
-from app.models.academic_structure import Section
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
@@ -264,21 +269,13 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        sections_query = session.query(Section).filter_by(school_year_id=sy_choice)
-        if adviser_scoped:
-            sections_query = sections_query.filter_by(adviser_user_id=current_user.id)
-        sections = sections_query.order_by(Section.name).all()
-        if not sections:
-            st.warning(
-                "You're not the adviser of any section for this school year yet."
-                if adviser_scoped
-                else "No sections for this school year yet."
-            )
-            return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
+        section = section_picker(
+            session, sy_choice, key="attendance",
+            adviser_user_id=current_user.id if adviser_scoped else None,
         )
+        if section is None:
+            return
+        section_choice = section.id
 
         months = months_with_class_days(session, sy_choice)
         if not months:
@@ -326,7 +323,7 @@ def render() -> None:
         )
 
         st.divider()
-        st.subheader(f"{_calendar.month_name[month]} {year} — {section_by_id[section_choice].name}")
+        st.subheader(f"{_calendar.month_name[month]} {year} — {section.name}")
 
         dataframe = _grid_dataframe(session, roster, class_days)
         if editable:

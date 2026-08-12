@@ -4,11 +4,16 @@ import streamlit as st
 
 from app import audit_service
 from app.academic_record_service import capture_academic_record, get_academic_record
-from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    flash,
+    get_session,
+    render_flashes,
+    section_picker,
+    try_commit,
+)
 from app.auth import require_role
 from app.grading_service import recompute_enrollment_grades
 from app.report_card import build_learning_area_rows, load_report_context
-from app.models.academic_structure import Section
 from app.models.enums import CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
 from app.models.grades import (
     AnnualGradeSummary,
@@ -311,22 +316,13 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        sections_query = session.query(Section).filter_by(school_year_id=sy_choice)
-        if adviser_scoped:
-            sections_query = sections_query.filter_by(adviser_user_id=current_user.id)
-        sections = sections_query.order_by(Section.name).all()
-        if not sections:
-            msg = (
-                "You're not the adviser of any section for this school year yet."
-                if adviser_scoped
-                else "No sections for this school year yet."
-            )
-            st.warning(msg)
-            return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
+        section = section_picker(
+            session, sy_choice, key="grade_summary",
+            adviser_user_id=current_user.id if adviser_scoped else None,
         )
+        if section is None:
+            return
+        section_choice = section.id
 
         enrollments = (
             session.query(Enrollment)

@@ -5,6 +5,7 @@ from app.admin_pages._helpers import (
     flush_or_rollback,
     get_session,
     render_flashes,
+    section_picker,
     try_commit,
     try_delete,
 )
@@ -108,15 +109,13 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        sections = session.query(Section).filter_by(school_year_id=sy_choice).order_by(Section.name).all()
-        if not sections:
-            st.warning("No sections for this school year yet — create one on the Sections page.")
-            return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
+        section = section_picker(
+            session, sy_choice, key="section_offerings",
+            empty_message="No sections for this school year yet — create one on the Sections page.",
         )
-        section = section_by_id[section_choice]
+        if section is None:
+            return
+        section_choice = section.id
 
         terms = session.query(Term).filter_by(school_year_id=sy_choice).order_by(Term.term_number).all()
         term_by_id = {t.id: t for t in terms}

@@ -8,8 +8,10 @@ import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
+from app.models.academic_structure import GradeLevel, Section, Strand
 
 _FLASH_KEY = "_flash_messages"
+ALL = "— all —"
 
 
 @contextmanager
@@ -19,6 +21,108 @@ def get_session():
         yield session
     finally:
         session.close()
+
+
+def section_picker(
+    session,
+    school_year_id,
+    *,
+    key: str,
+    adviser_user_id=None,
+    label: str = "Section",
+    empty_message: str | None = None,
+):
+    """Grade level and strand filters, then a section dropdown.
+
+    One implementation shared by every page that picks a section, so the
+    filters behave identically everywhere and a page added later gets
+    them for free.
+
+    **A filter only appears when it would narrow anything.** With one
+    grade level in the list a "Grade level" dropdown is noise, and the
+    school has 30 sections across 2 grade levels and 7 strands — the
+    filters exist for that, not for a three-section test database.
+
+    Returns the chosen `Section`, or None when there is nothing to pick,
+    having already shown the reason.
+    """
+    query = session.query(Section).filter_by(school_year_id=school_year_id)
+    if adviser_user_id is not None:
+        query = query.filter_by(adviser_user_id=adviser_user_id)
+    sections = query.order_by(Section.name).all()
+
+    if not sections:
+        st.warning(
+            empty_message
+            or (
+                "You're not the adviser of any section for this school year yet."
+                if adviser_user_id is not None
+                else "No sections for this school year yet."
+            )
+        )
+        return None
+
+    grade_levels = {
+        g.id: g for g in session.query(GradeLevel).order_by(GradeLevel.display_order).all()
+    }
+    strands = {s.id: s for s in session.query(Strand).order_by(Strand.name).all()}
+
+    present_grades = [
+        g for g in grade_levels.values() if any(s.grade_level_id == g.id for s in sections)
+    ]
+    present_strands = [
+        s for s in strands.values() if any(sec.strand_id == s.id for sec in sections)
+    ]
+
+    filters = []
+    if len(present_grades) > 1:
+        filters.append("grade")
+    if len(present_strands) > 1:
+        filters.append("strand")
+
+    grade_choice = strand_choice = ALL
+    if filters:
+        columns = st.columns(len(filters) + 1)
+        index = 0
+        if "grade" in filters:
+            grade_choice = columns[index].selectbox(
+                "Grade level",
+                options=[ALL] + [g.id for g in present_grades],
+                format_func=lambda v: ALL if v == ALL else grade_levels[v].name,
+                key=f"{key}_grade",
+            )
+            index += 1
+        if "strand" in filters:
+            strand_choice = columns[index].selectbox(
+                "Strand",
+                options=[ALL] + [s.id for s in present_strands],
+                format_func=lambda v: ALL if v == ALL else strands[v].name,
+                key=f"{key}_strand",
+            )
+            index += 1
+        target = columns[index]
+    else:
+        target = st
+
+    visible = [
+        s
+        for s in sections
+        if (grade_choice == ALL or s.grade_level_id == grade_choice)
+        and (strand_choice == ALL or s.strand_id == strand_choice)
+    ]
+    if not visible:
+        target.selectbox(label, options=["— none match —"], disabled=True, key=f"{key}_none")
+        st.info("No sections match those filters.")
+        return None
+
+    by_id = {s.id: s for s in visible}
+    chosen = target.selectbox(
+        label,
+        options=[s.id for s in visible],
+        format_func=lambda v: by_id[v].name,
+        key=f"{key}_section",
+    )
+    return by_id[chosen]
 
 
 def flash(kind: str, message: str) -> None:

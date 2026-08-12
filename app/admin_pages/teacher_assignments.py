@@ -2,9 +2,8 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, try_commit
+from app.admin_pages._helpers import get_session, render_flashes, section_picker, try_commit
 from app.auth import require_role
-from app.models.academic_structure import Section
 from app.models.organization import SchoolYear, Term
 from app.models.rbac import Role, User, UserRole
 from app.models.subjects import SectionSubjectOffering, Subject, TeacherAssignment
@@ -29,14 +28,10 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        sections = session.query(Section).filter_by(school_year_id=sy_choice).order_by(Section.name).all()
-        if not sections:
-            st.warning("No sections for this school year yet.")
+        section = section_picker(session, sy_choice, key="teacher_assignments")
+        if section is None:
             return
-        section_by_id = {s.id: s for s in sections}
-        section_choice = st.selectbox(
-            "Section", options=[s.id for s in sections], format_func=lambda v: section_by_id[v].name
-        )
+        section_choice = section.id
 
         teachers = (
             session.query(User)
