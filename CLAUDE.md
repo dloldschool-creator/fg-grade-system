@@ -106,6 +106,40 @@ those formulas with values written by our own grading engine via
     Excel workbook actually operates. Do not re-add assessment-level entry
     without discussion.
 
+## The deployed host runs a different Python from local dev
+
+**Host: Python 3.14. This machine: 3.13.** That gap took the live app
+down on 2026-08-12 and everything had passed locally first, so treat
+"it imports fine here" as weak evidence about the host.
+
+What happened: `app/admin_pages/_helpers.py` gained
+`from app.models.academic_structure import ...` at module load. Every
+page imports `_helpers`, so it became the **first** thing to initialise
+`app.models` — and `app/models/__init__.py` imports its own submodules
+while still initialising itself. On 3.14 that re-entry executed a model
+module twice, and the second `class GradeLevel(...)` raised
+`InvalidRequestError: Table 'grade_levels' is already defined for this
+MetaData instance`. Nothing rendered; the app was dead on every request.
+
+Two rules that came out of it:
+
+1. **`_helpers.py` must not import `app.models` at module load.** It is
+   imported by every page, so anything it imports at load time dictates
+   the whole app's import order. `section_picker` imports its models
+   *inside the function* for exactly this reason — don't "tidy" that back
+   to the top.
+2. **`server.fileWatcherType = "none"`** in `.streamlit/config.toml`. The
+   watcher re-imports local modules it believes have changed, and
+   re-executing a model module produces the same error. Deployed files
+   never change while running, so the watcher is pure risk there. The
+   cost is local only: restart Streamlit after editing a module instead
+   of relying on hot reload.
+
+The lasting fix is to **pin the host to the same Python version as
+local** (Streamlit Cloud takes a Python version in its advanced deploy
+settings). Until that is done, an import-order change is a deployment
+risk that local tests cannot catch.
+
 ## If DepEd reverts to four quarters
 
 Asked 2026-08-12; audited then, so trust this map over a fresh guess.
