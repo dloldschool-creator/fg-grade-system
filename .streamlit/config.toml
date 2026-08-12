@@ -79,6 +79,16 @@ borderColor = "#DDE3EC"
 # mistaken upload can cost.
 maxUploadSize = 25
 
+# Off because the watcher re-imports local modules it thinks have
+# changed, and re-executing a model module re-registers its table on the
+# same MetaData — which fails outright with "Table is already defined for
+# this MetaData instance" and takes the whole app down. On a deployed
+# host the files never change while running, so the watcher only carries
+# that risk. Locally it means restarting Streamlit after editing a module
+# rather than relying on hot reload; the script itself still re-runs on
+# every interaction as normal.
+fileWatcherType = "none"
+
 [browser]
 # Usage stats are off by default in recent versions; stated explicitly
 # because this app handles learner records.

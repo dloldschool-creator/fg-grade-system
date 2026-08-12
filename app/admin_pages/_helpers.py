@@ -8,7 +8,6 @@ import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
-from app.models.academic_structure import GradeLevel, Section, Strand
 
 _FLASH_KEY = "_flash_messages"
 ALL = "— all —"
@@ -45,7 +44,19 @@ def section_picker(
 
     Returns the chosen `Section`, or None when there is nothing to pick,
     having already shown the reason.
+
+    **The model imports are deliberately inside the function.** This module
+    is imported by every page, so importing models here at module load made
+    it the first thing to initialise `app.models` — and that package's
+    `__init__` imports its own submodules while still initialising itself.
+    Python 3.14 (which the deployed host runs) resolves that re-entry
+    differently from 3.13, mapping each table twice and failing with
+    "Table is already defined for this MetaData instance". Importing at
+    call time keeps `_helpers` free of model imports, which is how it was
+    before the section filters were added.
     """
+    from app.models.academic_structure import GradeLevel, Section, Strand
+
     query = session.query(Section).filter_by(school_year_id=school_year_id)
     if adviser_user_id is not None:
         query = query.filter_by(adviser_user_id=adviser_user_id)
