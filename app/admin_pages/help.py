@@ -20,6 +20,16 @@ from app.auth import get_current_user
 # misunderstood — each one is a rule where "the obvious thing" is wrong.
 UNIVERSAL = [
     (
+        "The sidebar is grouped by what you're doing",
+        "**Overview** and **Grades & Attendance** are the day-to-day work. "
+        "**Forms & Reports** is where every printable document lives. "
+        "**Setup** is in dependency order — you cannot make a Section without "
+        "an Academic Structure, or a Section Offering without a Section — so "
+        "when setting up a new school year, work straight down that list.\n\n"
+        "You only see the pages your role allows, so your sidebar will be "
+        "shorter than someone else's. That is not a fault.",
+    ),
+    (
         "A blank is not a zero",
         "Anywhere a grade or an attendance day is blank, it means **nobody has "
         "encoded it yet** — not that the learner scored nothing. Never type 0 to "
@@ -109,6 +119,15 @@ BY_ROLE = {
                 "Super Admin can reopen it, and they must give a reason.",
             ),
             (
+                "Recompute after grades change, before you print",
+                "Grade Summary's figures — Final Grades, the General Average, "
+                "whether a record counts as COMPLETE — are stored, not worked "
+                "out fresh each time you look. They refresh automatically when "
+                "a teacher saves, but if something looks stale after an "
+                "unusual change, press **Recompute**. It only re-reads what is "
+                "already encoded; it never invents a grade.",
+            ),
+            (
                 "Printing a whole class",
                 "The SF9 page has **Print the whole section** — one PDF, one "
                 "card per learner. It warns you about anyone whose record isn't "
@@ -138,6 +157,23 @@ BY_ROLE = {
                 "as a movement with its effective date. That updates their "
                 "status *and* makes the attendance and SF2 rules work — editing "
                 "the status alone doesn't.",
+            ),
+            (
+                "Importing a learner does not enrol them",
+                "The learner import creates the person's record only. Putting "
+                "them into a section for the school year is a separate step on "
+                "the **Enrollment** page, which has a multiselect for doing a "
+                "whole batch at once. A learner who is imported but not "
+                "enrolled appears in the masterlist and nowhere else — no "
+                "gradebook, no SF2, no report card.",
+            ),
+            (
+                "Section and subject names must match exactly on an import",
+                "The import file is checked against what is already in the "
+                "system, and a near-miss is rejected rather than guessed at. "
+                "The template's **Reference** sheet lists the exact names — "
+                "ask the ICT Coordinator to regenerate it after new sections "
+                "are created, or it will be listing yesterday's.",
             ),
             (
                 "Imported grades arrive as DRAFT",
@@ -208,6 +244,63 @@ BY_ROLE = {
                 "recalculate a finished year on their own.",
             ),
             (
+                "\"It's still referenced elsewhere\" — how deleting works",
+                "Nothing that is in use can be deleted, and that is deliberate: "
+                "a learner's grades and attendance would go with them. The "
+                "message names what you tried to delete, not what is holding "
+                "it, so work down this list:\n\n"
+                "- **Strand or track** — held by a Subject Profile or a "
+                "Section. Delete the profile first (Subject Profiles → Delete "
+                "profile), or leave the strand and just untick **Active**.\n"
+                "- **Section** — held by its Section Offerings, attendance "
+                "months, and any learners enrolled. Move the learners out "
+                "first.\n"
+                "- **Subject** — held by any Section Offering that uses it.\n"
+                "- **User** — held by their roles, teaching assignments, and "
+                "any section they advise. Clear those three and the delete "
+                "works; everything historical about them (who submitted a "
+                "grade, who finalized a month) is kept and simply stops "
+                "naming them.\n"
+                "- **Learner** — see below. Do not delete a real one.",
+            ),
+            (
+                "Untick Active instead of deleting, where you can",
+                "For anything with an **Active** checkbox — tracks, strands, "
+                "subjects — unticking it is the intended way to retire it. It "
+                "disappears from the dropdowns for new records while "
+                "everything that already refers to it keeps working. Deleting "
+                "is for something created by mistake five minutes ago.\n\n"
+                "It also survives a re-seed: the setup script adds back any "
+                "missing standard row, so a deleted strand can reappear, while "
+                "a deactivated one stays deactivated.",
+            ),
+            (
+                "Never delete a real learner",
+                "Use the workflow instead — log a movement (transferred out, "
+                "dropped, NLS) on the Enrollment page. Their history stays "
+                "intact and the forms report them correctly for the month they "
+                "left. Deleting is only for test records, and needs a script "
+                "run by the ICT Coordinator.",
+            ),
+            (
+                "Fill in Subject Profiles before Section Offerings",
+                "\"Seed from profile\" on Section Offerings copies whatever "
+                "the matching profile contains. If the profile is empty it "
+                "copies nothing, silently, and you are left adding every "
+                "subject to every section by hand. Set each profile up once "
+                "per grade level and track/strand, then seeding a section is "
+                "one click.",
+            ),
+            (
+                "Give every strand a distinct name",
+                "Two strands may share a name as far as the database is "
+                "concerned — only the code has to be unique. But the forms "
+                "print the *name*, so two strands called the same thing are "
+                "indistinguishable on SF9 and SF2, and SF4 would report them "
+                "as one line to the division. If two specializations are "
+                "genuinely different, make their names say so.",
+            ),
+            (
                 "One role still has no screens",
                 "**Attendance Encoder** is in the role list because the "
                 "specification defines it, but nothing is built for it yet — "
@@ -247,9 +340,9 @@ def render() -> None:
     current_user = get_current_user()
     st.title("Quick Guide")
     st.caption(
-        "The things worth knowing that the screens don't make obvious. "
-        "Everything else is meant to be self-explanatory — if it isn't, say so "
-        "and it should be fixed rather than documented."
+        "Think of this as a quick cheat sheet for the parts of the pages that "
+        "aren't super obvious. Everything else is pretty self-explanatory. Let "
+        "the admin know if you get stuck on anything! -DL"
     )
     render_flashes()
 
