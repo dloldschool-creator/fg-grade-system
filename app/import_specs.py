@@ -22,7 +22,7 @@ from app.import_pipeline import (
     parse_lrn,
 )
 from app.models.academic_structure import Section
-from app.models.enums import GradeWorkflowStatus, ImportJobType, Sex
+from app.models.enums import EnrollmentStatus, GradeWorkflowStatus, ImportJobType, Sex
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
 from app.models.organization import Term
@@ -39,6 +39,10 @@ LEARNER_COLUMNS = [
     ColumnSpec("sex", "Sex", True, ("gender",)),
     ColumnSpec("birthdate", "Birthdate", True, ("dateofbirth", "dob", "birthday")),
     ColumnSpec("lrn", "LRN", False, ("learnerreferencenumber",)),
+    # Optional. Filled in, the learner is enrolled into that section in
+    # one step; left blank, they are created and enrolled later on the
+    # Enrollment page, which is what this import did before.
+    ColumnSpec("section", "Section", False, ("sectionname", "class")),
 ]
 
 
@@ -51,13 +55,39 @@ def _parse_sex(raw: str):
     return None, f"{raw!r} is not MALE or FEMALE"
 
 
-def validate_learners(session, rows: list[dict], mapping: dict) -> ValidationResult:
+def _section_lookup(session, school_year_id) -> tuple[dict, set]:
+    """Sections for the year, keyed by upper-cased name.
+
+    A name is only unique per grade level, so the same name may legally
+    exist in both Grade 11 and Grade 12. Those names are collected
+    separately and rejected rather than guessed at — silently enrolling a
+    Grade 11 learner into the Grade 12 section of the same name would be
+    very hard to notice afterwards.
+    """
+    by_name: dict[str, object] = {}
+    ambiguous: set[str] = set()
+    if school_year_id is None:
+        return by_name, ambiguous
+    for section in session.query(Section).filter_by(school_year_id=school_year_id).all():
+        key = (section.name or "").strip().upper()
+        if key in by_name:
+            ambiguous.add(key)
+        by_name[key] = section
+    return by_name, ambiguous
+
+
+def validate_learners(
+    session, rows: list[dict], mapping: dict, *, school_year_id=None
+) -> ValidationResult:
     result = ValidationResult()
 
     existing_lrns = {
         lrn for (lrn,) in session.query(Learner.lrn).filter(Learner.lrn.isnot(None)).all()
     }
     seen_in_file: dict[str, int] = {}
+    # Loaded once for the whole file, not per row — a 1,200-row masterlist
+    # checked one query at a time would take minutes.
+    sections_by_name, ambiguous_names = _section_lookup(session, school_year_id)
 
     for row in rows:
         number = row.get("__row__")
@@ -98,6 +128,30 @@ def validate_learners(session, rows: list[dict], mapping: dict) -> ValidationRes
             else:
                 seen_in_file[lrn] = number
 
+        # Optional. Left blank, the learner is created but not enrolled —
+        # exactly what the import did before this column existed.
+        section = None
+        raw_section = (row.get("section") or "").strip()
+        if raw_section:
+            if school_year_id is None:
+                result.errors.append(
+                    RowError(number, "Section", "choose a school year above to enrol into a section")
+                )
+            elif raw_section.upper() in ambiguous_names:
+                result.errors.append(
+                    RowError(
+                        number, "Section",
+                        f"more than one section is called {raw_section!r} this school year — "
+                        "rename one of them so they can be told apart",
+                    )
+                )
+            else:
+                section = sections_by_name.get(raw_section.upper())
+                if section is None:
+                    result.errors.append(
+                        RowError(number, "Section", f"unknown section {raw_section!r}")
+                    )
+
         if len(result.errors) == errors_before:
             result.parsed.append(
                 {
@@ -109,6 +163,9 @@ def validate_learners(session, rows: list[dict], mapping: dict) -> ValidationRes
                     "sex": sex,
                     "birthdate": birthdate,
                     "lrn": lrn,
+                    "section_id": section.id if section else None,
+                    "grade_level_id": section.grade_level_id if section else None,
+                    "school_year_id": school_year_id if section else None,
                 }
             )
     return result
@@ -116,15 +173,31 @@ def validate_learners(session, rows: list[dict], mapping: dict) -> ValidationRes
 
 def commit_learners(session, parsed: list[dict], user_id=None) -> int:
     for row in parsed:
+        learner = Learner(
+            last_name=row["last_name"],
+            first_name=row["first_name"],
+            middle_name=row["middle_name"],
+            extension_name=row["extension_name"],
+            sex=row["sex"],
+            birthdate=row["birthdate"],
+            lrn=row["lrn"],
+        )
+        session.add(learner)
+
+        if not row.get("section_id"):
+            continue
+        # This codebase declares no ORM relationship() between models, so
+        # SQLAlchemy cannot infer that the learner must be inserted before
+        # the enrollment that references it by a bare FK column. Flushing
+        # here makes the generated id available and fixes the insert order.
+        session.flush()
         session.add(
-            Learner(
-                last_name=row["last_name"],
-                first_name=row["first_name"],
-                middle_name=row["middle_name"],
-                extension_name=row["extension_name"],
-                sex=row["sex"],
-                birthdate=row["birthdate"],
-                lrn=row["lrn"],
+            Enrollment(
+                learner_id=learner.id,
+                school_year_id=row["school_year_id"],
+                grade_level_id=row["grade_level_id"],
+                section_id=row["section_id"],
+                enrollment_status=EnrollmentStatus.ENROLLED,
             )
         )
     return len(parsed)
@@ -286,12 +359,14 @@ LEARNER_IMPORT = ImportSpec(
     job_type=ImportJobType.LEARNERS,
     label="Learners",
     description=(
-        "The learner masterlist. Creates new learner records; it does not "
-        "enrol them into a section — do that on the Enrollment page afterwards."
+        "The learner masterlist. Fill in the optional Section column and each "
+        "learner is enrolled at the same time; leave it blank and they are "
+        "created only, to be enrolled later on the Enrollment page."
     ),
     columns=LEARNER_COLUMNS,
     validate=validate_learners,
     commit=commit_learners,
+    needs_school_year=True,
 )
 
 TERM_GRADE_IMPORT = ImportSpec(

@@ -120,7 +120,10 @@ def _instructions_sheet(workbook, spec, key):
                "not become 1.07041E+11.",
         "sex": "MALE or FEMALE. Choose from the dropdown.",
         "birthdate": "YYYY-MM-DD, or a real Excel date. Impossible dates are rejected.",
-        "section": "Must match a section name in the system exactly. See the Reference sheet.",
+        "section": "Optional on the learner sheet — fill it in and the learner is "
+                   "enrolled at the same time, leave it blank and they are created "
+                   "only. Required on the grades sheet. Must match a section name "
+                   "exactly; see the Reference sheet.",
         "subject": "Must match a subject name exactly, and must be offered to that "
                    "section in that term. See the Reference sheet.",
         "term": "1, 2 or 3.",

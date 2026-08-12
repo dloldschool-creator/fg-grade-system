@@ -185,6 +185,7 @@ def _learner_rows(**overrides):
         "sex": "MALE",
         "birthdate": "2009-01-15",
         "lrn": "",
+        "section": "",
     }
     row.update(overrides)
     return [row]
@@ -293,6 +294,73 @@ def test_term_grades_reject_a_subject_not_offered_that_term(session):
     result = validate_term_grades(session, rows, {})
     assert not result.ok
     assert any("is not offered" in e.message for e in result.errors)
+
+
+# --- Enrolling from the learner import -------------------------------------
+
+
+def test_a_blank_section_creates_the_learner_without_enrolling(session):
+    """The column is optional, and leaving it blank must behave exactly as
+    the import did before it existed."""
+    result = validate_learners(session, _learner_rows(section=""), {}, school_year_id=None)
+    assert result.ok, result.error_dicts()
+    assert result.parsed[0]["section_id"] is None
+
+
+def test_an_unknown_section_is_rejected(session):
+    from app.models.organization import SchoolYear
+
+    school_year = session.query(SchoolYear).first()
+    if school_year is None:
+        pytest.skip("no school year")
+    result = validate_learners(
+        session, _learner_rows(section="NO SUCH SECTION"), {}, school_year_id=school_year.id
+    )
+    assert not result.ok
+    assert any("unknown section" in e.message for e in result.errors)
+
+
+def test_a_section_without_a_school_year_is_rejected(session):
+    """The school year is chosen on the page, not repeated on 1,200 rows.
+    A file naming a section with no year selected cannot be resolved, and
+    guessing which year to enrol into would be worse than refusing."""
+    result = validate_learners(
+        session, _learner_rows(section="ANY"), {}, school_year_id=None
+    )
+    assert not result.ok
+    assert any("school year" in e.message for e in result.errors)
+
+
+def test_a_real_section_carries_its_grade_level(session):
+    """The grade level comes from the section rather than the file, so the
+    two can never disagree."""
+    from app.models.academic_structure import Section
+    from app.models.organization import SchoolYear
+
+    school_year = session.query(SchoolYear).first()
+    if school_year is None:
+        pytest.skip("no school year")
+    section = session.query(Section).filter_by(school_year_id=school_year.id).first()
+    if section is None:
+        pytest.skip("no sections")
+
+    result = validate_learners(
+        session, _learner_rows(section=section.name), {}, school_year_id=school_year.id
+    )
+    assert result.ok, result.error_dicts()
+    row = result.parsed[0]
+    assert row["section_id"] == section.id
+    assert row["grade_level_id"] == section.grade_level_id
+    assert row["school_year_id"] == school_year.id
+
+
+def test_the_section_column_is_optional_and_auto_detected():
+    from app.import_pipeline import suggest_mapping
+
+    column = next(c for c in LEARNER_IMPORT.columns if c.field == "section")
+    assert not column.required
+    for header in ("Section", "Section Name", "Class"):
+        assert suggest_mapping([header], LEARNER_IMPORT).get("section") == header
 
 
 # --- Export (§52) ----------------------------------------------------------

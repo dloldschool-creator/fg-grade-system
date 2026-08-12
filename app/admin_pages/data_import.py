@@ -15,6 +15,7 @@ from app.import_pipeline import (
 )
 from app.import_specs import SPECS
 from app.models.admin import ImportJob
+from app.models.organization import SchoolYear
 
 PREVIEW_ROWS = 15
 MAX_ERRORS_SHOWN = 50
@@ -72,6 +73,23 @@ def render() -> None:
                 for column in spec.columns
             ]
         )
+
+    school_year_id = None
+    if spec.needs_school_year:
+        with get_session() as session:
+            school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
+        if school_years:
+            sy_by_id = {sy.id: sy for sy in school_years}
+            school_year_id = st.selectbox(
+                "School year to enrol into",
+                options=[sy.id for sy in school_years],
+                format_func=lambda v: sy_by_id[v].name,
+                help="Only used by the optional Section column. Learners with no "
+                "section are created without being enrolled.",
+                key=f"import_sy_{spec.job_type}",
+            )
+        else:
+            st.warning("No school years yet — create one before importing with a Section column.")
 
     uploaded = st.file_uploader(
         "Spreadsheet (.xlsx) or CSV", type=["xlsx", "xlsm", "csv"], key=f"upload_{spec.job_type}"
@@ -140,7 +158,8 @@ def render() -> None:
         return
 
     with get_session() as session:
-        result = spec.validate(session, mapped_rows, mapping)
+        extra = {"school_year_id": school_year_id} if spec.needs_school_year else {}
+        result = spec.validate(session, mapped_rows, mapping, **extra)
 
         col1, col2, col3 = st.columns(3)
         col1.metric("Rows read", len(mapped_rows))

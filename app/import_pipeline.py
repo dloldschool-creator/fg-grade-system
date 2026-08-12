@@ -80,10 +80,15 @@ class ImportSpec:
     label: str
     description: str
     columns: list[ColumnSpec]
-    # (session, rows, mapping) -> ValidationResult
+    # (session, rows, mapping) -> ValidationResult. Specs that set
+    # `needs_school_year` also take a `school_year_id` keyword.
     validate: Callable
     # (session, parsed_rows, user_id) -> int rows written
     commit: Callable
+    # Whether the page must ask which school year the file belongs to.
+    # Kept off the file itself: a school year repeated on all 1,200 rows
+    # is 1,200 chances to disagree with itself.
+    needs_school_year: bool = False
 
     @property
     def required_fields(self) -> list[str]:
