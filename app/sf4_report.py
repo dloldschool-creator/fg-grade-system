@@ -237,8 +237,20 @@ def aggregate(
             return None
         track = tracks.get(section.track_id)
         strand = strands.get(section.strand_id)
-        key = (grade_number, track.name if track else "", strand.name if strand else "")
-        return rows.setdefault(key, Sf4Row(grade_number, key[1], key[2]))
+        # Keyed on ids, never on names. Two strands may legitimately carry
+        # the same name — the school briefly had "ICT Support and Computer
+        # Programming Technologies" under two codes — and grouping by name
+        # silently merged them into one row, under-reporting the
+        # track/strand breakdown on a form filed with the division.
+        key = (grade_number, section.track_id, section.strand_id)
+        return rows.setdefault(
+            key,
+            Sf4Row(
+                grade_number,
+                track.name if track else "",
+                strand.name if strand else "",
+            ),
+        )
 
     for enrollment in enrollments:
         learner = learners.get(enrollment.learner_id)

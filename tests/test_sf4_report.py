@@ -169,6 +169,60 @@ def test_attendance_is_measured_against_eligible_days_only():
     assert rows[0].percentage().total == pytest.approx(50.0)
 
 
+def test_two_strands_sharing_a_name_stay_separate_rows():
+    """Rows are keyed on ids, never on names.
+
+    The school briefly had two TechPro strands both called "ICT Support
+    and Computer Programming Technologies" under different codes. Grouping
+    by name merged them into a single row, quietly under-reporting the
+    track/strand breakdown on a form filed with the division — the kind of
+    wrong that looks like a correct form.
+    """
+    context = dict(CONTEXT)
+    context["sections"] = {
+        1: FakeSection(id=1, strand_id=1),
+        2: FakeSection(id=2, strand_id=2),
+    }
+    context["strands"] = {
+        1: Named("ICT Support and Computer Programming Technologies"),
+        2: Named("ICT Support and Computer Programming Technologies"),
+    }
+    rows = aggregate(
+        enrollments=[
+            FakeEnrollment(1, 1, section_id=1),
+            FakeEnrollment(2, 2, section_id=2),
+        ],
+        learners={1: FakeLearner(1, Sex.MALE), 2: FakeLearner(2, Sex.FEMALE)},
+        movements=[],
+        attendance={},
+        **context,
+    )
+    assert len(rows) == 2, "same-named strands must not collapse into one row"
+    assert {r.registered.total for r in rows} == {1}
+
+
+def test_the_same_strand_across_two_sections_is_one_row():
+    """The other half of the rule: SF4 reports per Track/Strand, not per
+    section, so two sections of the same strand combine."""
+    context = dict(CONTEXT)
+    context["sections"] = {
+        1: FakeSection(id=1, strand_id=1),
+        2: FakeSection(id=2, strand_id=1),
+    }
+    rows = aggregate(
+        enrollments=[
+            FakeEnrollment(1, 1, section_id=1),
+            FakeEnrollment(2, 2, section_id=2),
+        ],
+        learners={1: FakeLearner(1, Sex.MALE), 2: FakeLearner(2, Sex.MALE)},
+        movements=[],
+        attendance={},
+        **context,
+    )
+    assert len(rows) == 1
+    assert rows[0].registered.total == 2
+
+
 # --- The percentage trap ---------------------------------------------------
 
 
