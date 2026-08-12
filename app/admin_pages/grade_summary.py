@@ -52,7 +52,7 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
                 f"Permanent academic record captured "
                 f"{snapshot.snapshot_at:%Y-%m-%d %H:%M}"
                 f"{f' (revision {snapshot.revision})' if snapshot.revision > 1 else ''} — "
-                "frozen against later subject renames or policy changes (§38)."
+                "this learner's result is now kept exactly as it stands today."
             )
         # Reopening a finalized record is Super-Admin-only (§3A lists
         # "reopen finalized records" as a Super Admin capability, not
@@ -103,8 +103,8 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
     can_finalize = summary is not None and summary.completion_status == CompletionStatus.COMPLETE
     if not can_finalize:
         st.info(
-            "Can't finalize yet — annual record isn't COMPLETE (§23). Encode the missing "
-            "grades and Recompute above first."
+            "Can't finalize yet — this learner's record isn't complete. Encode the "
+            "missing grades and Recompute above first."
         )
     if st.button("Finalize", key=f"finalize_{enrollment.id}", disabled=not can_finalize):
         now = datetime.now(timezone.utc)
@@ -236,10 +236,8 @@ VIEW_OPTIONS = ["Term 1", "Term 2", "Term 3", "Final"]
 def _class_summary(session, enrollments: list[Enrollment], section_id, school_year_id) -> None:
     st.subheader("Class summary")
     st.caption(
-        "Each subject's own grades for the selected view — the combined-language "
-        "parent/component display (§16) is in the per-learner detail below instead. "
-        "General Average still correctly counts the combined pair once, computed the "
-        "same way as the per-learner detail."
+        "One column per subject. Pick a learner below to see their report-card "
+        "view, including how the Grade 11 language pair is combined."
     )
     view = st.radio("View", VIEW_OPTIONS, horizontal=True, key="class_summary_view")
 
@@ -289,10 +287,10 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Grade Summary")
     st.caption(
-        "The derived grade tables (§48) — recomputed from Gradebook entries "
-        "automatically, or on demand with the Recompute button."
+        "Computed from what teachers have encoded in the Gradebook. It updates "
+        "automatically when they save, or on demand with the Recompute button."
         if not current_user.is_read_only()
-        else "Section summaries and finalized records, read-only (§3F)."
+        else "Section summaries and finalized records. Read-only."
     )
     render_flashes()
 

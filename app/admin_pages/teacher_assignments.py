@@ -14,8 +14,8 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Teacher Assignments")
     st.caption(
-        "Teacher → Section → Subject → Term (§47). Reassigning deactivates the old "
-        "assignment rather than deleting it, so who taught what stays auditable."
+        "Assign a teacher to a subject, in one section, for one term. Reassigning "
+        "keeps the old assignment on record, so who taught what is never lost."
     )
     render_flashes()
 

@@ -25,7 +25,46 @@ borderColor = "#DDE3EC"
 showWidgetBorder = true
 baseRadius = "medium"
 
-font = "sans-serif"
+# Rethink Sans for headings, DM Sans for body text. Both are declared
+# below as web fonts so every teacher sees them regardless of what is
+# installed locally; the fallbacks keep the app readable if the font CDN
+# is ever unreachable.
+font = "DM Sans, sans-serif"
+headingFont = "Rethink Sans, sans-serif"
+
+# Variable fonts, so one file covers the weight range — the same URL is
+# declared per weight because that is the form Streamlit expects. These
+# are the "latin" subsets, which include the accented characters that
+# appear in learner names.
+[[theme.fontFaces]]
+family = "DM Sans"
+url = "https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2"
+weight = 400
+
+[[theme.fontFaces]]
+family = "DM Sans"
+url = "https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2"
+weight = 500
+
+[[theme.fontFaces]]
+family = "DM Sans"
+url = "https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2"
+weight = 700
+
+[[theme.fontFaces]]
+family = "Rethink Sans"
+url = "https://fonts.gstatic.com/s/rethinksans/v7/AMOWz4SDuXOMCPfdoglY9JQEVFi3.woff2"
+weight = 400
+
+[[theme.fontFaces]]
+family = "Rethink Sans"
+url = "https://fonts.gstatic.com/s/rethinksans/v7/AMOWz4SDuXOMCPfdoglY9JQEVFi3.woff2"
+weight = 700
+
+[[theme.fontFaces]]
+family = "Rethink Sans"
+url = "https://fonts.gstatic.com/s/rethinksans/v7/AMOWz4SDuXOMCPfdoglY9JQEVFi3.woff2"
+weight = 800
 
 [theme.sidebar]
 # The navigation carries the school's colour; the content area stays

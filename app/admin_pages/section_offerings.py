@@ -91,7 +91,7 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Section Subject Offerings")
     st.caption(
-        "**Single source of truth** for what a learner is actually graded on (§48) — "
+        "**This decides what a learner is actually graded on** — "
         "controls the gradebook, Term Average, Final Grade, General Average, SF9, SF10, "
         "and temp cards. A subject profile only seeds defaults; nothing else may "
         "substitute for what's confirmed here."

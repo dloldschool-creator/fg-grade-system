@@ -37,8 +37,8 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Award Policy")
     st.caption(
-        "Two selectable policies (§24), never permanently merged. Never edit a version "
-        "already used by computed/finalized awards — create a new one instead (§59)."
+        "Two separate award policies. Don't edit a version that has already been "
+        "used to give out awards — create a new version instead."
     )
     render_flashes()
 
@@ -98,9 +98,9 @@ def render() -> None:
                         "Judged against",
                         options=[AwardScope.TERM.value, AwardScope.ANNUAL.value],
                         format_func=lambda s: (
-                            "Each term's Term Average (§17) — awarded up to 3× a year"
+                            "Each term's Term Average — awarded up to 3× a year"
                             if s == AwardScope.TERM.value
-                            else "The annual General Average (§19/§20) — awarded once a year"
+                            else "The annual General Average — awarded once a year"
                         ),
                         index=1,
                         key=f"scope_{policy.id}",

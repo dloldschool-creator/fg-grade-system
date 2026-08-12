@@ -49,14 +49,14 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Backup")
     st.caption(
-        "Downloadable snapshot of the whole database (§55) — one CSV per table "
-        "in a zip, plus a manifest with restore instructions."
+        "A downloadable copy of the whole database — one spreadsheet per table "
+        "in a zip file, plus a note explaining how to restore it."
     )
     render_flashes()
 
     st.warning(
         "This file contains every learner's LRN, birthdate, grades and attendance. "
-        "Store it encrypted and don't leave copies on shared drives (§54).",
+        "Store it securely and don't leave copies on shared drives.",
         icon="🔒",
     )
 

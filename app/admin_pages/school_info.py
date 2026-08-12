@@ -42,7 +42,7 @@ def render() -> None:
                     st.rerun()
             return
 
-        st.caption("Changing these values is audit-logged (§4) — logging not wired up yet, see CLAUDE.md.")
+        st.caption("These details appear on every printed form and report card.")
         with st.form("edit_school"):
             school_name = st.text_input("School Name", value=school.school_name)
             deped_school_id = st.text_input("DepEd School ID", value=school.deped_school_id)

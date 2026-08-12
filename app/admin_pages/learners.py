@@ -65,7 +65,7 @@ def _admission_record_form(session, learner: Learner) -> None:
     record = (
         session.query(LearnerAdmissionRecord).filter_by(learner_id=learner.id).one_or_none()
     )
-    st.caption("SHS-entry eligibility fields (§25) — typically filled in once, at Grade 11 admission.")
+    st.caption("Usually filled in once, when the learner is admitted to Grade 11.")
     with st.form(f"admission_{learner.id}"):
         date_of_shs_admission = st.date_input(
             "Date of SHS admission",

@@ -11,8 +11,8 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Grading Policy")
     st.caption(
-        "Versioned so a passing-grade change never mutates a finalized grade's basis "
-        "(§59) — never edit a version already used by finalized grades; create a new one."
+        "Changing the passing grade never alters grades that are already finalized. "
+        "Don't edit a version that has been used — create a new one instead."
     )
     render_flashes()
 

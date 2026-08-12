@@ -94,8 +94,8 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
 
     st.caption(
         f"{sum(1 for d in days if d.is_default_class_day)} class day(s) this month. "
-        "Changing a date's class-day status requires a reason (§28) — it's stored "
-        "with your user and the timestamp."
+        "Changing whether a date is a class day requires a reason, which is saved "
+        "with your name and the time."
     )
 
     for day in days:
@@ -169,9 +169,9 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Academic Calendar")
     st.caption(
-        "Per-date class-day calendar (§28). Each date stores its own term, so one "
-        "month can span two terms — that's what makes the September Term 1/Term 2 "
-        "split work (§29)."
+        "The school calendar, one date at a time. Each date belongs to its own "
+        "term, so a month can span two terms — September covers the end of Term 1 "
+        "and the start of Term 2."
     )
     render_flashes()
 

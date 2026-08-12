@@ -152,9 +152,9 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
     st.title("Awards")
     st.caption(
-        "Computes eligibility from the already-computed General Average / completion "
-        "status on Grade Summary — never recomputes grades itself. Always records a "
-        "reason, even when not eligible (§24)."
+        "Works from the averages already shown on Grade Summary — it never changes "
+        "a grade. A reason is always recorded, including when a learner is not "
+        "eligible."
     )
     render_flashes()
 
@@ -233,7 +233,7 @@ def render() -> None:
             term_name = term_by_id[term_choice].name
             st.caption(
                 "Judged on this term's **Term Average**, which counts the Grade 11 "
-                "language pair as two separate subjects (§17) — unlike the General "
+                "language pair as two separate subjects — unlike the General "
                 "Average, where they combine into one."
             )
         else:
@@ -312,7 +312,7 @@ def render() -> None:
                         st.rerun()
 
                 with st.form(f"override_{award.id}"):
-                    st.caption("Manual override — requires a reason, and is audited (§40, §67).")
+                    st.caption("Manual override — a reason is required, and the change is recorded.")
                     override_result = st.selectbox(
                         "Override result", options=[r.value for r in AwardResult], key=f"or_{award.id}"
                     )

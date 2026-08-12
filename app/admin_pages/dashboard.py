@@ -186,9 +186,8 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
     st.title("School Dashboard")
     st.caption(
-        "School-wide view of enrolment, encoding progress and attendance "
-        "finalization, read from the computed records (§3F). Nothing on this "
-        "page changes any data."
+        "School-wide view of enrolment, grade encoding and attendance. "
+        "Nothing on this page changes any data."
     )
     render_flashes()
 
@@ -232,8 +231,8 @@ def render() -> None:
         if progress:
             st.dataframe(pd.DataFrame(progress), hide_index=True, use_container_width=True)
             st.caption(
-                "A term shows CLOSED when encoding is not open — that's the normal "
-                "state between encoding periods, not a fault."
+                "A term shows CLOSED when teachers cannot currently encode grades "
+                "for it. That is the normal state between encoding periods."
             )
         else:
             st.caption("This school year has no terms yet.")

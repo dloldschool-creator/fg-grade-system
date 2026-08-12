@@ -47,7 +47,7 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Temporary Term Cards")
     st.caption(
-        "The end-of-term slip for learners (§39) — only the subjects active in the "
+        "The end-of-term slip for learners — only the subjects active in the "
         f"selected term, with that term's average. {CARDS_PER_PAGE} cards per "
         "8.5 × 13 in sheet, paginated automatically."
     )
@@ -159,9 +159,8 @@ def render() -> None:
             )
         st.table(preview_rows)
         st.caption(
-            "The Grade 11 language pair is listed as two separate subjects — §17 "
-            "computes the Term Average that way, so the card's list matches the "
-            "figure printed beneath it."
+            "The Grade 11 language pair is listed as two separate subjects, so the "
+            "card's list adds up to the Term Average printed beneath it."
         )
 
         st.divider()

@@ -6,7 +6,7 @@ from app.models.academic_structure import GradeLevel, Strand, Track
 
 
 def _grade_levels_tab(session):
-    st.caption("Fixed by the spec (§6) — displayed for reference, not editable here.")
+    st.caption("Shown for reference. Grade levels are fixed and not edited here.")
     rows = session.query(GradeLevel).order_by(GradeLevel.display_order).all()
     st.table([{"Code": gl.code, "Name": gl.name} for gl in rows])
 

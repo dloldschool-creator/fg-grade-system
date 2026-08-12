@@ -64,10 +64,9 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("SF2 — Daily Attendance Report of Learners")
     st.caption(
-        "Generated straight from the attendance database (§34) — attendance is never "
-        "re-entered for the form. Learners are split male/female, 25 rows each per "
-        "page, and a section that overflows gets extra pages rather than dropped "
-        "learners."
+        "Generated straight from the attendance you have already encoded. Learners "
+        "are split male and female, and a large section runs onto extra pages "
+        "rather than dropping anyone."
     )
     render_flashes()
 
@@ -142,9 +141,9 @@ def render() -> None:
         st.divider()
         st.subheader("Preview")
         st.caption(
-            "Blank means present — that's the form's own convention (§30). "
-            "**X** absent, **T-L** late, **T-C** cutting, **·** outside the learner's "
-            "enrolment window."
+            "Blank means present — that is the form's own convention. "
+            "**X** absent, **T-L** late, **T-C** cutting, **·** before the learner "
+            "joined or after they left."
         )
         st.dataframe(_preview_frame(session, roster, class_days), hide_index=True, use_container_width=True)
 

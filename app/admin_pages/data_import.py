@@ -48,9 +48,8 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR")
     st.title("Import from Excel")
     st.caption(
-        "Migration tooling (§51). Nothing is ever imported silently — a file is "
-        "mapped, validated and previewed, and only writes when you confirm. Every "
-        "run leaves an audit record."
+        "Nothing is imported silently. Your file is checked and previewed first, "
+        "and only saved when you confirm."
     )
     render_flashes()
 

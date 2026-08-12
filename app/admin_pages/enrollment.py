@@ -252,9 +252,9 @@ def _roster_tab(session, adviser_user_id, current_user):
 
             with st.form(f"add_movement_{enrollment.id}"):
                 st.caption(
-                    "Logging a movement also updates this learner's current enrollment status above "
-                    "(§27, §32) — e.g. a transferred/dropped/NLS/shifted-out learner still appears in "
-                    "the effective month's SF2 with a remark, then drops out of later months."
+                    "Logging a movement also updates the learner's status above. They "
+                    "still appear on that month's SF2 with a remark, then drop off the "
+                    "months after it."
                 )
                 movement_type = st.selectbox(
                     "Movement type", options=[s.value for s in EnrollmentStatus], key=f"mv_type_{enrollment.id}"

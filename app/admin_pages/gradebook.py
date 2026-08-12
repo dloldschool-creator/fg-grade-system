@@ -144,12 +144,12 @@ def render() -> None:
         }
 
         st.subheader(f"{subject.official_name} — {term.name}")
-        st.caption("Blank means not yet encoded — never entered as 0 (CLAUDE.md rule 2).")
+        st.caption("Leave a grade blank if it isn't ready yet. Never type 0 to mean that.")
 
         st.caption(
-            "Grades stay editable here through SUBMITTED — editing one reverts it to DRAFT "
-            "so it's clear it needs re-submission. Only VERIFIED/FINALIZED grades lock (no "
-            "reopen workflow built yet — that's Phase 7)."
+            "You can still edit a grade after submitting — doing so puts it back to "
+            "DRAFT, so remember to press Submit again. Once a grade is verified or "
+            "finalized it locks; ask a Super Admin if one needs reopening."
         )
 
         with st.form("gradebook_form"):

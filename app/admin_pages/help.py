@@ -27,7 +27,7 @@ UNIVERSAL = [
         "an Academic Structure, or a Section Offering without a Section — so "
         "when setting up a new school year, work straight down that list.\n\n"
         "You only see the pages your role allows, so your sidebar will be "
-        "shorter than someone else's. That is not a fault.",
+        "shorter than someone else's.",
     ),
     (
         "A blank is not a zero",
@@ -40,7 +40,7 @@ UNIVERSAL = [
         "You are signed out after 60 minutes idle",
         "Unsaved typing is lost, so press **Save** before stepping away. "
         "Refreshing the browser or opening the app in a new tab also signs you "
-        "out — that's a known limitation, not a fault.",
+        "out, so sign in again when that happens.",
     ),
     (
         "Sensitive changes are recorded",
@@ -188,7 +188,7 @@ BY_ROLE = {
         [
             (
                 "You can see everything and change nothing",
-                "That's deliberate (§3F). The Dashboard, Grade Summary and the "
+                "That's deliberate. The Dashboard, Grade Summary and the "
                 "report pages are open to you school-wide; the buttons that "
                 "encode, recompute, finalize or reopen are not drawn at all "
                 "rather than shown and refused.",

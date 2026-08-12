@@ -10,8 +10,8 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("School Years & Terms")
     st.caption(
-        "Term dates are ordinary editable rows, never hardcoded — DepEd calendar "
-        "revisions don't require a code change (CLAUDE.md)."
+        "Set each term's dates here, and open or close grade encoding for it. "
+        "Dates can be edited at any time if DepEd revises the calendar."
     )
     render_flashes()
 

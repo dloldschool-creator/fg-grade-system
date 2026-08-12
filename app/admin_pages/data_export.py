@@ -33,8 +33,8 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Export")
     st.caption(
-        "Excel and CSV export (§52). LRN is always written as text, so leading "
-        "zeros survive opening the file in Excel."
+        "Download any of these as Excel or CSV. LRNs keep their leading zeros "
+        "when the file is opened in Excel."
     )
     render_flashes()
 

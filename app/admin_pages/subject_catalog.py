@@ -237,9 +237,8 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Subject Catalog")
     st.caption(
-        "Grade 12 electives from the old workbook (\"Elective 2\"/\"Elective 3\") are "
-        "placeholders, never real subject names — replace them here before an offering "
-        "using them is confirmed (§13)."
+        "Grade 12 electives named \"Elective 2\" or \"Elective 3\" are placeholders, "
+        "not real subject names — rename them here before using them in a section."
     )
     render_flashes()
 

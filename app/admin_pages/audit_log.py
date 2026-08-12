@@ -59,9 +59,9 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Audit Log")
     st.caption(
-        "Append-only history of every sensitive change (§50): who, what, the previous "
-        "and new value, when, and the reason where one is required. Entries can't be "
-        "edited or deleted from anywhere in this application."
+        "A record of every important change: who, what changed, the old and new "
+        "value, when, and the reason where one was required. Entries cannot be "
+        "edited or deleted from anywhere in this app."
     )
     render_flashes()
 

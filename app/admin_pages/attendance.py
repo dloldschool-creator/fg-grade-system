@@ -209,7 +209,7 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
 
     can_finalize = not report["problems"]
     if not can_finalize:
-        st.caption("Resolve everything in red above before finalizing (§33).")
+        st.caption("Resolve everything in red above before finalizing.")
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -245,7 +245,7 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
     st.title("Attendance")
     st.caption(
-        "Daily attendance per learner per class day (§30). Codes: **P** present, "
+        "Daily attendance per learner per class day. Codes: **P** present, "
         "**X** absent, **T-L** tardy/late, **T-C** cutting. Late and cutting still "
         f"count as days present. A **{NOT_ELIGIBLE}** cell is outside that learner's "
         "enrolment window and never counts against them."

@@ -91,10 +91,9 @@ def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Subject Profiles")
     st.caption(
-        "Per-track/strand default subject sets (§7, §12-13) — seed data only. "
-        "Section Subject Offerings (next page) is the actual per-section source of "
-        "truth for what a learner is graded on; a profile just speeds up setting "
-        "those up (§48, NOTE 14)."
+        "The default set of subjects for each grade level and track/strand. "
+        "Filling these in first means a new section's subjects can be added with "
+        "one click on Section Offerings, instead of one at a time."
     )
     render_flashes()
 

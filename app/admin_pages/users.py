@@ -17,7 +17,7 @@ def render() -> None:
         role_by_id = {r.id: r for r in roles}
         users = session.query(User).order_by(User.full_name).all()
 
-        st.caption("Fixed 6-role catalog (§3), not editable here: " + ", ".join(r.code for r in roles))
+        st.caption("Available roles: " + ", ".join(r.code for r in roles))
 
         for user in users:
             grants = session.query(UserRole).filter_by(user_id=user.id).all()
