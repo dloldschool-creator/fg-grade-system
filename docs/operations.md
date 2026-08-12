@@ -145,7 +145,60 @@ deadline doing its job and nothing is blocked.
 
 ---
 
-## 6. Adding a teacher mid-year
+## 6. "It's still referenced elsewhere" — deleting test data
+
+The app refuses to delete a learner, section or user that anything else
+points at. That is deliberate, not a fault: every foreign key is
+`ON DELETE RESTRICT`, so a learner's grades, attendance and academic
+record cannot be silently destroyed along with them. One test learner
+with a few grades and a month of attendance is typically **40-plus rows
+across ten tables**.
+
+For real records the answer is never to delete. Use the workflow instead
+— log a movement (transferred out, dropped) so the learner's history
+stays intact and the forms keep reporting them correctly.
+
+For clearing test data before the real migration, there is a script. It
+never runs from the app, and deletes nothing without `--confirm`:
+
+```bash
+python -m scripts.purge_test_data --all-learners
+```
+
+That is a dry run — it lists what it would remove. Add `--confirm` to
+actually delete. Other targets:
+
+```bash
+python -m scripts.purge_test_data --learner 107041140016
+```
+
+```bash
+python -m scripts.purge_test_data --section "STEM - A"
+```
+
+```bash
+python -m scripts.purge_test_data --user teacher@example.com
+```
+
+Order matters and the script enforces it: a section refuses to go while
+learners are still enrolled in it, and a user refuses while they still
+advise a section. Clear learners first, then sections.
+
+**It refuses outright on a database holding more than 50 learners**, on
+the assumption that is real data rather than test rows. Override with
+`--force` only if you are certain.
+
+Deleting a *user* is safer than it looks: everything historical about
+them — who submitted a grade, who finalized a month, the audit log — is
+`ON DELETE SET NULL`, so the record survives the person leaving (§50).
+Only their roles, teaching assignments and adviser slots block it.
+
+**Take a backup first.** This is the one operation in the system with no
+undo.
+
+---
+
+## 7. Adding a teacher mid-year
 
 1. **Users & Roles** → Add User. A temporary password is shown **once** —
    copy it before leaving the page.
@@ -157,7 +210,7 @@ deadline doing its job and nothing is blocked.
 
 ---
 
-## 7. When something goes wrong
+## 8. When something goes wrong
 
 **"I can't log in."** Sessions end after 60 minutes idle, and refreshing
 the browser signs you out. Sign in again. If the password is genuinely
@@ -178,7 +231,7 @@ Log.
 
 ---
 
-## 8. Before each term closes
+## 9. Before each term closes
 
 1. Advisers finalize every attendance month (**Attendance** page).
 2. Teachers submit all grades; check the **Dashboard** for terms still

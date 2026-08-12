@@ -886,7 +886,10 @@ those formulas with values written by our own grading engine via
       too** — it only looked exact locally because Windows has Arial,
       Carlito and Aparajita installed; a Linux server substitutes either
       way. `register_font_file()` can embed real TTFs if that ever
-      matters.
+      matters. **Verified in production on 2026-08-12**: SF9 and SF2
+      generated on the deployed Linux host were checked by the user and
+      look correct, so the substitution is a non-issue in practice and
+      no TTFs need embedding.
       `pytest tests/` is 246.
 - [x] **In-app Quick Guide** (`app/admin_pages/help.py`) — reachable by
       every role, and by a user with no role yet (it's the one page that
