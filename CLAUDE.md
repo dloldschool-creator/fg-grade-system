@@ -222,9 +222,14 @@ of each is in `docs/build-log.md`.
   are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
   the opposite of what every DepEd form and the teachers' workbook use.
   `roster_for_month` had this bug while its own docstring claimed
-  male-first. All four rosters (Gradebook, Grade Summary, Attendance,
-  SF2) go through `app/roster_order.py`; use `learner_order_by()` in a
-  query or `learner_sort_key()` on a list, never a hand-rolled ORDER BY.
+  male-first. All five rosters (Gradebook, Grade Summary, Attendance,
+  SF2, SF9) go through `app/roster_order.py`; use `learner_order_by()` in
+  a query or `learner_sort_key()` on a list, never a hand-rolled ORDER BY.
+- **A `.join(Learner, ...)` added only to sort a query does not load the
+  Learner objects.** A later `session.get(Learner, ...)` in the render
+  loop is therefore a real round trip per learner — ~40 × 85ms on every
+  Streamlit rerun, which is every interaction. Gradebook and SF9 both had
+  this; batch with `Learner.id.in_(...)` into a dict instead.
 - **Alembic enums, two gotchas:** autogenerate emits a bare `sa.Enum` inside
   `create_table` for a type that already exists (use
   `postgresql.ENUM(..., create_type=False)`); and `op.add_column` does not

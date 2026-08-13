@@ -9,6 +9,7 @@ from app.excel_template import workbook_to_bytes
 from app.models.enums import CompletionStatus
 from app.models.grades import AnnualGradeSummary
 from app.models.learners import Enrollment, Learner
+from app.roster_order import learner_order_by
 from app.models.organization import SchoolYear
 from app.report_card import build_learning_area_rows
 from app.sf9_report import MAX_LEARNING_AREAS, build_sf9_workbook, load_sf9_context
@@ -84,14 +85,24 @@ def render() -> None:
             session.query(Enrollment)
             .filter_by(section_id=section_choice, school_year_id=sy_choice)
             .join(Learner, Learner.id == Enrollment.learner_id)
-            .order_by(Learner.last_name, Learner.first_name)
+            .order_by(*learner_order_by(Learner))
             .all()
         )
         if not enrollments:
             st.info("No learners enrolled in this section yet.")
             return
 
-        learner_by_enrollment = {e.id: session.get(Learner, e.learner_id) for e in enrollments}
+        # One query, not one per learner: the join above orders the query
+        # but doesn't load Learner objects, so the dict comprehension that
+        # used to call session.get() here cost a round trip each — and
+        # Streamlit rebuilds this on every interaction with the page.
+        learners = {
+            learner.id: learner
+            for learner in session.query(Learner)
+            .filter(Learner.id.in_([e.learner_id for e in enrollments]))
+            .all()
+        }
+        learner_by_enrollment = {e.id: learners.get(e.learner_id) for e in enrollments}
         enrollment_choice = st.selectbox(
             "Learner",
             options=[e.id for e in enrollments],
