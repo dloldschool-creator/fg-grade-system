@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,7 +28,7 @@ class ReportTemplate(UUIDPKMixin, Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class ReportGenerationLog(UUIDPKMixin, Base):
@@ -44,7 +44,7 @@ class ReportGenerationLog(UUIDPKMixin, Base):
     scope: Mapped[dict] = mapped_column(JSONB, nullable=False)
     file_path: Mapped[str | None] = mapped_column(String)
     readiness_status: Mapped[ReportReadiness] = mapped_column(nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(server_default="now()")
+    generated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 # The deferred `report_snapshots` idea is now realised as the permanent

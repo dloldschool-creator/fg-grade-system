@@ -1084,6 +1084,59 @@ protects against this too.
       collections (no database), including that a mid-month transfer-out
       is *not* registered at month end even though SF2 still lists them
       that month (§32), and that LATE/CUTTING count as present (§30).
+- [x] **`server_default="now()"` froze fourteen timestamps** (found
+      2026-08-13 from the Audit Log page, where seven entries days apart
+      all showed one identical time). A **string** `server_default` is a
+      literal SQL value, so the DDL went out as `DEFAULT 'now()'` and
+      Postgres resolved it **once, when the migration ran**:
+      `audit_logs.created_at DEFAULT '2026-08-10 04:31:28.755305'`.
+      Nothing errored — the column was populated, non-null and plausible;
+      only the *ordering* of two events was lost, which is exactly what
+      rule 8 and §50 need it for. `TimestampMixin` in `app/models/base.py`
+      was always right (`func.now()`), which is why every table inheriting
+      it — enrollments, attendance_records, term_grades — escaped.
+      Migration `b7c31a9d40e2` resets all fourteen with
+      `ALTER COLUMN … SET DEFAULT now()` (catalogue-only, no table scan,
+      safe on the live app). The existing rows keep their false
+      timestamps: the true times were never recorded anywhere, and
+      inventing plausible ones is worse than leaving them visibly
+      identical. `tests/test_model_defaults.py` parses every model and
+      fails on any `server_default` string containing `(`.
+      **Note `now()` is Postgres's *transaction* start time**, so entries
+      written in one transaction legitimately share a timestamp — which is
+      correct, since `audit_service.record()` deliberately rides the
+      caller's transaction.
+      Also worth knowing while reading the audit log: **it looked capped
+      at 7 rows and isn't** (the viewer pages at 100). Most of what an
+      admin does early on simply isn't logged — §50 enumerates grade,
+      attendance, movement, offering, calendar, award, role and import
+      changes. Creating a section or a user is **not** logged, though
+      *deleting* a user is; that asymmetry is unaudited scope, not a bug.
+- [x] **Excel damage on upload is now undone rather than complained
+      about** (2026-08-13). The Learner Masterlist "Bulk-add" carried a
+      second, stricter copy of the import rules, and every way the two
+      differed was a way to reject a file the Import page would have
+      taken: headers had to match letter-for-letter (`Sex` failed where
+      `sex` passed), the birthdate had to be ISO, and the LRN had to be
+      manually formatted as text. It now runs on `LEARNER_IMPORT` through
+      `import_pipeline`, so there is **one implementation** and the
+      Section column works in both places.
+      Two parsing rules were hardened at the source, so the main Import
+      page gets them too:
+      (1) **`detect_date_order()` decides d/m vs m/d once per column, not
+      per row.** `03/04/2009` is genuinely two different days; a single
+      unambiguous value elsewhere in the file (a `25/…` or a `…/25/`)
+      settles it for every row, and only a wholly ambiguous column falls
+      back to `DEFAULT_DATE_ORDER = "mdy"` (what the school's machines
+      actually write). Contradictory evidence deliberately picks neither.
+      ISO is always tried first and is never ambiguous.
+      (2) **`parse_lrn()` un-does Excel's numeric coercion, but refuses a
+      rounded value.** `107041140016.0` and `1.07041140016E+11` are
+      recovered arithmetically. `1.07E+11` is **rejected** — it expands
+      cleanly to `107000000000`, which is exactly twelve digits and passes
+      every other check, so accepting it would silently invent an LRN the
+      learner does not have. The guard is a significant-digit count
+      against the expanded length; a test pins the tempting wrong answer.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

@@ -6,12 +6,13 @@ from app.admin_pages._helpers import (
     flash,
     flush_or_rollback,
     get_session,
-    read_uploaded_csv,
     render_flashes,
     try_commit,
     try_delete,
 )
 from app.auth import require_role
+from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
+from app.import_specs import LEARNER_IMPORT
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
@@ -19,7 +20,6 @@ from app.naming import normalize_name
 from app.models.organization import SchoolYear
 
 RESULT_LIMIT = 50
-LEARNER_CSV_COLUMNS = "last_name, first_name, middle_name, extension_name, sex, birthdate, lrn"
 
 
 def _identity_form(session, learner: Learner) -> None:
@@ -168,80 +168,110 @@ def _admission_record_form(session, learner: Learner) -> None:
             st.rerun()
 
 
-def _validate_learner_row(row: dict) -> tuple[dict | None, str | None]:
-    # Normalize before validating, so a name of only whitespace is caught
-    # by the required-field check rather than saved as blank.
-    last_name = normalize_name(row.get("last_name", ""))
-    first_name = normalize_name(row.get("first_name", ""))
-    sex_raw = row.get("sex", "").upper()
-    birthdate_raw = row.get("birthdate", "")
-    lrn = row.get("lrn", "") or None
+def _bulk_upload_section(session, current_user) -> None:
+    """Bulk-add, sharing the Import from Excel machinery rather than its own.
 
-    if not last_name or not first_name:
-        return None, "last_name and first_name are required"
-    if sex_raw not in (Sex.MALE.value, Sex.FEMALE.value):
-        return None, "sex must be MALE or FEMALE"
-    try:
-        birthdate = date.fromisoformat(birthdate_raw)
-    except ValueError:
-        return None, "birthdate must be YYYY-MM-DD"
-    if lrn and (len(lrn) != 12 or not lrn.isdigit()):
-        return None, "lrn must be exactly 12 digits"
+    This used to carry a second, stricter copy of the same rules, and every
+    way the two differed was a way to be rejected here for a file the other
+    page would have accepted: headers had to match letter for letter ("Sex"
+    failed where "sex" passed), the birthdate had to be ISO even though
+    Excel rewrites it to the PC's regional format on save, and an LRN had to
+    be manually formatted as text first or Excel turned it into 1.07E+11.
 
-    return (
-        {
-            "last_name": last_name,
-            "first_name": first_name,
-            "middle_name": normalize_name(row.get("middle_name")),
-            "extension_name": normalize_name(row.get("extension_name")),
-            "sex": Sex(sex_raw),
-            "birthdate": birthdate,
-            "lrn": lrn,
-        },
-        None,
-    )
+    One implementation means a fix lands in both places at once.
+    """
+    spec = LEARNER_IMPORT
+    may_enrol = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
 
-
-def _bulk_upload_section(session) -> None:
-    with st.expander("Bulk-add from CSV"):
+    with st.expander("Bulk-add from a spreadsheet"):
         st.info(
             "**Adding a whole year group? Use Import from Excel instead.** "
-            "It uses a ready-made template, checks every row before saving "
-            "anything, and can enroll each learner into their section at the "
-            "same time. This CSV upload is the quick option for a small batch, "
-            "and it only creates learners — you enroll them afterwards.",
+            "It walks through the same checks with a bigger preview and keeps "
+            "a record of the import. This is the quick option for a small batch.",
             icon="💡",
         )
         st.caption(
-            f"One row per learner, with this header row: `{LEARNER_CSV_COLUMNS}`\n\n"
-            "**last_name**, **first_name**, **sex** and **birthdate** are required — "
-            "the rest can be left empty. Sex must be MALE or FEMALE, and birthdate "
-            "must be written as YYYY-MM-DD (for example 2009-01-15). "
-            "Type the LRN as text so it keeps any leading zero."
+            "One row per learner. Put these in the first row — **capitals, "
+            "spaces and underscores don't matter**, and extra columns are "
+            "ignored:\n\n"
+            f"`{'`, `'.join(c.label for c in spec.columns)}`\n\n"
+            "**Last Name**, **First Name**, **Sex** and **Birthdate** are "
+            "required; the rest can be left empty. Sex can be M/F or "
+            "MALE/FEMALE. **Section** is optional — fill it in and the learner "
+            "is enrolled into that section in the same step."
         )
-        uploaded = st.file_uploader("CSV file", type="csv", key="learner_csv")
+        st.caption(
+            "You don't need to reformat anything before uploading: LRNs are "
+            "read back correctly even if Excel has turned them into "
+            "`1.07E+11`, and birthdates are accepted in whatever order your "
+            "Excel writes them."
+        )
+
+        uploaded = st.file_uploader(
+            "CSV or Excel file", type=["csv", "xlsx"], key="learner_csv"
+        )
         if uploaded is None:
             return
 
-        rows = read_uploaded_csv(uploaded)
-        valid_rows, errors = [], []
-        for i, row in enumerate(rows, start=2):  # row 1 is the header
-            parsed, error = _validate_learner_row(row)
-            if error:
-                errors.append(f"Row {i}: {error}")
-            else:
-                valid_rows.append(parsed)
+        headers, rows = read_table(uploaded.getvalue(), uploaded.name)
+        if not rows:
+            st.warning("That file has a header row but no learners in it.")
+            return
 
-        st.write(f"{len(valid_rows)} of {len(rows)} row(s) valid.")
-        if errors:
-            st.error("\n".join(errors))
-        if valid_rows:
-            st.dataframe(valid_rows, hide_index=True)
-            if st.button(f"Import {len(valid_rows)} valid learner(s)"):
-                for parsed in valid_rows:
-                    session.add(Learner(**parsed))
-                try_commit(session, f"Imported {len(valid_rows)} learner(s).")
-                st.rerun()
+        mapping = suggest_mapping(headers, spec)
+        missing = missing_required(mapping, spec)
+        if missing:
+            st.error(
+                "Couldn't find a column for: **"
+                + "**, **".join(missing)
+                + f"**.\n\nThe file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+            )
+            return
+
+        # Only offered when a Section column is actually present, so the
+        # common "just create the learners" case asks nothing extra.
+        school_year_id = None
+        if mapping.get("section"):
+            if may_enrol:
+                years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
+                by_id = {sy.id: sy for sy in years}
+                school_year_id = st.selectbox(
+                    "Enroll into which school year?",
+                    options=[sy.id for sy in years],
+                    format_func=lambda v: by_id[v].name,
+                    key="bulk_learner_sy",
+                )
+            else:
+                st.warning(
+                    "The Section column will be ignored — only a Registrar or "
+                    "Super Admin can enroll from here. The learners will still "
+                    "be created, and you can enroll your own section on the "
+                    "Enrollment page.",
+                    icon="⚠️",
+                )
+                mapping.pop("section", None)
+
+        mapped = apply_mapping(rows, mapping)
+        result = spec.validate(session, mapped, mapping, school_year_id=school_year_id)
+
+        st.write(f"**{len(result.parsed)} of {len(rows)} row(s) ready to add.**")
+        if result.errors:
+            st.error(f"{len(result.errors)} row(s) need fixing before they can be added:")
+            st.dataframe(result.error_dicts(), hide_index=True, use_container_width=True)
+
+        if not result.parsed:
+            return
+
+        preview = [
+            {k: v for k, v in row.items() if not k.startswith("__") and not k.endswith("_id")}
+            for row in result.parsed
+        ]
+        st.dataframe(preview, hide_index=True, use_container_width=True)
+
+        if st.button(f"Add {len(result.parsed)} learner(s)", key="bulk_learner_commit"):
+            written = spec.commit(session, result.parsed, current_user.id)
+            try_commit(session, f"Added {written} learner(s).")
+            st.rerun()
 
 
 def render() -> None:
@@ -366,4 +396,4 @@ def render() -> None:
                         try_commit(session, message)
                     st.rerun()
 
-        _bulk_upload_section(session)
+        _bulk_upload_section(session, current_user)

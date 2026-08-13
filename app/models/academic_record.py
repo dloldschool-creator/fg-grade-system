@@ -24,7 +24,16 @@ displayed is ever read back through them.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, SmallInteger, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    ForeignKey,
+    Numeric,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -77,7 +86,7 @@ class LearnerAcademicRecord(UUIDPKMixin, Base):
     )
     grading_policy_label: Mapped[str | None] = mapped_column(String)
 
-    snapshot_at: Mapped[datetime] = mapped_column(server_default="now()")
+    snapshot_at: Mapped[datetime] = mapped_column(server_default=func.now())
     snapshot_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )

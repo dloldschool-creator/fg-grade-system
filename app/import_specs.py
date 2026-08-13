@@ -17,6 +17,7 @@ from app.import_pipeline import (
     ImportSpec,
     RowError,
     ValidationResult,
+    detect_date_order,
     parse_date,
     parse_grade,
     parse_lrn,
@@ -89,6 +90,11 @@ def validate_learners(
     # checked one query at a time would take minutes.
     sections_by_name, ambiguous_names = _section_lookup(session, school_year_id)
 
+    # Decided once for the whole column: 03/04/2009 is two different days,
+    # and a single unambiguous value elsewhere in the file settles it for
+    # every row. See detect_date_order.
+    date_order = detect_date_order(row.get("birthdate") for row in rows)
+
     for row in rows:
         number = row.get("__row__")
         errors_before = len(result.errors)
@@ -104,7 +110,7 @@ def validate_learners(
         if sex_error:
             result.errors.append(RowError(number, "Sex", sex_error))
 
-        birthdate, date_error = parse_date(row.get("birthdate"))
+        birthdate, date_error = parse_date(row.get("birthdate"), date_order)
         if date_error:
             result.errors.append(RowError(number, "Birthdate", date_error))
         elif birthdate is None:

@@ -141,10 +141,13 @@ BY_ROLE = {
         [
             (
                 "LRN is 12 digits and must be unique",
-                "It's stored as text so leading zeros survive. If you paste from "
-                "Excel, check it hasn't been turned into something like "
-                "`1.07041E+11` — that value is destroyed, not just displayed "
-                "oddly.",
+                "It's stored as text so leading zeros survive. **When you upload "
+                "a file you don't need to format the column as text first** — an "
+                "LRN Excel has turned into a number is put back together for you. "
+                "The one case that can't be saved is when Excel has *rounded* it, "
+                "as in `1.07041E+11`: those digits are genuinely gone, and the "
+                "row is listed for you to fix rather than guessed at. Widen the "
+                "column before saving and it won't happen.",
             ),
             (
                 "Names are saved in capitals",
@@ -168,6 +171,17 @@ BY_ROLE = {
                 "It matters which you did: a learner who exists but isn't "
                 "enrolled appears in the masterlist and nowhere else — no "
                 "gradebook, no SF2, no report card.",
+            ),
+            (
+                "Column headings are forgiving; the values inside them aren't",
+                "`Last Name`, `last_name` and `LASTNAME` are all understood, and "
+                "extra columns are ignored — so you can upload a sheet you "
+                "already keep without renaming its headings. Dates are read in "
+                "whatever order your Excel writes them.\n\n"
+                "What still has to be right is the *content*: section and subject "
+                "names, and a 12-digit LRN. Anything unrecognised is listed as a "
+                "row to fix — nothing is saved until you press the button, and a "
+                "bad row never stops the good ones being shown.",
             ),
             (
                 "Section and subject names must match exactly on an import",

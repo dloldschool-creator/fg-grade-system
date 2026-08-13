@@ -9,6 +9,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -65,7 +66,7 @@ class GradingPolicyVersion(UUIDPKMixin, Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class Subject(UUIDPKMixin, TimestampMixin, Base):
@@ -214,5 +215,5 @@ class TeacherAssignment(UUIDPKMixin, Base):
     assigned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
-    assigned_at: Mapped[datetime] = mapped_column(server_default="now()")
+    assigned_at: Mapped[datetime] = mapped_column(server_default=func.now())
     unassigned_at: Mapped[datetime | None]

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Numeric, SmallInteger, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Numeric, SmallInteger, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -199,4 +199,4 @@ class GradeFinalizationRecord(UUIDPKMixin, Base):
         default=FinalizationRecordStatus.FINALIZED,
         server_default=FinalizationRecordStatus.FINALIZED.value,
     )
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

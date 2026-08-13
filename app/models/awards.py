@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, UniqueConstraint, text
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,7 +51,7 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class LearnerAward(UUIDPKMixin, Base):
@@ -106,5 +106,5 @@ class LearnerAward(UUIDPKMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
     override_reason: Mapped[str | None] = mapped_column(String)
-    computed_at: Mapped[datetime] = mapped_column(server_default="now()")
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    computed_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

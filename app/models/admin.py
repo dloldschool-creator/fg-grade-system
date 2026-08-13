@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,7 +26,7 @@ class AuditLog(UUIDPKMixin, Base):
     reason: Mapped[str | None] = mapped_column(String)
     ip_address: Mapped[str | None] = mapped_column(INET)
     user_agent: Mapped[str | None] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class ImportJob(UUIDPKMixin, Base):
@@ -46,7 +46,7 @@ class ImportJob(UUIDPKMixin, Base):
     validation_errors: Mapped[dict | None] = mapped_column(JSONB)
     row_count: Mapped[int | None] = mapped_column(Integer)
     imported_count: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     confirmed_at: Mapped[datetime | None]
 
 
@@ -62,5 +62,5 @@ class ExportJob(UUIDPKMixin, Base):
     status: Mapped[ExportJobStatus] = mapped_column(
         default=ExportJobStatus.PENDING, server_default=ExportJobStatus.PENDING.value
     )
-    created_at: Mapped[datetime] = mapped_column(server_default="now()")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     completed_at: Mapped[datetime | None]
