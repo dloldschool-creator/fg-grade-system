@@ -303,7 +303,16 @@ the printed form can't disagree. Don't reimplement either rule in a page.
   behind a Build button first, the way SF9's batch print does.
 - **Streamlit runs an `st.expander()` body whether or not it is open.** A
   collapsed panel is not a skipped one. Awards generated a certificate PDF
-  per eligible learner inside a collapsed expander, on every rerun.
+  per eligible learner inside a collapsed expander, on every rerun — and an
+  audit found the same shape on six more pages: Grade Summary (120 queries
+  ≈ 10.2s per click at 40 learners), Enrollment (80 ≈ 6.8s), Learners (40),
+  Users (40 at full staffing), plus Subject Profiles, Award Policy and
+  School Years. All now batch above the loop.
+  **`tests/test_expander_cost.py` fails on any new one** — it walks the AST
+  for `for` loops containing an `st.expander`, following one level into
+  module-local helpers, and allows document generation only behind a
+  button. Nothing about this bug looks wrong in the source, which is why
+  it is tested structurally rather than left to review.
 - **Awards was the worst page in the app** — two loops each resolving the
   learner, the award row and the grade summary one at a time: ~160 queries
   and 13.6s of round trips per interaction on a 40-learner section. Now

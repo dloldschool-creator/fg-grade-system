@@ -6,14 +6,12 @@ from app.models.academic_structure import GradeLevel, Strand, Track
 from app.models.subjects import Subject, SubjectProfile, SubjectProfileSubject
 
 
-def _profile_subjects_section(session, profile: SubjectProfile, subjects_by_id: dict):
+def _profile_subjects_section(session, profile: SubjectProfile, subjects_by_id: dict, entries=None):
     st.subheader("Subjects on this profile")
-    entries = (
-        session.query(SubjectProfileSubject)
-        .filter_by(subject_profile_id=profile.id)
-        .order_by(SubjectProfileSubject.display_order)
-        .all()
-    )
+    # `entries` is preloaded by the caller for the whole page — fetching
+    # them here was one round trip per profile, paid even for the panels
+    # the user never opened.
+    entries = entries or []
     for entry in entries:
         subject = subjects_by_id.get(entry.subject_id)
         subject_label = subject.official_name if subject else "(unknown subject)"
@@ -108,6 +106,14 @@ def render() -> None:
 
         profiles = session.query(SubjectProfile).order_by(SubjectProfile.name).all()
 
+        entries_by_profile: dict = {}
+        for entry in (
+            session.query(SubjectProfileSubject)
+            .order_by(SubjectProfileSubject.display_order)
+            .all()
+        ):
+            entries_by_profile.setdefault(entry.subject_profile_id, []).append(entry)
+
         for profile in profiles:
             with st.expander(
                 f"{profile.name} — {gl_by_id[profile.grade_level_id].code} / "
@@ -155,7 +161,9 @@ def render() -> None:
                         st.rerun()
 
                 st.divider()
-                _profile_subjects_section(session, profile, subjects_by_id)
+                _profile_subjects_section(
+                    session, profile, subjects_by_id, entries_by_profile.get(profile.id, [])
+                )
 
         st.divider()
         st.subheader("Add subject profile")

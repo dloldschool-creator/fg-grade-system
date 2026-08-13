@@ -47,16 +47,22 @@ def render() -> None:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
         sy_by_id = {sy.id: sy for sy in school_years}
 
+        # Grouped above the loop rather than queried per policy — see the
+        # expander note in CLAUDE.md; the list is short today but the rule
+        # is the same one every per-row panel follows.
+        versions_by_policy: dict = {}
+        for version in (
+            session.query(AwardPolicyVersion)
+            .order_by(AwardPolicyVersion.version_number.desc())
+            .all()
+        ):
+            versions_by_policy.setdefault(version.award_policy_id, []).append(version)
+
         for policy in policies:
             st.subheader(policy.name)
             if policy.description:
                 st.caption(policy.description)
-            versions = (
-                session.query(AwardPolicyVersion)
-                .filter_by(award_policy_id=policy.id)
-                .order_by(AwardPolicyVersion.version_number.desc())
-                .all()
-            )
+            versions = versions_by_policy.get(policy.id, [])
             for v in versions:
                 scope_label = (
                     "per term, on the Term Average"

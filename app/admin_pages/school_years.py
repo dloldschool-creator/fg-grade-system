@@ -18,6 +18,12 @@ def render() -> None:
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
 
+        # One query for every year's terms — an expander's body runs even
+        # when collapsed, so this was a round trip per year on every rerun.
+        terms_by_year: dict = {}
+        for term in session.query(Term).order_by(Term.term_number).all():
+            terms_by_year.setdefault(term.school_year_id, []).append(term)
+
         for sy in school_years:
             with st.expander(f"{sy.name}  ({sy.status.value})", expanded=False):
                 with st.form(f"edit_sy_{sy.id}"):
@@ -46,12 +52,7 @@ def render() -> None:
                         st.rerun()
 
                 st.subheader("Terms")
-                terms = (
-                    session.query(Term)
-                    .filter_by(school_year_id=sy.id)
-                    .order_by(Term.term_number)
-                    .all()
-                )
+                terms = terms_by_year.get(sy.id, [])
                 for term in terms:
                     with st.form(f"edit_term_{term.id}"):
                         st.markdown(f"**{term.name}**  —  encoding: {term.grade_encoding_status.value}")

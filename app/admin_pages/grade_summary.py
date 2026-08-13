@@ -152,8 +152,41 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
         st.rerun()
 
 
-def _learner_detail(session, current_user, enrollment: Enrollment, context=None):
-    summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
+def _panel_data(session, enrollments, school_year_id) -> dict:
+    """The three lookups each learner's panel used to make for itself.
+
+    `load_report_context` already spared the subject table its queries,
+    but the two metric rows above it were still one query per learner
+    each — and Streamlit runs an expander's body whether or not it is
+    open, so a collapsed section still paid for all of them on every
+    rerun. Three queries flat, instead of three per learner.
+    """
+    ids = [e.id for e in enrollments]
+    annual = {
+        row.enrollment_id: row
+        for row in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_(ids))
+        .all()
+    }
+    per_term: dict = {}
+    rows = (
+        session.query(TermGradeSummary)
+        .join(Term, Term.id == TermGradeSummary.term_id)
+        .filter(TermGradeSummary.enrollment_id.in_(ids))
+        .order_by(Term.term_number)
+        .all()
+    )
+    for row in rows:
+        per_term.setdefault(row.enrollment_id, []).append(row)
+    term_names = {
+        t.id: t.name
+        for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
+    }
+    return {"annual": annual, "terms": per_term, "term_names": term_names}
+
+
+def _learner_detail(session, current_user, enrollment: Enrollment, context=None, panel=None):
+    summary = panel["annual"].get(enrollment.id)
 
     col1, col2, col3 = st.columns(3)
     col1.metric("General Average", str(_fmt(summary.general_average if summary else None)))
@@ -167,17 +200,9 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None)
     # counts as two subjects here, not as the one combined area the Final
     # Grade column uses. This is what a TERM-scoped award (tiered Honors)
     # is judged on.
-    term_summaries = (
-        session.query(TermGradeSummary)
-        .join(Term, Term.id == TermGradeSummary.term_id)
-        .filter(TermGradeSummary.enrollment_id == enrollment.id)
-        .order_by(Term.term_number)
-        .all()
-    )
+    term_summaries = panel["terms"].get(enrollment.id, [])
     if term_summaries:
-        term_names = {t.id: t.name for t in session.query(Term).filter_by(
-            school_year_id=enrollment.school_year_id
-        ).all()}
+        term_names = panel["term_names"]
         cols = st.columns(len(term_summaries))
         for col, ts in zip(cols, term_summaries):
             col.metric(
@@ -352,6 +377,7 @@ def render() -> None:
         # each, which at ~85ms per round trip is the difference between an
         # instant page and a forty-second one for a full section.
         detail_context = load_report_context(session, enrollments)
+        panel = _panel_data(session, enrollments, sy_choice)
         learners = {
             l.id: l
             for l in session.query(Learner)
@@ -362,4 +388,4 @@ def render() -> None:
             learner = learners.get(enrollment.learner_id)
             label = f"{learner.last_name}, {learner.first_name}" if learner else "?"
             with st.expander(label):
-                _learner_detail(session, current_user, enrollment, detail_context)
+                _learner_detail(session, current_user, enrollment, detail_context, panel)

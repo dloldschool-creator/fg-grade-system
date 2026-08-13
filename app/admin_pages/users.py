@@ -57,8 +57,14 @@ def render() -> None:
 
         st.caption("Available roles: " + ", ".join(r.code for r in roles))
 
+        # One query for every grant rather than one per user. Forty
+        # teacher accounts is forty round trips otherwise, on every rerun.
+        grants_by_user: dict = {}
+        for grant in session.query(UserRole).all():
+            grants_by_user.setdefault(grant.user_id, []).append(grant)
+
         for user in users:
-            grants = session.query(UserRole).filter_by(user_id=user.id).all()
+            grants = grants_by_user.get(user.id, [])
             current_codes = {role_by_id[g.role_id].code for g in grants}
             with st.expander(f"{user.full_name} — {user.email}  [{', '.join(sorted(current_codes)) or 'no role'}]"):
                 col1, col2 = st.columns(2)

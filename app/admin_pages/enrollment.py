@@ -212,8 +212,28 @@ def _roster_tab(session, adviser_user_id, current_user):
         st.info("No learners enrolled in this section yet — use the Enroll Learner tab.")
         return
 
+    # Both lookups batched above the loop: an expander's body runs whether
+    # or not it is open, so every panel's learner and movement history was
+    # a round trip each on every rerun.
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner)
+        .filter(Learner.id.in_([e.learner_id for e in enrollments]))
+        .all()
+    }
+    movements_by_enrollment: dict = {}
+    for movement in (
+        session.query(LearnerMovement)
+        .filter(LearnerMovement.enrollment_id.in_([e.id for e in enrollments]))
+        .order_by(LearnerMovement.effective_date.desc())
+        .all()
+    ):
+        movements_by_enrollment.setdefault(movement.enrollment_id, []).append(movement)
+
     for enrollment in enrollments:
-        learner = session.get(Learner, enrollment.learner_id)
+        learner = learners.get(enrollment.learner_id)
+        if learner is None:
+            continue
         with st.expander(
             f"{learner.last_name}, {learner.first_name} — {enrollment.enrollment_status.value}"
         ):
@@ -247,12 +267,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                     st.rerun()
 
             st.subheader("Movement / status history")
-            movements = (
-                session.query(LearnerMovement)
-                .filter_by(enrollment_id=enrollment.id)
-                .order_by(LearnerMovement.effective_date.desc())
-                .all()
-            )
+            movements = movements_by_enrollment.get(enrollment.id, [])
             if movements:
                 st.table(
                     [

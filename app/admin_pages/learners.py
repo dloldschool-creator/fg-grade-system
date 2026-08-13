@@ -61,10 +61,10 @@ def _identity_form(session, learner: Learner) -> None:
             st.rerun()
 
 
-def _admission_record_form(session, learner: Learner) -> None:
-    record = (
-        session.query(LearnerAdmissionRecord).filter_by(learner_id=learner.id).one_or_none()
-    )
+def _admission_record_form(session, learner: Learner, record=None) -> None:
+    # `record` comes preloaded from the caller's batched lookup. Fetching
+    # it here was one round trip per learner on the list, paid whether or
+    # not the panel was open — Streamlit runs an expander's body either way.
     st.caption("Usually filled in once, when the learner is admitted to Grade 11.")
     with st.form(f"admission_{learner.id}"):
         date_of_shs_admission = st.date_input(
@@ -307,6 +307,13 @@ def render() -> None:
         if not search:
             st.caption(f"Showing the first {RESULT_LIMIT} learners — search to narrow down.")
 
+        admission_records = {
+            row.learner_id: row
+            for row in session.query(LearnerAdmissionRecord)
+            .filter(LearnerAdmissionRecord.learner_id.in_([l.id for l in learners]))
+            .all()
+        } if learners else {}
+
         for learner in learners:
             label = f"{learner.last_name}, {learner.first_name}"
             if learner.middle_name:
@@ -315,7 +322,9 @@ def render() -> None:
             with st.expander(label):
                 _identity_form(session, learner)
                 st.divider()
-                _admission_record_form(session, learner)
+                _admission_record_form(
+                    session, learner, admission_records.get(learner.id)
+                )
 
         st.divider()
         st.subheader("Add learner")
