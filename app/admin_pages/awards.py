@@ -7,6 +7,7 @@ from app.auth import require_role
 from app.award_service import clear_award_override, compute_award_eligibility, set_award_override
 from app.certificate_generator import (
     CertificateData,
+    certificate_award_name,
     generate_award_certificate,
     generate_award_certificates_2up,
 )
@@ -16,6 +17,54 @@ from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
+from app.roster_order import learner_order_by
+
+
+def _load_award_context(session, enrollments, version, version_choice, term_choice) -> dict:
+    """Everything the roster needs, in three queries instead of four per
+    learner.
+
+    Both loops below used to resolve the learner, their award row and
+    their grade summary one at a time. At ~85ms a round trip that was
+    about 160 queries — thirteen seconds — for a forty-learner section,
+    paid again on every widget interaction because Streamlit re-runs the
+    whole script each time.
+    """
+    ids = [e.id for e in enrollments]
+    learner_ids = [e.learner_id for e in enrollments]
+
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner).filter(Learner.id.in_(learner_ids)).all()
+    }
+    awards = {
+        award.enrollment_id: award
+        for award in session.query(LearnerAward)
+        .filter(
+            LearnerAward.enrollment_id.in_(ids),
+            LearnerAward.award_policy_version_id == version_choice,
+            LearnerAward.term_id == term_choice,
+        )
+        .all()
+    }
+    if version.scope == AwardScope.TERM:
+        summaries = {
+            row.enrollment_id: row.term_average
+            for row in session.query(TermGradeSummary)
+            .filter(
+                TermGradeSummary.enrollment_id.in_(ids),
+                TermGradeSummary.term_id == term_choice,
+            )
+            .all()
+        }
+    else:
+        summaries = {
+            row.enrollment_id: row.general_average
+            for row in session.query(AnnualGradeSummary)
+            .filter(AnnualGradeSummary.enrollment_id.in_(ids))
+            .all()
+        }
+    return {"learners": learners, "awards": awards, "averages": summaries}
 
 
 def _certificate_data(
@@ -26,7 +75,9 @@ def _certificate_data(
         school_name=school.school_name,
         schools_division=school.schools_division,
         learner_name=f"{learner.last_name}, {learner.first_name}",
-        award_name=award.award_name or "RECOGNITION",
+        # The policy's administrative name carries the DepEd order and a
+        # version; neither belongs on a learner's certificate.
+        award_name=certificate_award_name(award.award_name),
         general_average=average,
         term_name=term_name,
         recognition_date=issued_on,
@@ -39,39 +90,28 @@ def _certificate_data(
 
 
 def _batch_download(
-    session, enrollments, version, version_choice, term_choice, term_name,
+    enrollments, context, term_name,
     school, school_year, adviser, signatory, position, issued_on, venue,
 ) -> None:
-    """One PDF for every eligible learner in the section, two to a page."""
+    """One PDF for every eligible learner in the section, two to a page.
+
+    Reads the preloaded context rather than querying per learner, and
+    renders nothing until asked: `st.download_button(data=...)` evaluates
+    its data on every script run, so an ungated one rebuilt the whole
+    section's certificates each time any widget on this page moved.
+    """
     eligible = []
     for enrollment in enrollments:
-        award = (
-            session.query(LearnerAward)
-            .filter_by(
-                enrollment_id=enrollment.id,
-                award_policy_version_id=version_choice,
-                term_id=term_choice,
-            )
-            .one_or_none()
-        )
+        award = context["awards"].get(enrollment.id)
         if award is None or award.award_result != AwardResult.ELIGIBLE_AWARDED:
             continue
-        learner = session.get(Learner, enrollment.learner_id)
-        if version.scope == AwardScope.TERM:
-            summary = (
-                session.query(TermGradeSummary)
-                .filter_by(enrollment_id=enrollment.id, term_id=term_choice)
-                .one_or_none()
-            )
-            average = summary.term_average if summary else None
-        else:
-            summary = (
-                session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
-            )
-            average = summary.general_average if summary else None
+        learner = context["learners"].get(enrollment.learner_id)
+        if learner is None:
+            continue
         eligible.append(
             _certificate_data(
-                school, school_year, learner, award, average, term_name,
+                school, school_year, learner, award,
+                context["averages"].get(enrollment.id), term_name,
                 adviser, signatory, position, issued_on, venue,
             )
         )
@@ -84,17 +124,23 @@ def _batch_download(
         return
 
     pages = -(-len(eligible) // 2)  # ceil
-    st.download_button(
-        f"Print all {len(eligible)} certificate(s) — 2 per page ({pages} sheet(s))",
-        data=generate_award_certificates_2up(eligible),
-        file_name=(
-            f"certificates_{school_year.name}"
-            f"{'_' + term_name.replace(' ', '') if term_name else ''}.pdf"
-        ),
-        mime="application/pdf",
-        type="primary",
+    st.caption(
+        f"{len(eligible)} eligible learner(s) — {pages} sheet(s), two half-page "
+        "certificates per sheet with a cut line between them."
     )
-    st.caption("Two half-page certificates per sheet with a cut line between them.")
+    if st.button(f"Build {len(eligible)} certificate(s)", type="primary"):
+        data = generate_award_certificates_2up(eligible)
+        st.success(f"Ready — {len(data) / 1024:,.0f} KB.")
+        st.download_button(
+            "Download certificates PDF",
+            data=data,
+            file_name=(
+                f"certificates_{school_year.name}"
+                f"{'_' + term_name.replace(' ', '') if term_name else ''}.pdf"
+            ),
+            mime="application/pdf",
+            type="primary",
+        )
 
 
 def _certificate_settings(version, school, school_year):
@@ -236,7 +282,7 @@ def render() -> None:
             session.query(Enrollment)
             .filter_by(section_id=section.id, school_year_id=sy_choice)
             .join(Learner, Learner.id == Enrollment.learner_id)
-            .order_by(Learner.last_name, Learner.first_name)
+            .order_by(*learner_order_by(Learner))
             .all()
         )
         if not enrollments:
@@ -249,37 +295,24 @@ def render() -> None:
             flash("success", f"Computed eligibility for {len(enrollments)} learner(s).")
             st.rerun()
 
+        # Three queries for the whole roster, read by both the batch print
+        # and the per-learner panels below.
+        context = _load_award_context(
+            session, enrollments, version, version_choice, term_choice
+        )
+
         _batch_download(
-            session, enrollments, version, version_choice, term_choice, term_name,
+            enrollments, context, term_name,
             school, school_year, adviser, signatory, position, issued_on, venue,
         )
         st.divider()
 
         for enrollment in enrollments:
-            learner = session.get(Learner, enrollment.learner_id)
-            award = (
-                session.query(LearnerAward)
-                .filter_by(
-                    enrollment_id=enrollment.id,
-                    award_policy_version_id=version_choice,
-                    term_id=term_choice,
-                )
-                .one_or_none()
-            )
-            if version.scope == AwardScope.TERM:
-                summary = (
-                    session.query(TermGradeSummary)
-                    .filter_by(enrollment_id=enrollment.id, term_id=term_choice)
-                    .one_or_none()
-                )
-                average = summary.term_average if summary else None
-            else:
-                summary = (
-                    session.query(AnnualGradeSummary)
-                    .filter_by(enrollment_id=enrollment.id)
-                    .one_or_none()
-                )
-                average = summary.general_average if summary else None
+            learner = context["learners"].get(enrollment.learner_id)
+            award = context["awards"].get(enrollment.id)
+            average = context["averages"].get(enrollment.id)
+            if learner is None:
+                continue
 
             status_label = award.award_result.value if award else "not computed yet"
             with st.expander(f"{learner.last_name}, {learner.first_name} — {status_label}"):
@@ -328,19 +361,24 @@ def render() -> None:
                         "page) before generating a certificate."
                     )
                 elif award.award_result == AwardResult.ELIGIBLE_AWARDED:
-                    pdf_bytes = generate_award_certificate(
-                        **_certificate_data(
-                            school, school_year, learner, award, average, term_name,
-                            adviser, signatory, position, issued_on, venue,
-                        ).__dict__
-                    )
-                    st.download_button(
-                        "Download certificate",
-                        data=pdf_bytes,
-                        file_name=(
-                            f"certificate_{learner.last_name}_{learner.first_name}"
-                            f"{'_' + term_name.replace(' ', '') if term_name else ''}.pdf"
-                        ),
-                        mime="application/pdf",
-                        key=f"dl_{award.id}",
-                    )
+                    # Built on click. Streamlit runs an expander's body
+                    # whether or not it is open, so generating here
+                    # unconditionally rendered a certificate for every
+                    # eligible learner in the section on every rerun.
+                    if st.button("Build certificate", key=f"build_{award.id}"):
+                        pdf_bytes = generate_award_certificate(
+                            **_certificate_data(
+                                school, school_year, learner, award, average, term_name,
+                                adviser, signatory, position, issued_on, venue,
+                            ).__dict__
+                        )
+                        st.download_button(
+                            "Download certificate",
+                            data=pdf_bytes,
+                            file_name=(
+                                f"certificate_{learner.last_name}_{learner.first_name}"
+                                f"{'_' + term_name.replace(' ', '') if term_name else ''}.pdf"
+                            ),
+                            mime="application/pdf",
+                            key=f"dl_{award.id}",
+                        )

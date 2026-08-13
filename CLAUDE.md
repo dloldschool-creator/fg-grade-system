@@ -222,8 +222,8 @@ of each is in `docs/build-log.md`.
   are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
   the opposite of what every DepEd form and the teachers' workbook use.
   `roster_for_month` had this bug while its own docstring claimed
-  male-first. All six rosters (Gradebook, Grade Summary, Attendance, SF2,
-  SF9, Term Cards) go through `app/roster_order.py`; use
+  male-first. All seven rosters (Gradebook, Grade Summary, Attendance,
+  SF2, SF9, Term Cards, Awards) go through `app/roster_order.py`; use
   `learner_order_by()` in a query or `learner_sort_key()` on a list,
   never a hand-rolled ORDER BY.
 - **A `.join(Learner, ...)` added only to sort a query does not load the
@@ -301,6 +301,14 @@ the printed form can't disagree. Don't reimplement either rule in a page.
   on the page moves, for a download nobody asked for. Term Cards did this
   with a full section's PDF. Put anything that scales with the roster
   behind a Build button first, the way SF9's batch print does.
+- **Streamlit runs an `st.expander()` body whether or not it is open.** A
+  collapsed panel is not a skipped one. Awards generated a certificate PDF
+  per eligible learner inside a collapsed expander, on every rerun.
+- **Awards was the worst page in the app** — two loops each resolving the
+  learner, the award row and the grade summary one at a time: ~160 queries
+  and 13.6s of round trips per interaction on a 40-learner section. Now
+  `_load_award_context()` does it in **3 queries, flat**. If you add a
+  per-learner panel anywhere, load its data above the loop.
 - `tests/test_query_cost.py` asserts this shape and stays meaningful on a
   fast local database, where the bug is otherwise invisible.
 

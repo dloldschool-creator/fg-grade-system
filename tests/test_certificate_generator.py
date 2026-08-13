@@ -11,12 +11,68 @@ from reportlab.lib.pagesizes import landscape, letter
 from app.certificate_generator import (
     CertificateData,
     _citation,
+    certificate_award_name,
     formal_term_name,
     _given_line,
     _ordinal,
     generate_award_certificate,
     generate_award_certificates_2up,
 )
+
+
+# --- What the award is called on the certificate ---------------------------
+
+
+def test_the_deped_order_and_version_come_off_the_printed_name():
+    """The policy is named for the administrators who maintain it. A
+    learner's certificate should read "Academic Excellence Award", not
+    cite the order it was created under."""
+    assert (
+        certificate_award_name("Academic Excellence Award (DO 15, s. 2026) (v1)")
+        == "Academic Excellence Award"
+    )
+    assert (
+        certificate_award_name("Academic Excellence Award (DO 15, s. 2026)")
+        == "Academic Excellence Award"
+    )
+
+
+@pytest.mark.parametrize(
+    "label", ["With Highest Honors", "With High Honors", "With Honors"]
+)
+def test_the_tiered_honors_labels_are_untouched(label):
+    """They carry no parenthetical, so there is nothing to strip — and
+    stripping them would be wrong, these are the award names themselves."""
+    assert certificate_award_name(label) == label
+
+
+def test_only_trailing_parentheticals_are_stripped():
+    """A parenthetical that is part of the award reads mid-string."""
+    assert certificate_award_name("Best in (Applied) Mathematics") == (
+        "Best in (Applied) Mathematics"
+    )
+
+
+def test_it_never_strips_its_way_down_to_nothing():
+    """A name that is *entirely* a parenthetical keeps it rather than
+    printing a blank line where the award should be."""
+    assert certificate_award_name("(v1)") == "(v1)"
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_a_missing_award_name_falls_back_rather_than_printing_empty(blank):
+    assert certificate_award_name(blank) == "RECOGNITION"
+
+
+def test_the_citation_line_uses_the_cleaned_name():
+    """The wording rule and the cleaning have to meet somewhere — this is
+    the line a parent actually reads."""
+    data = _certificate(award_name=certificate_award_name(
+        "Academic Excellence Award (DO 15, s. 2026) (v1)"
+    ))
+    assert "Academic Excellence Award" in _citation(data)
+    assert "DO 15" not in _citation(data)
+    assert "(v1)" not in _citation(data)
 
 
 def _certificate(**overrides) -> CertificateData:

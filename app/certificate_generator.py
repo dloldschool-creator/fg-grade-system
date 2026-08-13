@@ -47,6 +47,33 @@ _DESIGN_W, _DESIGN_H = landscape(letter)
 # those steps change.
 _BODY_BLOCK_HEIGHT = 120
 
+# The award policy is *named* for the administrators who maintain it —
+# "Academic Excellence Award (DO 15, s. 2026)", possibly with a version
+# suffix — and that name is what the Award Policy page, the exports and
+# the audit trail need. A learner's certificate is not the place for the
+# DepEd order number, so trailing parentheticals come off before printing.
+# Only trailing ones: a name whose parenthetical is part of the award
+# itself would have it mid-string.
+_TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def certificate_award_name(name: str | None) -> str:
+    """The award as it should read on a certificate.
+
+    "Academic Excellence Award (DO 15, s. 2026) (v1)" -> "Academic Excellence Award"
+
+    Repeats so a citation *and* a version suffix both come off. Leaves the
+    tiered Honors labels ("With Highest Honors") untouched — they carry no
+    parentheses — and never strips its way down to nothing.
+    """
+    cleaned = (name or "").strip()
+    while True:
+        stripped = _TRAILING_PARENTHETICAL.sub("", cleaned).strip()
+        if not stripped or stripped == cleaned:
+            break
+        cleaned = stripped
+    return cleaned or "RECOGNITION"
+
 
 @dataclass
 class CertificateData:
