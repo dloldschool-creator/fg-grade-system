@@ -4,13 +4,51 @@ from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes
 from app.auth import require_role
 from app.models.rbac import Role, User, UserRole
-from app.user_provisioning import UserProvisioningError, provision_user
+from app.user_provisioning import (
+    UserProvisioningError,
+    delete_user,
+    provision_user,
+    reset_password,
+)
+
+
+def _show_temporary_password() -> None:
+    """Displays a just-issued password, once.
+
+    It is never stored anywhere readable, so if this is missed the only
+    way back is another reset. It stays on screen until dismissed rather
+    than vanishing on the next rerun, because losing it is exactly how
+    accounts get stranded.
+    """
+    last = st.session_state.get("_last_provisioned")
+    if last is None:
+        return
+    verb = "Password reset for" if last.already_existed else "Created"
+    st.success(f"{verb} {last.email}.")
+    st.warning(
+        "Temporary password — shown once. Copy it now and hand it over in "
+        "person or by phone, not by email or chat.",
+        icon="🔑",
+    )
+    st.code(last.temporary_password)
+    st.caption(
+        "They sign in with this, then set their own from **Change Password** "
+        "in the sidebar."
+    )
+    if st.button("Done — hide this"):
+        del st.session_state["_last_provisioned"]
+        st.rerun()
+    st.divider()
 
 
 def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Users & Roles")
     render_flashes()
+    # Shown at the top, not beside whichever control produced it: the
+    # password appears exactly once, and a reset triggered from a user
+    # far down a long list would otherwise scroll off the screen.
+    _show_temporary_password()
 
     with get_session() as session:
         roles = session.query(Role).order_by(Role.code).all()
@@ -74,6 +112,55 @@ def render() -> None:
                     flash("success", "Roles updated.")
                     st.rerun()
 
+                st.divider()
+                col_reset, col_delete = st.columns(2)
+
+                with col_reset:
+                    st.caption(
+                        "Issues a new temporary password. Use this if the one shown "
+                        "when the account was created was never written down."
+                    )
+                    if st.button("Reset password", key=f"reset_{user.id}"):
+                        try:
+                            st.session_state["_last_provisioned"] = reset_password(user.email)
+                        except UserProvisioningError as exc:
+                            flash("error", str(exc))
+                        st.rerun()
+
+                with col_delete:
+                    st.caption(
+                        "Removes the account and its sign-in. Work they recorded — "
+                        "grades, attendance, the audit trail — is kept."
+                    )
+                    confirmed = st.checkbox(
+                        "I'm sure", key=f"confirm_delete_{user.id}",
+                        help="Deleting cannot be undone.",
+                    )
+                    if st.button(
+                        "Delete user", key=f"delete_{user.id}", disabled=not confirmed,
+                        type="secondary",
+                    ):
+                        if user.id == current_user.id:
+                            flash("error", "You can't delete the account you're signed in with.")
+                        else:
+                            try:
+                                delete_user(user.email)
+                            except UserProvisioningError as exc:
+                                flash("error", str(exc))
+                            else:
+                                audit_service.record(
+                                    session,
+                                    action=audit_service.USER_ROLES_CHANGED,
+                                    object_type="users",
+                                    object_id=user.id,
+                                    user_id=current_user.id,
+                                    previous={"user": user.email, "roles": sorted(current_codes)},
+                                    new={"deleted": True},
+                                )
+                                session.commit()
+                                flash("success", f"Deleted {user.email}.")
+                        st.rerun()
+
         st.divider()
         st.subheader("Add user")
         st.caption(
@@ -101,12 +188,3 @@ def render() -> None:
                     else:
                         st.session_state["_last_provisioned"] = result
 
-        last = st.session_state.get("_last_provisioned")
-        if last is not None:
-            verb = "Password reset for" if last.already_existed else "Created"
-            st.success(f"{verb} {last.email}.")
-            st.warning("Temporary password (shown once — relay it directly, not by email/chat):")
-            st.code(last.temporary_password)
-            if st.button("Dismiss"):
-                del st.session_state["_last_provisioned"]
-                st.rerun()

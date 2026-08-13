@@ -18,7 +18,9 @@ from dataclasses import dataclass
 
 from app.database import SessionLocal
 from app.naming import normalize_name
+from app.models.academic_structure import Section
 from app.models.rbac import Role, User, UserRole
+from app.models.subjects import TeacherAssignment
 from app.supabase_clients import get_admin_client
 
 
@@ -67,6 +69,79 @@ def _create_or_reset_auth_user(email: str, full_name: str) -> ProvisionedUser:
         temporary_password=temp_password,
         already_existed=False,
     )
+
+
+def reset_password(email: str) -> ProvisionedUser:
+    """Issues a fresh temporary password for an account that already exists.
+
+    Needed because the password is shown exactly once. If the admin loses
+    it — the browser closed, the connection dropped mid-create — the
+    account is otherwise stranded: nobody knows the password and the
+    account cannot be signed into to change it.
+
+    Deliberately separate from `provision_user`, which also grants roles.
+    Resetting a password should not be able to alter what someone can do.
+    """
+    admin = get_admin_client().auth.admin
+    existing = next(
+        (u for u in admin.list_users() if (u.email or "").lower() == email.lower()), None
+    )
+    if existing is None:
+        raise UserProvisioningError(f"No account exists for {email}.")
+
+    temp_password = _generate_temporary_password()
+    admin.update_user_by_id(existing.id, {"password": temp_password})
+    return ProvisionedUser(
+        user_id=existing.id, email=email, temporary_password=temp_password, already_existed=True
+    )
+
+
+def delete_user(email: str) -> None:
+    """Removes the account entirely — the app row, its roles, and the
+    Supabase Auth login.
+
+    Refuses while the person still advises a section or is assigned to
+    teach, because those are the two foreign keys that block the delete
+    and both need a human decision about who takes over.
+
+    Everything historical about them survives: who submitted a grade, who
+    finalized a month, and every audit entry are all `ON DELETE SET NULL`,
+    so the record keeps its shape and simply stops naming them.
+    """
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter_by(email=email).one_or_none()
+        if user is not None:
+            advises = session.query(Section).filter_by(adviser_user_id=user.id).count()
+            if advises:
+                raise UserProvisioningError(
+                    f"{email} still advises {advises} section(s). Assign a different "
+                    "adviser on the Sections page first."
+                )
+            teaches = (
+                session.query(TeacherAssignment).filter_by(teacher_user_id=user.id).count()
+            )
+            if teaches:
+                raise UserProvisioningError(
+                    f"{email} still has {teaches} teaching assignment(s). Reassign them "
+                    "on the Teacher Assignments page first."
+                )
+            session.query(UserRole).filter_by(user_id=user.id).delete()
+            session.delete(user)
+            session.commit()
+    finally:
+        session.close()
+
+    # Last, and outside the transaction: if this fails the app row is
+    # already gone, and a stranded Auth login is recoverable — re-adding
+    # the same email resets it. The reverse order could leave someone
+    # able to sign in with no account behind it.
+    admin = get_admin_client().auth.admin
+    existing = next(
+        (u for u in admin.list_users() if (u.email or "").lower() == email.lower()), None
+    )
+    if existing is not None:
+        admin.delete_user(existing.id)
 
 
 def provision_user(email: str, full_name: str, role_codes: list[str]) -> ProvisionedUser:
