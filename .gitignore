@@ -5,6 +5,12 @@ supabase.txt
 # comes from .env via app/database.py), but it's the first place someone
 # would put a credential, so it's ignored before that can happen.
 .streamlit/secrets.toml
+# Personal Claude Code permission grants. The ".local." in the name means
+# "not shared" — but it was committed in 324551d and rode along until
+# 2026-08-13, so anyone cloning inherited the allow rules on their own
+# machine. Project-wide settings, if we ever want any, go in the sibling
+# .claude/settings.json, which IS meant to be committed.
+.claude/settings.local.json
 
 # Python
 __pycache__/
