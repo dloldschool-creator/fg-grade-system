@@ -268,6 +268,16 @@ the printed form can't disagree. Don't reimplement either rule in a page.
   grade on the card.
 - **Never `PatternFill(fill_type=None)` to clear a fill** — it serialises to
   OOXML fill index 1, which is always gray125.
+- **openpyxl cannot round-trip an `externalLinks` part.** Every template is
+  a print-view of the school's master workbook, so every one carries a link
+  to it. The templates are valid; on save openpyxl writes `externalBook
+  r:id="rId1"` while numbering the surviving relationship `rId3`, and Excel
+  follows the dangling id and offers to *recover* the file. **Every builder
+  must `workbook._external_links = []` then `assert_no_external_links()`
+  before returning** — SF2 and SF9 did, SF4 was added later and didn't, and
+  it shipped a file that downloaded fine, unzipped fine, parsed fine and
+  would not open. `tests/test_workbook_package.py` checks the shipped bytes
+  of all three for that and for any other dangling relationship.
 - **Column widths are `<col min= max= width=>` *ranges*,** keyed by the
   first letter only; reading them per letter silently leaves columns at the
   default width.

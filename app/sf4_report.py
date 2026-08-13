@@ -39,7 +39,13 @@ from sqlalchemy.orm import Session
 
 from app.attendance_engine import Movement, compute_active_window
 from app.attendance_service import class_days_in_month, records_for_month
-from app.excel_template import anchor_map, workbook_to_bytes, write, write_ref
+from app.excel_template import (
+    anchor_map,
+    assert_no_external_links,
+    workbook_to_bytes,
+    write,
+    write_ref,
+)
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
@@ -421,6 +427,19 @@ def build_sf4_workbook(session: Session, school_year_id, year: int, month: int):
         _write_row(worksheet, anchors, total_row, _combine(block, grade_number), class_day_count)
 
     _write_row(worksheet, anchors, ROW_GRAND_TOTAL, _combine(rows), class_day_count)
+
+    # Drop the link to the school's master workbook, exactly as SF2 and
+    # SF9 do. Two reasons, and the second is the one that bit:
+    #
+    # 1. Every figure on this sheet is written above, so the link is dead
+    #    weight that only earns an "update links?" prompt.
+    # 2. **openpyxl cannot round-trip the part.** The template is valid —
+    #    its externalBook references rId1/rId2/rId3 and its .rels declares
+    #    all three — but on save openpyxl writes `externalBook r:id="rId1"`
+    #    while numbering the surviving relationship rId3. That dangling
+    #    reference is what made Excel offer to "recover" the file.
+    workbook._external_links = []
+    assert_no_external_links(workbook)
     return workbook
 
 
