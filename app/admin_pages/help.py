@@ -140,14 +140,19 @@ BY_ROLE = {
         "Registrar — Learners and enrollment",
         [
             (
-                "LRN is 12 digits and must be unique",
-                "It's stored as text so leading zeros survive. **When you upload "
-                "a file you don't need to format the column as text first** — an "
-                "LRN Excel has turned into a number is put back together for you. "
-                "The one case that can't be saved is when Excel has *rounded* it, "
-                "as in `1.07041E+11`: those digits are genuinely gone, and the "
-                "row is listed for you to fix rather than guessed at. Widen the "
-                "column before saving and it won't happen.",
+                "Upload as Excel (.xlsx), not CSV — this is the one that bites",
+                "The LRN is 12 digits and is stored as text so leading zeros "
+                "survive. You don't need to format the column as text first: from "
+                "a **.xlsx** file the number comes through whole however Excel is "
+                "displaying it.\n\n"
+                "**Saving as CSV is what breaks it.** Excel writes the number the "
+                "way it looks on screen, so `107041140016` becomes `1.07041E+11` "
+                "and the last six digits are thrown away — not hidden, gone. The "
+                "rows are refused rather than guessed at, because two different "
+                "learners can round to the same value and the system would "
+                "otherwise report a duplicate that isn't real and store an LRN "
+                "nobody has.\n\n"
+                "Fix: **Save As → Excel Workbook (.xlsx)** and upload that.",
             ),
             (
                 "Names are saved in capitals",
@@ -196,6 +201,17 @@ BY_ROLE = {
                 "Nothing imported is treated as final. It still goes through the "
                 "normal submit and verify steps. A blank cell in your file stays "
                 "blank; it never becomes a 0.",
+            ),
+            (
+                "Import term grades one section at a time",
+                "Pick the school year at the top — section names repeat between "
+                "years, and that choice is what keeps a grade off last year's "
+                "section of the same name.\n\n"
+                "After the grades are saved, every learner in the file has their "
+                "averages recalculated. That's the slow part, and it's why a "
+                "file per section is better than one file for the whole school. "
+                "Let it finish; the progress bar is the recalculation, not the "
+                "saving.",
             ),
         ],
     ),

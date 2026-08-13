@@ -90,6 +90,14 @@ class ImportSpec:
     # Kept off the file itself: a school year repeated on all 1,200 rows
     # is 1,200 chances to disagree with itself.
     needs_school_year: bool = False
+    # Shown under the school-year picker; what the choice actually affects.
+    school_year_help: str = ""
+    # Optional follow-up work that must run in its **own** transaction,
+    # after the page has committed — recomputing the derived grade tables,
+    # for instance, which commits internally and so cannot be folded into
+    # the import's own transaction. Signature (session, parsed, progress)
+    # -> a short note to show the user, or None.
+    after_commit: Callable | None = None
 
     @property
     def required_fields(self) -> list[str]:
@@ -288,8 +296,9 @@ def parse_lrn(raw: str) -> tuple[str | None, str | None]:
         significant = len(re.sub(r"[^0-9]", "", value.split("E")[0].split("e")[0]).lstrip("0"))
         if expanded != expanded.to_integral_value() or significant < len(digits):
             return None, (
-                f"LRN {str(raw).strip()!r} has been rounded by Excel and its digits are "
-                "lost — widen the column or format it as text, then save and re-upload"
+                f"LRN {str(raw).strip()!r} lost its digits when the file was saved as CSV — "
+                "only the first few are left, so the real number can't be recovered. "
+                "Re-save the file as Excel (.xlsx) and upload that instead."
             )
         value = digits
 

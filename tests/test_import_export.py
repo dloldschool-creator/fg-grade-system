@@ -222,6 +222,15 @@ def test_learner_row_missing_required_fields_is_rejected(session):
     assert {e.column for e in result.errors} >= {"Last Name", "Birthdate"}
 
 
+def _any_school_year_id(session):
+    from app.models.organization import SchoolYear
+
+    year = session.query(SchoolYear).first()
+    if year is None:
+        pytest.skip("no school year configured")
+    return year.id
+
+
 def test_unknown_section_and_subject_are_rejected(session):
     """Two more of §51's named errors."""
     rows = [
@@ -234,11 +243,67 @@ def test_unknown_section_and_subject_are_rejected(session):
             "grade": "90",
         }
     ]
-    result = validate_term_grades(session, rows, {})
+    result = validate_term_grades(
+        session, rows, {}, school_year_id=_any_school_year_id(session)
+    )
     assert not result.ok
     messages = " ".join(e.message for e in result.errors)
     assert "unknown section" in messages
     assert "unknown subject" in messages
+
+
+def test_term_grades_refuse_to_run_without_a_school_year(session):
+    """A section name is unique only per grade level per school year, so
+    without a year there is nothing to resolve it against. Matching on the
+    name alone would silently write a grade into a same-named section of a
+    different year — a row that looks fine and no report ever shows."""
+    rows = [
+        {
+            "__row__": 2,
+            "lrn": "012345678901",
+            "section": "JOBS",
+            "subject": "Whatever",
+            "term": "1",
+            "grade": "90",
+        }
+    ]
+    result = validate_term_grades(session, rows, {}, school_year_id=None)
+    assert not result.ok
+    assert "school year" in result.errors[0].message
+    assert not result.parsed
+
+
+def test_term_grades_are_scoped_to_the_chosen_school_year(session):
+    """A real section resolves in its own year and not in another one."""
+    from app.models.academic_structure import Section
+    from app.models.organization import SchoolYear
+
+    section = session.query(Section).first()
+    if section is None:
+        pytest.skip("no sections configured")
+    other_year = (
+        session.query(SchoolYear).filter(SchoolYear.id != section.school_year_id).first()
+    )
+    if other_year is None:
+        pytest.skip("only one school year configured")
+
+    rows = [
+        {
+            "__row__": 2,
+            "lrn": "012345678901",
+            "section": section.name,
+            "subject": "NO SUCH SUBJECT",
+            "term": "1",
+            "grade": "90",
+        }
+    ]
+    in_its_year = validate_term_grades(
+        session, rows, {}, school_year_id=section.school_year_id
+    )
+    in_other_year = validate_term_grades(session, rows, {}, school_year_id=other_year.id)
+
+    assert not any("unknown section" in e.message for e in in_its_year.errors)
+    assert any("unknown section" in e.message for e in in_other_year.errors)
 
 
 def test_term_grades_reject_a_subject_not_offered_that_term(session):
@@ -291,7 +356,9 @@ def test_term_grades_reject_a_subject_not_offered_that_term(session):
             "grade": "90",
         }
     ]
-    result = validate_term_grades(session, rows, {})
+    result = validate_term_grades(
+        session, rows, {}, school_year_id=section.school_year_id
+    )
     assert not result.ok
     assert any("is not offered" in e.message for e in result.errors)
 

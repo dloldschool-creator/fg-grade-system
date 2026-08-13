@@ -81,15 +81,14 @@ def render() -> None:
         if school_years:
             sy_by_id = {sy.id: sy for sy in school_years}
             school_year_id = st.selectbox(
-                "School year to enroll into",
+                "School year this file belongs to",
                 options=[sy.id for sy in school_years],
                 format_func=lambda v: sy_by_id[v].name,
-                help="Only used by the optional Section column. Learners with no "
-                "section are created without being enrolled.",
+                help=spec.school_year_help or None,
                 key=f"import_sy_{spec.job_type}",
             )
         else:
-            st.warning("No school years yet — create one before importing with a Section column.")
+            st.warning("No school years yet — create one before importing.")
 
     uploaded = st.file_uploader(
         "Spreadsheet (.xlsx) or CSV", type=["xlsx", "xlsm", "csv"], key=f"upload_{spec.job_type}"
@@ -209,5 +208,20 @@ def render() -> None:
                 new={"job_type": spec.job_type, "file": uploaded.name, "rows_written": written},
             )
             if try_commit(session, f"Imported {written} row(s)."):
+                # Runs in its own transaction, after the import has landed
+                # — see ImportSpec.after_commit. Progress is shown because
+                # for term grades this is the slow half.
+                if spec.after_commit:
+                    bar = st.progress(0.0, text="Recalculating averages…")
+                    note = spec.after_commit(
+                        session,
+                        result.parsed,
+                        lambda done, total: bar.progress(
+                            done / total, text=f"Recalculating averages… {done} of {total}"
+                        ),
+                    )
+                    bar.empty()
+                    if note:
+                        flash("info", note)
                 st.session_state[f"validated_{spec.job_type}"] = False
                 st.rerun()

@@ -20,6 +20,8 @@ from app.import_pipeline import (
     parse_date,
     parse_lrn,
 )
+from app.import_specs import _parse_sex
+from app.models.enums import Sex
 
 
 # --- LRN: Excel treats twelve digits as a number ---------------------------
@@ -48,10 +50,24 @@ def test_a_rounded_lrn_is_still_rejected():
     """
     value, error = parse_lrn("1.07E+11")
     assert value is None
-    assert "rounded" in error
+    assert ".xlsx" in error
     # The tempting bug: 1.07E+11 expands cleanly to 107000000000, which is
     # exactly twelve digits and passes every other check.
     assert "107000000000" not in str(value)
+
+
+def test_rounding_manufactures_duplicates_that_are_not_real():
+    """Why accepting a rounded LRN would be worse than rejecting it.
+
+    A real upload had two different learners whose LRNs Excel wrote as
+    1.07023E+11. Expanded, both become 107023000000 — so accepting them
+    would report a duplicate that does not exist, reject one learner who
+    is genuinely distinct, and store a fabricated LRN for the other.
+    """
+    first, first_error = parse_lrn("1.07023E+11")
+    second, second_error = parse_lrn("1.07023E+11")
+    assert first is None and second is None
+    assert first_error and second_error
 
 
 @pytest.mark.parametrize("raw", ["12345", "abcdefghijkl", "10704114001X"])
@@ -114,3 +130,31 @@ def test_a_blank_birthdate_is_not_an_error_here():
     """Required-ness is the validator's call, not the parser's — so that a
     missing value reads as "required" rather than "unrecognisable"."""
     assert parse_date("") == (None, None)
+
+
+# --- Sex: the file may abbreviate, the database never does -----------------
+
+
+@pytest.mark.parametrize("raw", ["M", "m", "MALE", "male", " Male ", "  m"])
+def test_every_way_of_writing_male_is_stored_as_male(raw):
+    """A masterlist that abbreviates to M/F must land in the database as
+    MALE/FEMALE — the reports read the stored value, and a stray "M" would
+    be a sex the enum has no name for."""
+    sex, error = _parse_sex(raw)
+    assert error is None
+    assert sex is Sex.MALE
+    assert sex.value == "MALE"
+
+
+@pytest.mark.parametrize("raw", ["F", "f", "FEMALE", "female", " Female "])
+def test_every_way_of_writing_female_is_stored_as_female(raw):
+    sex, error = _parse_sex(raw)
+    assert error is None
+    assert sex is Sex.FEMALE
+    assert sex.value == "FEMALE"
+
+
+@pytest.mark.parametrize("raw", ["", None, "X", "BOY", "1"])
+def test_anything_else_is_an_error_rather_than_a_guess(raw):
+    sex, error = _parse_sex(raw)
+    assert sex is None and error

@@ -201,14 +201,18 @@ def _bulk_upload_section(session, current_user) -> None:
             "is enrolled into that section in the same step."
         )
         st.caption(
-            "You don't need to reformat anything before uploading: LRNs are "
-            "read back correctly even if Excel has turned them into "
-            "`1.07E+11`, and birthdates are accepted in whatever order your "
-            "Excel writes them."
+            "**Save the file as Excel (.xlsx), not CSV.** Nothing else needs "
+            "reformatting — LRNs come through whole and birthdates are read in "
+            "whatever order your Excel writes them. But saving as CSV makes "
+            "Excel write a 12-digit LRN as `1.07E+11`, which throws the last "
+            "digits away permanently; there is no way to get them back, so "
+            "those rows are refused rather than guessed at."
         )
 
         uploaded = st.file_uploader(
-            "CSV or Excel file", type=["csv", "xlsx"], key="learner_csv"
+            "Excel file (.xlsx) — or CSV, if the LRN column was formatted as text",
+            type=["csv", "xlsx"],
+            key="learner_csv",
         )
         if uploaded is None:
             return

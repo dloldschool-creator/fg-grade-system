@@ -1137,6 +1137,64 @@ protects against this too.
       every other check, so accepting it would silently invent an LRN the
       learner does not have. The guard is a significant-digit count
       against the expanded length; a test pins the tempting wrong answer.
+- [x] **A CSV saved from Excel destroys the LRN, and that is not
+      recoverable** (2026-08-13, from a real 22-row upload). Every row was
+      refused with "lost its digits", which looked like the importer being
+      strict and was actually the file being wrong: Excel writes a CSV from
+      what is *displayed*, so `107041140016` goes out as `1.07041E+11` and
+      six digits cease to exist.
+      **The proof that accepting it would be worse than refusing it**: in
+      that file `1.07023E+11` appeared twice, `1.07028E+11` twice,
+      `1.07043E+11` twice and `1.0703E+11` twice — eight distinct learners
+      collapsed into four collisions. Expanding them would have reported
+      **duplicates that do not exist**, rejected one real learner of each
+      pair, and stored a fabricated LRN for the other. `parse_lrn`'s
+      significant-digit guard is what stops that; the message now names the
+      actual fix (**re-save as .xlsx**) instead of the fiddly one.
+      **`.xlsx` has no such problem** — openpyxl reads the underlying value,
+      so a plain numeric cell arrives as `107041140016` with no formatting
+      work by the teacher. Verified end-to-end: the same 22 rows as .xlsx
+      validate 22/22, with `M`/`F` stored as `MALE`/`FEMALE` and
+      `01/31/2006` read as 2006-01-31.
+      The Learner Masterlist caption had been claiming the opposite ("LRNs
+      are read back correctly even if Excel has turned them into
+      `1.07E+11`") — true of the float form, false of the rounded form, and
+      the direct cause of the confusion. Fixed there and in the Quick Guide.
+- [x] **Term-grade import was resolving section names across every school
+      year** (found 2026-08-13 while reviewing it after the above).
+      `validate_term_grades` keyed `sections` on the *name alone* over
+      `session.query(Section).all()`. A section name is unique only per
+      grade level per school year (`UniqueConstraint("school_year_id",
+      "grade_level_id", "name")`), so the dict silently kept whichever row
+      loaded last and a Term 1 grade could land on a same-named section
+      from another year — a row that looks entirely normal and that no
+      report will ever display. **This is the same class of bug the learner
+      import already guarded against** with `_section_lookup`'s ambiguity
+      set; term grades now reuse that helper.
+      `TERM_GRADE_IMPORT.needs_school_year = True` is the fix, and it also
+      answers the performance constraint: the unscoped version read
+      **every enrollment and every `term_grades` row in the database** (at
+      1,200 learners × 8 subjects × 3 terms that is ~29,000 rows per file,
+      loaded as full ORM objects, twice — once in validate and again in
+      commit). Now every lookup is filtered by year, `existing` selects two
+      columns instead of whole objects, and `commit_term_grades` scopes to
+      the enrollment ids actually in the file.
+      **Also fixed: the import never refreshed the derived tables.** The
+      Gradebook calls `recompute_enrollment_grades` after every save, so an
+      import that skipped it left Grade Summary, term cards and SF9 blank
+      for learners whose grades were already stored — a silent wrong state
+      rather than an error. New `ImportSpec.after_commit` runs it, and
+      exists because `recompute_enrollment_grades` **commits internally**
+      and so cannot ride the import's own transaction. It is the slow half
+      (a handful of round trips per learner), hence the progress bar and
+      the "import one section at a time" advice on the page.
+      Imported grades now also stamp `term_grades.source = "IMPORT"` (the
+      column is free text and was never being set), so a migrated grade can
+      be told from a typed one when reconciling year one against the old
+      workbook.
+      Sex needed no change — `_parse_sex` already accepted `M`/`F`/`MALE`/
+      `FEMALE` in any case and returns the `Sex` enum, which persists as
+      `MALE`/`FEMALE`; there are now tests pinning that.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

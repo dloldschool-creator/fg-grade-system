@@ -22,6 +22,7 @@ from app.import_pipeline import (
     parse_grade,
     parse_lrn,
 )
+from app.grading_service import recompute_enrollment_grades
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeWorkflowStatus, ImportJobType, Sex
 from app.models.grades import TermGrade
@@ -29,6 +30,11 @@ from app.models.learners import Enrollment, Learner
 from app.models.organization import Term
 from app.models.subjects import SectionSubjectOffering, Subject
 from app.naming import normalize_name
+
+# `term_grades.source` is free text. Stamping it lets a migrated grade be
+# told apart from one a teacher typed, which matters when reconciling the
+# first year's data against the old workbook.
+GRADE_SOURCE_IMPORT = "IMPORT"
 
 # --- Learners --------------------------------------------------------------
 
@@ -231,15 +237,30 @@ def _parse_term_number(raw: str):
     return None, f"{raw!r} is not term 1, 2 or 3"
 
 
-def validate_term_grades(session, rows: list[dict], mapping: dict) -> ValidationResult:
+def validate_term_grades(
+    session, rows: list[dict], mapping: dict, *, school_year_id=None
+) -> ValidationResult:
     """Resolves each row against the section's actual offerings.
 
     The last check is the one that matters most: a grade for a subject
     the section doesn't offer *in that term* is rejected rather than
     silently written, because `section_subject_offerings` is the single
     source of truth for what a learner is graded on (rule 5).
+
+    **Everything is scoped to one school year.** A section name is only
+    unique per grade level per year, so a lookup keyed on the name alone
+    matches across every year the school has ever run — and the last one
+    loaded silently wins. Writing a Term 1 grade into last year's section
+    of the same name produces a plausible-looking row that no report will
+    ever show, which is the worst kind of wrong. Scoping is also what
+    keeps this affordable: the unscoped version read every enrollment and
+    every term grade in the database, which at 1,200 learners is tens of
+    thousands of rows per file.
     """
     result = ValidationResult()
+    if school_year_id is None:
+        result.errors.append(RowError(None, None, "Choose the school year this file belongs to."))
+        return result
 
     learners_by_lrn = {
         lrn: learner_id
@@ -247,22 +268,34 @@ def validate_term_grades(session, rows: list[dict], mapping: dict) -> Validation
         .filter(Learner.lrn.isnot(None))
         .all()
     }
-    sections = {s.name.strip().upper(): s for s in session.query(Section).all()}
+    sections_by_name, ambiguous_names = _section_lookup(session, school_year_id)
     subjects = {s.official_name.strip().upper(): s for s in session.query(Subject).all()}
-    # (section_id, subject_id, term_number) -> offering
-    offerings: dict = {}
-    terms = {t.id: t for t in session.query(Term).all()}
-    for offering in session.query(SectionSubjectOffering).all():
-        term = terms.get(offering.term_id)
-        if term:
-            offerings[(offering.section_id, offering.subject_id, term.term_number)] = offering
+    terms_by_number = {
+        t.term_number: t
+        for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
+    }
+    # (section_id, subject_id, term_id) -> offering
+    offerings = {
+        (o.section_id, o.subject_id, o.term_id): o
+        for o in session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year_id)
+        .all()
+    }
     enrollments = {
-        (e.learner_id, e.section_id): e for e in session.query(Enrollment).all()
+        (e.learner_id, e.section_id): e
+        for e in session.query(Enrollment).filter_by(school_year_id=school_year_id).all()
     }
-    existing = {
-        (g.enrollment_id, g.section_subject_offering_id): g
-        for g in session.query(TermGrade).all()
-    }
+    # Only the keys are needed, and only for this year's enrollments —
+    # loading whole TermGrade objects for the entire school was the single
+    # most expensive query in the app.
+    existing: set = set()
+    enrollment_ids = [e.id for e in enrollments.values()]
+    if enrollment_ids:
+        existing = set(
+            session.query(TermGrade.enrollment_id, TermGrade.section_subject_offering_id)
+            .filter(TermGrade.enrollment_id.in_(enrollment_ids))
+            .all()
+        )
 
     for row in rows:
         number = row.get("__row__")
@@ -276,11 +309,22 @@ def validate_term_grades(session, rows: list[dict], mapping: dict) -> Validation
         elif lrn not in learners_by_lrn:
             result.errors.append(RowError(number, "LRN", f"no learner with LRN {lrn}"))
 
-        section = sections.get(str(row.get("section", "")).strip().upper())
-        if section is None:
+        raw_section = str(row.get("section", "")).strip()
+        section = None
+        if raw_section.upper() in ambiguous_names:
             result.errors.append(
-                RowError(number, "Section", f"unknown section {row.get('section')!r}")
+                RowError(
+                    number, "Section",
+                    f"more than one section is called {raw_section!r} this school year — "
+                    "rename one of them so they can be told apart",
+                )
             )
+        else:
+            section = sections_by_name.get(raw_section.upper())
+            if section is None:
+                result.errors.append(
+                    RowError(number, "Section", f"unknown section {raw_section!r}")
+                )
 
         subject = subjects.get(str(row.get("subject", "")).strip().upper())
         if subject is None:
@@ -291,6 +335,10 @@ def validate_term_grades(session, rows: list[dict], mapping: dict) -> Validation
         term_number, term_error = _parse_term_number(row.get("term"))
         if term_error:
             result.errors.append(RowError(number, "Term", term_error))
+        elif term_number not in terms_by_number:
+            result.errors.append(
+                RowError(number, "Term", f"this school year has no term {term_number}")
+            )
 
         grade, grade_error = parse_grade(row.get("grade"))
         if grade_error:
@@ -308,7 +356,8 @@ def validate_term_grades(session, rows: list[dict], mapping: dict) -> Validation
             )
             continue
 
-        offering = offerings.get((section.id, subject.id, term_number))
+        term = terms_by_number[term_number]
+        offering = offerings.get((section.id, subject.id, term.id))
         if offering is None:
             result.errors.append(
                 RowError(
@@ -335,10 +384,15 @@ def validate_term_grades(session, rows: list[dict], mapping: dict) -> Validation
 def commit_term_grades(session, parsed: list[dict], user_id=None) -> int:
     """Writes as DRAFT, never straight to FINALIZED — a migrated grade
     still goes through the normal submit/verify workflow (rule 7)."""
-    existing = {
-        (g.enrollment_id, g.section_subject_offering_id): g
-        for g in session.query(TermGrade).all()
-    }
+    enrollment_ids = list({row["enrollment_id"] for row in parsed})
+    existing: dict = {}
+    if enrollment_ids:
+        existing = {
+            (g.enrollment_id, g.section_subject_offering_id): g
+            for g in session.query(TermGrade)
+            .filter(TermGrade.enrollment_id.in_(enrollment_ids))
+            .all()
+        }
     for row in parsed:
         key = (row["enrollment_id"], row["offering_id"])
         grade = existing.get(key)
@@ -351,14 +405,38 @@ def commit_term_grades(session, parsed: list[dict], user_id=None) -> int:
                     official_grade=row["grade"],
                     encoded_by_user_id=user_id,
                     status=GradeWorkflowStatus.DRAFT,
+                    source=GRADE_SOURCE_IMPORT,
                 )
             )
         else:
             grade.official_grade = row["grade"]
             grade.encoded_by_user_id = user_id
             grade.status = GradeWorkflowStatus.DRAFT
+            grade.source = GRADE_SOURCE_IMPORT
             grade.version = (grade.version or 0) + 1
     return len(parsed)
+
+
+def recompute_after_term_grades(session, parsed: list[dict], progress=None) -> str:
+    """Refresh the derived tables the imported grades feed.
+
+    The Gradebook does this after every save, so an import that skipped it
+    would leave Grade Summary, the term cards and SF9 showing blanks for
+    learners whose grades are already in the database — a silent wrong
+    state rather than an error.
+
+    It runs **after** the import's own transaction because
+    `recompute_enrollment_grades` commits internally. It is also the slow
+    part: each learner costs a handful of round trips, so a file covering
+    one section is seconds and a file covering the whole school is
+    minutes. That is why the page advises importing a section at a time.
+    """
+    enrollment_ids = list(dict.fromkeys(row["enrollment_id"] for row in parsed))
+    for index, enrollment_id in enumerate(enrollment_ids, start=1):
+        recompute_enrollment_grades(session, enrollment_id)
+        if progress:
+            progress(index, len(enrollment_ids))
+    return f"Averages recomputed for {len(enrollment_ids)} learner(s)."
 
 
 LEARNER_IMPORT = ImportSpec(
@@ -373,6 +451,10 @@ LEARNER_IMPORT = ImportSpec(
     validate=validate_learners,
     commit=commit_learners,
     needs_school_year=True,
+    school_year_help=(
+        "Only used by the optional Section column. Learners with no section are "
+        "created without being enrolled."
+    ),
 )
 
 TERM_GRADE_IMPORT = ImportSpec(
@@ -381,11 +463,20 @@ TERM_GRADE_IMPORT = ImportSpec(
     description=(
         "One row per learner, subject and term. Grades land as DRAFT and still "
         "go through the normal submit/verify workflow. Re-importing the same "
-        "learner/subject/term updates the existing grade rather than duplicating it."
+        "learner/subject/term updates the existing grade rather than duplicating it. "
+        "Import one section at a time — averages are recalculated for every learner "
+        "in the file afterwards, and that is the slow part."
     ),
     columns=TERM_GRADE_COLUMNS,
     validate=validate_term_grades,
     commit=commit_term_grades,
+    needs_school_year=True,
+    school_year_help=(
+        "Sections, subjects and terms are all matched inside this year. A section "
+        "name on its own can exist in more than one year, so this is what stops a "
+        "grade landing on the wrong one."
+    ),
+    after_commit=recompute_after_term_grades,
 )
 
 SPECS = {spec.job_type: spec for spec in (LEARNER_IMPORT, TERM_GRADE_IMPORT)}
