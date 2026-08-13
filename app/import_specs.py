@@ -397,20 +397,25 @@ def commit_term_grades(session, parsed: list[dict], user_id=None) -> int:
         key = (row["enrollment_id"], row["offering_id"])
         grade = existing.get(key)
         if grade is None:
+            # No `encoded_by_user_id` here: that column is on
+            # AttendanceRecord, not TermGrade. Passing it raised TypeError
+            # on every INSERT and was silently dropped on every UPDATE, so
+            # importing new term grades could not work at all. Who ran the
+            # import is recorded on the `import_jobs` row and in the audit
+            # log; TermGrade only tracks who submitted, verified and
+            # finalized, which the workflow sets later.
             session.add(
                 TermGrade(
                     enrollment_id=row["enrollment_id"],
                     section_subject_offering_id=row["offering_id"],
                     term_id=row["term_id"],
                     official_grade=row["grade"],
-                    encoded_by_user_id=user_id,
                     status=GradeWorkflowStatus.DRAFT,
                     source=GRADE_SOURCE_IMPORT,
                 )
             )
         else:
             grade.official_grade = row["grade"]
-            grade.encoded_by_user_id = user_id
             grade.status = GradeWorkflowStatus.DRAFT
             grade.source = GRADE_SOURCE_IMPORT
             grade.version = (grade.version or 0) + 1

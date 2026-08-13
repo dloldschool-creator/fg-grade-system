@@ -351,6 +351,51 @@ accounts and assignments, filling in the empty subject profiles, and an
 end-to-end dress rehearsal on one section.
 **Term 1 closes 15 September 2026.**
 
+## Dress rehearsal, 2026-08-13 — what it found
+
+One full pass on BEZOS (G11 BE) with six throwaway learners: import →
+enrol → encode all three terms → submit → finalize → SF9, term cards,
+SF2, SF4, awards and certificates → purge. Chosen over JOBS because it is
+the only fully-configured section: 9 subjects / 21 offerings, both
+combined-language components, and a mix of three-term cores and one-term
+electives, so it exercises §16, §17 and rule 4 at once.
+
+**Verified working, end to end:** the §16 SF9 rule (parent row carries the
+Final Grade, both component rows print term grades with blank finals),
+the §17 term card (pair listed as two subjects, printed list agrees with
+the average beneath it), rule 2 (a missing grade stays NULL and the
+learner reads INCOMPLETE, never 0), rule 4 (finals respect each subject's
+own term pattern), the finalize guard (an incomplete learner is blocked,
+and completing the grade unblocks them), §38's frozen record (subject
+names as text, component finals still blank, offered-term flags kept),
+award tiers and the not-eligible reasons, and every generated document.
+
+**Two real defects, both now fixed or recorded:**
+
+1. **The term-grade import never worked.** `commit_term_grades` passed
+   `encoded_by_user_id=` to `TermGrade` — that column is on
+   `AttendanceRecord`. SQLAlchemy raises TypeError for an unknown keyword,
+   so every INSERT crashed; the UPDATE branch set it as a plain instance
+   attribute, which Python allows and the ORM discards, so re-importing an
+   existing grade silently appeared to work. Fixed.
+   `tests/test_model_kwargs.py` now AST-checks every model constructor
+   keyword in the writer modules against the real columns.
+2. **The VERIFIED workflow state does not exist in the app.** Rule 7 says
+   DRAFT → SUBMITTED → VERIFIED → FINALIZED. Nothing anywhere assigns
+   `GradeWorkflowStatus.VERIFIED`, `verified_by_user_id` or `verified_at`,
+   and there is no `GRADE_VERIFIED` audit action — although the Gradebook
+   already treats VERIFIED as locked and the columns exist. Finalize also
+   only checks that the annual record is COMPLETE, so a **DRAFT** grade
+   can be finalized without ever being submitted. Not fixed: who verifies,
+   on which page, and at what granularity is a decision, not a bug fix.
+
+**The Grade 12 curriculum is the real blocker for real use.** Six of the
+eight G12 subject profiles hold zero subjects, and the two CSS ones hold
+three each — so JOBS, the only section with real learners, offers three
+subjects total, one per term, with no core subjects. Grade 11 BE is the
+only complete profile. Nothing is wrong with the code; the data is not
+entered yet.
+
 ### Still open
 
 - [ ] Blocked, needs you: drop the school's SF10 file into
