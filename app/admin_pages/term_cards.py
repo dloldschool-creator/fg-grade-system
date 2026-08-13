@@ -8,6 +8,7 @@ from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
 from app.report_card import build_term_subject_rows, load_report_context
+from app.roster_order import learner_order_by
 from app.term_card import (
     CARDS_PER_PAGE,
     TermCardData,
@@ -90,7 +91,7 @@ def render() -> None:
             session.query(Enrollment)
             .filter_by(section_id=section_choice, school_year_id=sy_choice)
             .join(Learner, Learner.id == Enrollment.learner_id)
-            .order_by(Learner.last_name, Learner.first_name)
+            .order_by(*learner_order_by(Learner))
             .all()
         )
         if not enrollments:
@@ -160,14 +161,25 @@ def render() -> None:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.download_button(
-                f"Print section — {len(enrollments)} card(s), "
-                f"{page_count(len(enrollments))} sheet(s)",
-                data=generate_term_cards([card(e) for e in enrollments]),
-                file_name=f"{stem}.pdf",
-                mime="application/pdf",
-                type="primary",
+            # Built on click, not on render. `st.download_button(data=...)`
+            # evaluates its data every script run, and Streamlit re-runs on
+            # every interaction — so leaving this ungated rendered the whole
+            # section's cards each time the term or section dropdown moved,
+            # for a download nobody had asked for. Same reason SF9's batch
+            # print sits behind a button.
+            st.caption(
+                f"{len(enrollments)} card(s), {page_count(len(enrollments))} sheet(s)."
             )
+            if st.button("Build section PDF", type="primary"):
+                data = generate_term_cards([card(e) for e in enrollments])
+                st.success(f"Ready — {len(data) / 1024:,.0f} KB.")
+                st.download_button(
+                    "Download section PDF",
+                    data=data,
+                    file_name=f"{stem}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                )
         with col2:
             chosen = st.selectbox(
                 "Single learner",

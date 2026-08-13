@@ -222,9 +222,10 @@ of each is in `docs/build-log.md`.
   are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
   the opposite of what every DepEd form and the teachers' workbook use.
   `roster_for_month` had this bug while its own docstring claimed
-  male-first. All five rosters (Gradebook, Grade Summary, Attendance,
-  SF2, SF9) go through `app/roster_order.py`; use `learner_order_by()` in
-  a query or `learner_sort_key()` on a list, never a hand-rolled ORDER BY.
+  male-first. All six rosters (Gradebook, Grade Summary, Attendance, SF2,
+  SF9, Term Cards) go through `app/roster_order.py`; use
+  `learner_order_by()` in a query or `learner_sort_key()` on a list,
+  never a hand-rolled ORDER BY.
 - **A `.join(Learner, ...)` added only to sort a query does not load the
   Learner objects.** A later `session.get(Learner, ...)` in the render
   loop is therefore a real round trip per learner — ~40 × 85ms on every
@@ -295,6 +296,11 @@ the printed form can't disagree. Don't reimplement either rule in a page.
   and `sf9_report.load_sf9_context()` exist for this; a preloaded context
   must issue **zero** queries while rendering.
 - Load an importer's reference data **once per file**, never per row.
+- **`st.download_button(data=...)` evaluates its data on every script
+  run**, so an ungated one renders the whole document each time any widget
+  on the page moves, for a download nobody asked for. Term Cards did this
+  with a full section's PDF. Put anything that scales with the roster
+  behind a Build button first, the way SF9's batch print does.
 - `tests/test_query_cost.py` asserts this shape and stays meaningful on a
   fast local database, where the bug is otherwise invisible.
 
