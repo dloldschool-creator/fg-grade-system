@@ -57,6 +57,42 @@ def test_no_secret_value_is_committed():
     assert re.search(r"^DB_PASSWORD=\s*$", ENV_EXAMPLE, re.M)
 
 
+PINNED_PYTHON = "3.13"
+
+
+def test_the_python_version_is_pinned_and_agrees_everywhere():
+    """A version gap between where this is developed and where it runs
+    took the live app down on 2026-08-12: the host was on 3.14, local on
+    3.13, and an import-order change that passed the whole suite locally
+    crashed on deploy. Nothing catches that except the versions matching.
+
+    Streamlit Cloud's own setting lives in its dashboard and cannot be
+    asserted from here — the deployment doc carries that instruction, and
+    the check below at least keeps the doc saying the right number.
+    """
+    assert (ROOT / ".python-version").read_text(encoding="utf-8").strip() == PINNED_PYTHON
+
+    devcontainer = (ROOT / ".devcontainer" / "devcontainer.json").read_text(encoding="utf-8")
+    assert f"python:1-{PINNED_PYTHON}-" in devcontainer, "devcontainer pins a different version"
+
+    assert f"Python {PINNED_PYTHON}" in DEPLOYMENT
+    assert f"**{PINNED_PYTHON}**" in DEPLOYMENT, "the doc must name the version to set in the dashboard"
+
+
+def test_the_interpreter_running_the_tests_matches_the_pin():
+    """A soft warning rather than a hard rule — the suite still has to run
+    for whoever is on a different machine. But if this fails, the local
+    environment is not the one the deployment is pinned to."""
+    import sys
+
+    running = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if running != PINNED_PYTHON:
+        pytest.skip(
+            f"running {running}, pinned {PINNED_PYTHON} — align them before trusting "
+            "a passing suite as evidence about the deployed host"
+        )
+
+
 def test_env_is_gitignored():
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".env" in [line.strip() for line in ignored]

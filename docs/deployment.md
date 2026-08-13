@@ -8,12 +8,32 @@ One-time setup. For day-to-day updates see `operations.md`.
 
 Very little, which is the point of having removed LibreOffice:
 
-- Python 3.11+
+- **Python 3.13** — see below, this one matters
 - `pip install -r requirements.txt`
 - One long-running process: `streamlit run streamlit_app.py`
 - Outbound network access to Supabase
 
 No system packages, no Docker requirement, no build step.
+
+### Pin the Python version to 3.13
+
+The repository declares 3.13 in `.python-version` and in
+`.devcontainer/devcontainer.json`. **Streamlit Cloud does not read either
+of those** — its Python version is set in the app's own settings, and has
+to be changed there by hand:
+
+> Manage app → Settings → Python version → **3.13** → save, then reboot.
+
+Do it. On 2026-08-12 the host was running 3.14 while development was on
+3.13, and an import-order change that passed the entire test suite
+locally crashed the deployed app on startup. Nothing catches that class
+of bug except having the versions agree.
+
+Check what the host is actually on with **Manage app → Terminal**:
+
+```bash
+python --version
+```
 
 ---
 
