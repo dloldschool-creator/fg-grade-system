@@ -316,10 +316,12 @@ def render() -> None:
             ):
                 st.rerun()
         st.caption(
-            "Creates a Present row for every learner × class day not already encoded, "
-            "so a blank cell can keep meaning \"nobody has said yet\" rather than "
-            "silently counting as present. Re-run it after a late enrollee joins or "
-            "the calendar changes."
+            "Creates a Present attendance entry for each learner on every class day "
+            "that has not yet been recorded. This keeps blank entries clearly meaning "
+            "“attendance not yet recorded” instead of automatically treating "
+            "them as present.\n\n"
+            "Run this again whenever a new learner is added or the school "
+            "calendar/class days are updated."
         )
 
         st.divider()

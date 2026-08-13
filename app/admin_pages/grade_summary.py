@@ -24,6 +24,7 @@ from app.models.grades import (
     TermGradeSummary,
 )
 from app.models.learners import Enrollment, Learner
+from app.roster_order import learner_order_by
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import CombinedLearningArea, CombinedLearningAreaComponent, SectionSubjectOffering, Subject
 
@@ -328,7 +329,7 @@ def render() -> None:
             session.query(Enrollment)
             .filter_by(section_id=section_choice, school_year_id=sy_choice)
             .join(Learner, Learner.id == Enrollment.learner_id)
-            .order_by(Learner.last_name, Learner.first_name)
+            .order_by(*learner_order_by(Learner))
             .all()
         )
         if not enrollments:

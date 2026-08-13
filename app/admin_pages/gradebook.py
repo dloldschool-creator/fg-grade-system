@@ -13,6 +13,7 @@ from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeEncodingStatus, GradeWorkflowStatus
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
+from app.roster_order import learner_order_by
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import SectionSubjectOffering, Subject, TeacherAssignment
 
@@ -128,13 +129,24 @@ def render() -> None:
             session.query(Enrollment)
             .filter_by(section_id=section.id, school_year_id=offering.school_year_id)
             .join(Learner, Learner.id == Enrollment.learner_id)
-            .order_by(Learner.last_name, Learner.first_name)
+            .order_by(*learner_order_by(Learner))
             .all()
         )
         roster = [e for e in enrollments if e.enrollment_status in ROSTER_STATUSES]
         if not roster:
             st.info("No actively-enrolled learners in this section yet.")
             return
+
+        # One query for the whole roster. The form loop below used to call
+        # session.get(Learner, ...) per row — the join above orders the
+        # query but doesn't load Learner objects, so that was a round trip
+        # each, ~40 of them at 85ms on every keystroke-triggered rerun.
+        learners = {
+            learner.id: learner
+            for learner in session.query(Learner)
+            .filter(Learner.id.in_([e.learner_id for e in roster]))
+            .all()
+        }
 
         existing_grades = {
             g.enrollment_id: g
@@ -155,14 +167,14 @@ def render() -> None:
         with st.form("gradebook_form"):
             grade_inputs = {}
             for enrollment in roster:
-                learner = session.get(Learner, enrollment.learner_id)
+                learner = learners.get(enrollment.learner_id)
                 existing = existing_grades.get(enrollment.id)
                 locked = existing is not None and existing.status in {
                     GradeWorkflowStatus.VERIFIED,
                     GradeWorkflowStatus.FINALIZED,
                 }
                 col1, col2, col3 = st.columns([4, 2, 2])
-                col1.write(f"{learner.last_name}, {learner.first_name}")
+                col1.write(f"{learner.last_name}, {learner.first_name}" if learner else "?")
                 if locked:
                     col2.write(
                         f"{int(existing.official_grade)}" if existing.official_grade is not None else "—"

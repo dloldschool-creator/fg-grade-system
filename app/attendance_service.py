@@ -24,6 +24,7 @@ from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, A
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
+from app.roster_order import learner_sort_key
 
 # §28's SY 2026-2027 workbook configuration, kept as reference targets the
 # Academic Calendar page displays alongside the generated counts — NOT as
@@ -194,7 +195,10 @@ def roster_for_month(
             continue
         learner = session.get(Learner, enrollment.learner_id)
         rows.append((enrollment, learner, window))
-    rows.sort(key=lambda r: (r[1].sex.value, r[1].last_name or "", r[1].first_name or ""))
+    # Not `r[1].sex.value` — the stored strings are "MALE" and "FEMALE",
+    # so sorting on them alphabetically put FEMALE first and quietly
+    # contradicted the docstring above.
+    rows.sort(key=lambda r: learner_sort_key(r[1]))
     return rows
 
 

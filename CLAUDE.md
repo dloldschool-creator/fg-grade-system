@@ -218,6 +218,13 @@ of each is in `docs/build-log.md`.
   is what enforces this; don't loosen it.
 - **`VersionMixin` is not universal.** Don't copy `.version += 1` onto a
   model without checking `docs/schema.md` that it has the column.
+- **Never order a roster on `Learner.sex` directly.** The stored strings
+  are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
+  the opposite of what every DepEd form and the teachers' workbook use.
+  `roster_for_month` had this bug while its own docstring claimed
+  male-first. All four rosters (Gradebook, Grade Summary, Attendance,
+  SF2) go through `app/roster_order.py`; use `learner_order_by()` in a
+  query or `learner_sort_key()` on a list, never a hand-rolled ORDER BY.
 - **Alembic enums, two gotchas:** autogenerate emits a bare `sa.Enum` inside
   `create_table` for a type that already exists (use
   `postgresql.ENUM(..., create_type=False)`); and `op.add_column` does not
