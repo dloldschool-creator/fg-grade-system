@@ -22,7 +22,89 @@ from app.models.subjects import (
 )
 
 
-def _seed_from_profile(session, section: Section, terms: list[Term]):
+def order_changes(offerings, order_by_subject: dict) -> tuple[list, int]:
+    """Which offerings a re-apply would actually move, and how many it leaves alone.
+
+    Pure — no session, no Streamlit — because the two rules worth getting
+    right are decisions, not database work:
+
+    * a subject the profile does not list is **skipped**, not reset to 0
+      (otherwise a manually added offering jumps to the top of the form);
+    * a row already holding the desired order is **not rewritten**, so a
+      second click does not bump `version` or write audit rows for nothing.
+    """
+    changes = []
+    untouched = 0
+    for offering in offerings:
+        desired = order_by_subject.get(offering.subject_id)
+        if desired is None:
+            untouched += 1
+            continue
+        if offering.display_order != desired:
+            changes.append((offering, desired))
+    return changes, untouched
+
+
+def _reapply_profile_order(session, section: Section, profile: SubjectProfile, current_user) -> None:
+    """Push the profile's Order onto this section's existing offerings.
+
+    Seeding skips subject/terms it has already created (it never updates
+    them), so without this the print order is fixed at the moment a section
+    is first seeded and cannot be changed afterwards.
+
+    Deliberately narrow: it writes `display_order` and nothing else, and
+    only for subjects the chosen profile actually lists — a manually added
+    offering the profile has never heard of keeps the order it was given
+    instead of being reset to 0 and jumping to the top.
+    """
+    entries = (
+        session.query(SubjectProfileSubject).filter_by(subject_profile_id=profile.id).all()
+    )
+    order_by_subject = {e.subject_id: e.display_order for e in entries}
+
+    offerings = (
+        session.query(SectionSubjectOffering).filter_by(section_id=section.id).all()
+    )
+    if not offerings:
+        st.warning("This section has no offerings yet — seed them first.")
+        return
+
+    # Names for the audit trail, batched: one query rather than one per row.
+    names = {
+        s.id: s.official_name
+        for s in session.query(Subject).filter(
+            Subject.id.in_({o.subject_id for o in offerings})
+        )
+    }
+
+    changes, untouched = order_changes(offerings, order_by_subject)
+    for offering, desired in changes:
+        previous_order = offering.display_order
+        offering.display_order = desired
+        # VersionMixin — rule 9. A bulk write that skipped this would let a
+        # concurrent editor's stale-version check pass against a row that
+        # had in fact moved underneath them.
+        offering.version += 1
+        audit_service.record(
+            session,
+            action=audit_service.SUBJECT_OFFERING_CHANGED,
+            object_type="section_subject_offerings",
+            object_id=offering.id,
+            user_id=current_user.id,
+            previous={
+                "subject": names.get(offering.subject_id, "(unknown subject)"),
+                "display_order": previous_order,
+            },
+            new={"display_order": desired},
+        )
+
+    note = f"Re-applied {profile.name} order to {len(changes)} offering(s)."
+    if untouched:
+        note += f" {untouched} not on this profile left unchanged."
+    try_commit(session, note)
+
+
+def _seed_from_profile(session, section: Section, terms: list[Term], current_user):
     matching_profiles = (
         session.query(SubjectProfile)
         .filter_by(
@@ -46,10 +128,24 @@ def _seed_from_profile(session, section: Section, terms: list[Term]):
             "Subject profile", options=[p.id for p in matching_profiles], format_func=lambda v: profile_by_id[v].name
         )
         st.caption(
-            "Creates a CONFIRMED offering for each subject/term the profile marks active. "
-            "Already-offered subject/terms are skipped, not duplicated."
+            "**Seed** creates a CONFIRMED offering for each subject/term the profile "
+            "marks active. Already-offered subject/terms are skipped, not duplicated — "
+            "so seeding again after changing the profile's Order changes nothing.\n\n"
+            "**Re-apply order** is how you reorder a section that is already seeded: it "
+            "writes the profile's Order onto the existing offerings and touches nothing "
+            "else. Subjects the profile doesn't list keep the order they have."
         )
-        if st.form_submit_button("Seed offerings from profile"):
+        seed_col, order_col = st.columns(2)
+        seed = seed_col.form_submit_button("Seed offerings from profile")
+        reapply = order_col.form_submit_button("Re-apply profile order")
+
+        if reapply:
+            _reapply_profile_order(
+                session, section, profile_by_id[profile_choice], current_user
+            )
+            st.rerun()
+
+        if seed:
             entries = (
                 session.query(SubjectProfileSubject)
                 .filter_by(subject_profile_id=profile_choice)
@@ -80,6 +176,15 @@ def _seed_from_profile(session, section: Section, terms: list[Term]):
                             term_id=term.id,
                             subject_category_id=subject.subject_category_id,
                             is_required=not entry.is_elective,
+                            # Carried from the profile, not left at the
+                            # column default. The offering's display_order
+                            # is what actually orders the printed forms
+                            # (report_card takes the lowest across a
+                            # subject's terms); without this the Order set
+                            # on the profile stopped at the profile editor
+                            # and every seeded offering tied at 0, so SF9
+                            # and the term cards fell back to alphabetical.
+                            display_order=entry.display_order,
                             status=OfferingStatus.CONFIRMED,
                         )
                     )
@@ -121,7 +226,7 @@ def render() -> None:
         term_by_id = {t.id: t for t in terms}
 
         st.subheader("Seed from a subject profile")
-        _seed_from_profile(session, section, terms)
+        _seed_from_profile(session, section, terms, current_user)
 
         st.divider()
         st.subheader("Current offerings")
@@ -145,7 +250,7 @@ def render() -> None:
             for offering in term_offerings:
                 subject = all_subjects[offering.subject_id]
                 with st.form(f"edit_offering_{offering.id}"):
-                    col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                    col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 1])
                     col1.write(subject.official_name)
                     category_choice = col2.selectbox(
                         "Category",
@@ -165,6 +270,18 @@ def render() -> None:
                     required = col4.checkbox(
                         "Required", value=offering.is_required, key=f"off_req_{offering.id}"
                     )
+                    # Print order on SF9, the term cards, Grade Summary and
+                    # Export. A subject running several terms has one row
+                    # per term and report_card takes the lowest of them, so
+                    # set all its terms the same unless you mean otherwise —
+                    # "Re-apply profile order" above does that for you.
+                    order = col5.number_input(
+                        "Order",
+                        min_value=0,
+                        value=offering.display_order,
+                        step=1,
+                        key=f"off_ord_{offering.id}",
+                    )
                     col1, col2 = st.columns(2)
                     save = col1.form_submit_button("Save")
                     delete = col2.form_submit_button("Delete")
@@ -175,16 +292,19 @@ def render() -> None:
                                 "subject_category": cat_by_id[offering.subject_category_id].name,
                                 "status": offering.status,
                                 "is_required": offering.is_required,
+                                "display_order": offering.display_order,
                             },
                             {
                                 "subject_category": cat_by_id[category_choice].name,
                                 "status": OfferingStatus(status_choice),
                                 "is_required": required,
+                                "display_order": order,
                             },
                         )
                         offering.subject_category_id = category_choice
                         offering.status = OfferingStatus(status_choice)
                         offering.is_required = required
+                        offering.display_order = order
                         offering.version += 1
                         # Only when something actually differs — §48 makes
                         # this table the source of truth for what a learner
@@ -247,6 +367,11 @@ def render() -> None:
             )
             is_required = st.checkbox("Required", value=True)
             status_choice = st.selectbox("Status", options=[s.value for s in OfferingStatus])
+            # Left at 0 this subject sorts before every ordered one. Match
+            # the number its neighbours use on the profile if you want it in
+            # a particular place — "Re-apply profile order" will not set it,
+            # because a manually added subject is not on the profile.
+            display_order = st.number_input("Order", min_value=0, value=0, step=1)
 
             if st.form_submit_button("Add"):
                 added = SectionSubjectOffering(
@@ -256,6 +381,7 @@ def render() -> None:
                     term_id=term_choice,
                     subject_category_id=category_choice,
                     is_required=is_required,
+                    display_order=display_order,
                     status=OfferingStatus(status_choice),
                 )
                 session.add(added)
@@ -270,6 +396,7 @@ def render() -> None:
                             "subject": all_subjects[subject_choice].official_name,
                             "term": term_by_id[term_choice].name,
                             "is_required": is_required,
+                            "display_order": display_order,
                             "status": OfferingStatus(status_choice),
                             "created": True,
                         },
