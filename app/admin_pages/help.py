@@ -24,8 +24,9 @@ UNIVERSAL = [
         "**Overview** and **Grades & Attendance** are the day-to-day work. "
         "**Forms & Reports** is where every printable document lives. "
         "**Setup** is in dependency order — you cannot make a Section without "
-        "an Academic Structure, or a Section Offering without a Section — so "
-        "when setting up a new school year, work straight down that list.\n\n"
+        "an Academic Structure, or a Section Subject Offering without a "
+        "Section — so when setting up a new school year, work straight down "
+        "that list.\n\n"
         "You only see the pages your role allows, so your sidebar will be "
         "shorter than someone else's.",
     ),
@@ -243,7 +244,7 @@ BY_ROLE = {
         "Super Admin — Setup and control",
         [
             (
-                "Section Offerings decides what a learner is graded on",
+                "Section Subject Offerings decides what a learner is graded on",
                 "Not the subject catalog, and not the subject profile — those "
                 "only seed defaults. If a subject is missing from a gradebook, "
                 "or a term is blacked out on a report card, this is the page to "
@@ -278,10 +279,11 @@ BY_ROLE = {
                 "- **Strand or track** — held by a Subject Profile or a "
                 "Section. Delete the profile first (Subject Profiles → Delete "
                 "profile), or leave the strand and just untick **Active**.\n"
-                "- **Section** — held by its Section Offerings, attendance "
-                "months, and any learners enrolled. Move the learners out "
-                "first.\n"
-                "- **Subject** — held by any Section Offering that uses it.\n"
+                "- **Section** — held by its Section Subject Offerings, "
+                "attendance months, and any learners enrolled. Move the "
+                "learners out first.\n"
+                "- **Subject** — held by any Section Subject Offering that "
+                "uses it.\n"
                 "- **User** — held by their roles, teaching assignments, and "
                 "any section they advise. Clear those three and the delete "
                 "works; everything historical about them (who submitted a "
@@ -309,13 +311,13 @@ BY_ROLE = {
                 "run by the ICT Coordinator.",
             ),
             (
-                "Fill in Subject Profiles before Section Offerings",
-                "\"Seed from profile\" on Section Offerings copies whatever "
-                "the matching profile contains. If the profile is empty it "
-                "copies nothing, silently, and you are left adding every "
-                "subject to every section by hand. Set each profile up once "
-                "per grade level and track/strand, then seeding a section is "
-                "one click.",
+                "Fill in Subject Profiles before Section Subject Offerings",
+                "\"Seed from profile\" on Section Subject Offerings copies "
+                "whatever the matching profile contains. If the profile is "
+                "empty it copies nothing, silently, and you are left adding "
+                "every subject to every section by hand. Set each profile up "
+                "once per grade level and track/strand, then seeding a "
+                "section is one click.",
             ),
             (
                 "Give every strand a distinct name",

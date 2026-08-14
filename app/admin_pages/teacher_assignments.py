@@ -56,7 +56,10 @@ def render() -> None:
             .all()
         )
         if not offerings:
-            st.info("No subject offerings for this section yet — set those up on the Section Offerings page.")
+            st.info(
+                "No subject offerings for this section yet — set those up "
+                "on the Section Subject Offerings page."
+            )
             return
 
         subjects_by_id = {s.id: s for s in session.query(Subject).all()}

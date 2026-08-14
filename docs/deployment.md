@@ -106,8 +106,8 @@ encoding load proves heavier than expected.
    open for encoding), and the **Academic Calendar** — generate it, then
    correct November and December by hand against §28's counts.
 3. Import learners and enrollments (**Import from Excel**).
-4. Create sections, assign advisers, seed **Section Offerings**, and make
-   the **Teacher Assignments**.
+4. Create sections, assign advisers, seed **Section Subject Offerings**,
+   and make the **Teacher Assignments**.
 5. Take a backup before letting teachers in, so there is a known-good
    starting point.
 

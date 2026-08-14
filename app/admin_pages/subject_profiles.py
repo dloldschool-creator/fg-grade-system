@@ -91,7 +91,7 @@ def render() -> None:
     st.caption(
         "The default set of subjects for each grade level and track/strand. "
         "Filling these in first means a new section's subjects can be added with "
-        "one click on Section Offerings, instead of one at a time."
+        "one click on Section Subject Offerings, instead of one at a time."
     )
     render_flashes()
 
