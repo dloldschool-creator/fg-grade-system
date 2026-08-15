@@ -22,6 +22,49 @@ def get_session():
         session.close()
 
 
+def picker_options(sections, grade_levels, strands, grade_choice=ALL):
+    """Which grade levels and strands a section list actually offers.
+
+    **Strand cascades from grade level.** A strand is offered only when a
+    section in the chosen grade level uses it — the school's strands do not
+    all run in both grade levels, and picking one that does not can only
+    ever produce "No sections match those filters." Pass `ALL` and every
+    strand present anywhere in `sections` comes back.
+
+    A `grade_choice` that is not in the list is treated as `ALL` rather
+    than narrowing to nothing, which is what a selection left over from
+    another school year looks like.
+
+    Pure, and separate from the widgets, so the cascade is unit-tested
+    without a database or a Streamlit run. `section_picker` is the only
+    caller.
+    """
+    present_grades = [
+        g for g in grade_levels if any(s.grade_level_id == g.id for s in sections)
+    ]
+    if grade_choice not in {g.id for g in present_grades}:
+        grade_choice = ALL
+    in_grade = [
+        s for s in sections if grade_choice == ALL or s.grade_level_id == grade_choice
+    ]
+    present_strands = [
+        s for s in strands if any(sec.strand_id == s.id for sec in in_grade)
+    ]
+    return present_grades, present_strands
+
+
+def _forget_stale(key: str, allowed) -> None:
+    """Drop a stored filter choice the current options no longer contain.
+
+    Streamlit restores a keyed widget from session state on every rerun, so
+    a strand chosen under one grade level is still in state after the grade
+    changes underneath it. Clearing it *before* the widget is built lets it
+    fall back to its first option; touching the key afterwards would raise.
+    """
+    if key in st.session_state and st.session_state[key] not in allowed:
+        del st.session_state[key]
+
+
 def section_picker(
     session,
     school_year_id,
@@ -40,7 +83,9 @@ def section_picker(
     **A filter only appears when it would narrow anything.** With one
     grade level in the list a "Grade level" dropdown is noise, and the
     school has 30 sections across 2 grade levels and 7 strands — the
-    filters exist for that, not for a three-section test database.
+    filters exist for that, not for a three-section test database. The
+    strand filter is judged on what the chosen grade level leaves, so a
+    grade level running a single strand drops the dropdown too.
 
     Returns the chosen `Section`, or None when there is nothing to pick,
     having already shown the reason.
@@ -78,12 +123,16 @@ def section_picker(
     }
     strands = {s.id: s for s in session.query(Strand).order_by(Strand.name).all()}
 
-    present_grades = [
-        g for g in grade_levels.values() if any(s.grade_level_id == g.id for s in sections)
-    ]
-    present_strands = [
-        s for s in strands.values() if any(sec.strand_id == s.id for sec in sections)
-    ]
+    # Read the grade level out of session state before laying anything out:
+    # the strand options depend on it, and Streamlit has already stored the
+    # new grade by the time this run draws the strand box.
+    grade_key, strand_key = f"{key}_grade", f"{key}_strand"
+    grade_choice = st.session_state.get(grade_key, ALL)
+    present_grades, present_strands = picker_options(
+        sections, grade_levels.values(), strands.values(), grade_choice
+    )
+    _forget_stale(grade_key, [ALL] + [g.id for g in present_grades])
+    _forget_stale(strand_key, [ALL] + [s.id for s in present_strands])
 
     filters = []
     if len(present_grades) > 1:
@@ -100,7 +149,7 @@ def section_picker(
                 "Grade level",
                 options=[ALL] + [g.id for g in present_grades],
                 format_func=lambda v: ALL if v == ALL else grade_levels[v].name,
-                key=f"{key}_grade",
+                key=grade_key,
             )
             index += 1
         if "strand" in filters:
@@ -108,7 +157,7 @@ def section_picker(
                 "Strand",
                 options=[ALL] + [s.id for s in present_strands],
                 format_func=lambda v: ALL if v == ALL else strands[v].name,
-                key=f"{key}_strand",
+                key=strand_key,
             )
             index += 1
         target = columns[index]
