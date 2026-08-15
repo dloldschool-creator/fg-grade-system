@@ -84,8 +84,9 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
 
     with st.expander("Bulk-add from CSV"):
         st.caption(
-            f"Columns: `{SUBJECT_CSV_COLUMNS}` (header row required). "
-            "track_restriction_code may be blank (offered under any track). "
+            f"Your file needs a header row with these columns: `{SUBJECT_CSV_COLUMNS}`. "
+            "Leave the **track_restriction_code** column empty if the subject is "
+            "offered under every track. "
             f"Grade level codes: {', '.join(gl_by_code) or 'none yet'}. "
             f"Category codes: {', '.join(cat_by_code) or 'none yet'}. "
             f"Track codes: {', '.join(track_by_code) or 'none yet'}."

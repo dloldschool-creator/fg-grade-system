@@ -141,19 +141,16 @@ BY_ROLE = {
         "Registrar — Learners and enrollment",
         [
             (
-                "Upload as Excel (.xlsx), not CSV — this is the one that bites",
-                "The LRN is 12 digits and is stored as text so leading zeros "
-                "survive. You don't need to format the column as text first: from "
-                "a **.xlsx** file the number comes through whole however Excel is "
-                "displaying it.\n\n"
-                "**Saving as CSV is what breaks it.** Excel writes the number the "
-                "way it looks on screen, so `107041140016` becomes `1.07041E+11` "
-                "and the last six digits are thrown away — not hidden, gone. The "
-                "rows are refused rather than guessed at, because two different "
-                "learners can round to the same value and the system would "
-                "otherwise report a duplicate that isn't real and store an LRN "
-                "nobody has.\n\n"
-                "Fix: **Save As → Excel Workbook (.xlsx)** and upload that.",
+                "Upload as Excel (.xlsx)",
+                "The LRN is 12 digits and has to arrive whole. From a **.xlsx** "
+                "file it always does — you don't need to format the column as "
+                "text first.\n\n"
+                "**Never save the file as CSV.** Excel shortens a 12-digit LRN "
+                "like `107041140016` to `1.07041E+11`, and the last six digits "
+                "are gone for good. Those rows are refused rather than guessed "
+                "at.\n\n"
+                "If your file is a CSV, open it and use **Save As → Excel "
+                "Workbook (.xlsx)**, then upload that.",
             ),
             (
                 "Names are saved in capitals",
@@ -179,7 +176,7 @@ BY_ROLE = {
                 "gradebook, no SF2, no report card.",
             ),
             (
-                "Column headings are forgiving; the values inside them aren't",
+                "You don't need to rename your column headings",
                 "`Last Name`, `last_name` and `LASTNAME` are all understood, and "
                 "extra columns are ignored — so you can upload a sheet you "
                 "already keep without renaming its headings. Dates are read in "
@@ -370,7 +367,7 @@ def render() -> None:
     st.caption(
         "Think of this as a quick cheat sheet for the parts of the pages that "
         "aren't super obvious. Everything else is pretty self-explanatory. Let "
-        "the admin know if you get stuck on anything! -DL"
+        "the super admin know if you get stuck on anything! -DL"
     )
     render_flashes()
 

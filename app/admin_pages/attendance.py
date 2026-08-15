@@ -253,10 +253,10 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
     st.title("Attendance")
     st.caption(
-        "Daily attendance per learner per class day. Codes: **P** present, "
-        "**X** absent, **T-L** tardy/late, **T-C** cutting. Late and cutting still "
-        f"count as days present. A **{NOT_ELIGIBLE}** cell is outside that learner's "
-        "enrolment window and never counts against them."
+        "**P** present · **X** absent · **T-L** late · **T-C** cutting. Late and "
+        f"cutting both count as present. A **{NOT_ELIGIBLE}** (dot) means the learner "
+        "had not joined this class yet on that day, or had already left — those days "
+        "can't be marked and are not counted as absences."
     )
     render_flashes()
 
@@ -319,12 +319,10 @@ def render() -> None:
             ):
                 st.rerun()
         st.caption(
-            "Creates a Present attendance entry for each learner on every class day "
-            "that has not yet been recorded. This keeps blank entries clearly meaning "
-            "“attendance not yet recorded” instead of automatically treating "
-            "them as present.\n\n"
-            "Run this again whenever a new learner is added or the school "
-            "calendar/class days are updated."
+            "Marks everyone **Present** on every class day that has no entry yet, "
+            "so you only need to change the learners who were absent or late.\n\n"
+            "Press it again whenever a new learner joins the section, or the "
+            "school calendar changes."
         )
 
         st.divider()

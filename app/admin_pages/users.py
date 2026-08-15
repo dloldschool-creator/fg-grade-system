@@ -170,10 +170,10 @@ def render() -> None:
         st.divider()
         st.subheader("Add user")
         st.caption(
-            "Creates the account with a generated temporary password (shown once below) — "
-            "relay it to the person directly; they change it via Change Password after "
-            "logging in. If the email already has a Supabase Auth account, its password is "
-            "reset instead of creating a duplicate."
+            "Creates the account and shows a temporary password once. Give it to the "
+            "person directly — they set their own from **Change Password** after "
+            "signing in. If that email already has an account, its password is reset "
+            "instead of a second account being made."
         )
         with st.form("add_user"):
             email = st.text_input("Email")

@@ -51,7 +51,7 @@ def _summary_table(session, school_year: SchoolYear) -> None:
             {
                 "Month": f"{_calendar.month_name[month]} {year}",
                 "Class days": actual,
-                "Workbook target": target if target is not None else "—",
+                "Planned class days": target if target is not None else "—",
                 "Diff": (actual - target) if target is not None else "—",
             }
         )
@@ -59,17 +59,18 @@ def _summary_table(session, school_year: SchoolYear) -> None:
         {
             "Month": "TOTAL",
             "Class days": total_actual,
-            "Workbook target": total_target or "—",
+            "Planned class days": total_target or "—",
             "Diff": (total_actual - total_target) if total_target else "—",
         }
     )
     st.table(rows)
     st.caption(
-        "A positive Diff means dates are still marked as class days that the "
-        "workbook counts as non-class days — usually a proclaimed special "
-        "non-working day or a local suspension. Uncheck them below; the system "
-        "never guesses at those. (Weekends, the fixed national regular holidays, "
-        "National Heroes Day and Holy Week are already handled automatically.)"
+        "**Diff** shows how this month compares with the school's planned number "
+        "of class days. A number above 0 means some days are still ticked as "
+        "class days that shouldn't be — usually a special non-working day or a "
+        "local class suspension. Untick those days below. Weekends, Holy Week, "
+        "National Heroes Day and the fixed national holidays are already handled "
+        "for you."
     )
 
 

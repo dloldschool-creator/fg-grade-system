@@ -97,10 +97,7 @@ def render() -> None:
         entries = query.order_by(AuditLog.created_at.desc()).limit(PAGE_SIZE).all()
 
         if not entries:
-            st.info(
-                "No entries match. If the log is empty entirely, nothing sensitive has "
-                "been changed since audit logging was switched on."
-            )
+            st.info("No entries match.")
             return
 
         st.caption(

@@ -166,9 +166,10 @@ def _certificate_settings(version, school, school_year):
 
     with st.expander("Certificate details — signatory and date"):
         st.caption(
-            "Defaults come from School Info and the school year. Change them here "
-            "for term recognition signed by your immediate supervisor; nothing is "
-            "saved, it only affects the certificates you generate now."
+            "The signatory and date come from School Info and the school year. "
+            "Change them here if these certificates need someone else to sign — a "
+            "term recognition signed by your immediate supervisor, for example. "
+            "Nothing is saved; it only affects the certificates you make right now."
         )
         col1, col2 = st.columns(2)
         signatory = col1.text_input(
@@ -267,9 +268,9 @@ def render() -> None:
             )
             term_name = term_by_id[term_choice].name
             st.caption(
-                "Judged on this term's **Term Average**, which counts the Grade 11 "
-                "language pair as two separate subjects — unlike the General "
-                "Average, where they combine into one."
+                "Judged on this term's **Term Average**. For Grade 11, Effective "
+                "Communication and Mabisang Komunikasyon count as two separate "
+                "subjects here."
             )
         else:
             st.caption("Judged once for the year on the **General Average** across all terms.")

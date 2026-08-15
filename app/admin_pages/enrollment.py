@@ -99,8 +99,8 @@ def _enroll_learner_tab(session, adviser_user_id):
 def _bulk_enroll_tab(session, adviser_user_id):
     st.caption(
         "Puts several learners into one section at once. Use it when the "
-        "learners are already in the system — for example after a CSV upload "
-        "on the Learner Masterlist, or when a group moves into your section "
+        "learners are already in the system — for example after an Excel "
+        "upload on the Learner Masterlist, or when a group moves into your section "
         "partway through the year."
     )
     st.markdown(

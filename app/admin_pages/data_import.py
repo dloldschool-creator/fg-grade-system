@@ -92,7 +92,10 @@ def render() -> None:
             st.warning("No school years yet — create one before importing.")
 
     uploaded = st.file_uploader(
-        "Spreadsheet (.xlsx) or CSV", type=["xlsx", "xlsm", "csv"], key=f"upload_{spec.job_type}"
+        # CSV is still accepted so an older file already saved that way still
+        # uploads, but it is never offered: Excel destroys a 12-digit LRN on
+        # CSV export, and offering the format is what invites the mistake.
+        "Excel file (.xlsx)", type=["xlsx", "xlsm", "csv"], key=f"upload_{spec.job_type}"
     )
     if uploaded is None:
         st.divider()

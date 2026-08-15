@@ -128,12 +128,13 @@ def _seed_from_profile(session, section: Section, terms: list[Term], current_use
             "Subject profile", options=[p.id for p in matching_profiles], format_func=lambda v: profile_by_id[v].name
         )
         st.caption(
-            "**Seed** creates a CONFIRMED offering for each subject/term the profile "
-            "marks active. Already-offered subject/terms are skipped, not duplicated — "
-            "so seeding again after changing the profile's Order changes nothing.\n\n"
-            "**Re-apply order** is how you reorder a section that is already seeded: it "
-            "writes the profile's Order onto the existing offerings and touches nothing "
-            "else. Subjects the profile doesn't list keep the order they have."
+            "**Seed offerings from profile** adds every subject and term listed in "
+            "the profile above. Anything already added is left alone, so it is safe "
+            "to press twice.\n\n"
+            "**Re-apply order** changes only the order the subjects appear in, to "
+            "match the profile. It adds nothing and removes nothing. Use it when the "
+            "section is already set up and you have since changed the profile's "
+            "Order. Subjects the profile doesn't list keep the order they have."
         )
         seed_col, order_col = st.columns(2)
         seed = seed_col.form_submit_button("Seed offerings from profile")
@@ -197,10 +198,10 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN")
     st.title("Section Subject Offerings")
     st.caption(
-        "**This decides what a learner is actually graded on** — "
-        "controls the gradebook, Term Average, Final Grade, General Average, SF9, SF10, "
-        "and temp cards. A subject profile only seeds defaults; nothing else may "
-        "substitute for what's confirmed here."
+        "**This page decides what each learner is graded on.** What you set here is "
+        "what appears in the Gradebook, in the averages, and on the report cards and "
+        "term cards. Subject Profiles only give a starting point — so if a subject is "
+        "missing from a gradebook, this is the page to fix it on."
     )
     render_flashes()
 

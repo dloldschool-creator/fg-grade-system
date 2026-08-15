@@ -203,16 +203,17 @@ def _bulk_upload_section(session, current_user) -> None:
             "is enrolled into that section in the same step."
         )
         st.caption(
-            "**Save the file as Excel (.xlsx), not CSV.** Nothing else needs "
+            "**Save the file as Excel (.xlsx).** Nothing else needs "
             "reformatting — LRNs come through whole and birthdates are read in "
-            "whatever order your Excel writes them. But saving as CSV makes "
-            "Excel write a 12-digit LRN as `1.07E+11`, which throws the last "
-            "digits away permanently; there is no way to get them back, so "
-            "those rows are refused rather than guessed at."
+            "whatever order your Excel writes them. Never save it as CSV: that "
+            "shortens a 12-digit LRN to `1.07E+11` and the last digits are gone "
+            "for good, so those rows are refused rather than guessed at."
         )
 
         uploaded = st.file_uploader(
-            "Excel file (.xlsx) — or CSV, if the LRN column was formatted as text",
+            "Excel file (.xlsx)",
+            # CSV is still accepted so an older file already saved that way
+            # still uploads, but it is never offered — see the caption above.
             type=["csv", "xlsx"],
             key="learner_csv",
         )
