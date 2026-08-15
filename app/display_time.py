@@ -21,13 +21,13 @@ from datetime import datetime, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo
 
-    SCHOOL_TZ = ZoneInfo("Asia/Taipei")
+    SCHOOL_TZ = ZoneInfo("Asia/Manila")
 except Exception:  # noqa: BLE001
     # Windows ships no system tz database, so zoneinfo depends on the
-    # `tzdata` package being present. Both Asia/Taipei and Asia/Manila have
-    # been a flat UTC+8 for decades with no DST, so a fixed offset is the
-    # same answer rather than an approximation of it.
-    SCHOOL_TZ = timezone(timedelta(hours=8), "Asia/Taipei")
+    # `tzdata` package being present. Asia/Manila has been a flat UTC+8
+    # since 1978 with no DST, so a fixed offset is the same answer rather
+    # than an approximation of it.
+    SCHOOL_TZ = timezone(timedelta(hours=8), "Asia/Manila")
 
 DISPLAY_FORMAT = "%Y-%m-%d %H:%M"
 LOG_FORMAT = "%Y-%m-%d %H:%M:%S"

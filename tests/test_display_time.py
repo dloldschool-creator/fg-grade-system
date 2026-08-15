@@ -54,9 +54,9 @@ def test_the_audit_log_keeps_its_seconds():
 
 
 def test_school_time_is_a_flat_plus_eight_all_year():
-    """Neither Taipei nor Manila observes DST, so a July timestamp and a
-    January one shift by the same amount. If that ever stops being true,
-    the offsets below diverge and this fails."""
+    """The Philippines has not observed DST since 1978, so a July
+    timestamp and a January one shift by the same amount. If that ever
+    stops being true, the offsets below diverge and this fails."""
     january = to_school_time(datetime(2026, 1, 15, 4, 0))
     july = to_school_time(datetime(2026, 7, 15, 4, 0))
 
