@@ -1,6 +1,14 @@
 import streamlit as st
 
-from app.admin_pages._helpers import flash, flush_or_rollback, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    flash,
+    flush_or_rollback,
+    get_session,
+    render_flashes,
+    text_field,
+    try_commit,
+)
 from app.auth import require_role
 from app.models.enums import GradeEncodingStatus, SchoolYearStatus
 from app.models.organization import School, SchoolYear, Term
@@ -110,7 +118,7 @@ def render() -> None:
             return
 
         with st.form("create_school_year"):
-            name = st.text_input("Name (e.g. 2027-2028)")
+            name = text_field("Name (e.g. 2027-2028)", key="create_school_year.name")
             col1, col2 = st.columns(2)
             sy_start = col1.date_input("School year start date")
             sy_end = col2.date_input("School year end date")
@@ -162,5 +170,6 @@ def render() -> None:
                                     end_date=t_end,
                                 )
                             )
-                        try_commit(session, f"Created {name} (status DRAFT).")
+                        if try_commit(session, f"Created {name} (status DRAFT)."):
+                            clear_text_fields("create_school_year")
                     st.rerun()

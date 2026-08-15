@@ -1,10 +1,12 @@
 import streamlit as st
 
 from app.admin_pages._helpers import (
+    clear_text_fields,
     get_session,
     read_uploaded_csv,
     render_flashes,
     stateful_tabs,
+    text_field,
     try_commit,
     try_delete,
 )
@@ -31,14 +33,15 @@ def _categories_tab(session):
     st.divider()
     with st.form("add_category"):
         st.subheader("Add subject category")
-        code = st.text_input("Code")
-        name = st.text_input("Name")
+        code = text_field("Code", key="add_category.code")
+        name = text_field("Name", key="add_category.name")
         if st.form_submit_button("Add"):
             if not code or not name:
                 st.error("Code and name are required.")
             else:
                 session.add(SubjectCategory(code=code.upper(), name=name))
-                try_commit(session, f"Added {name}.")
+                if try_commit(session, f"Added {name}."):
+                    clear_text_fields("add_category")
                 st.rerun()
 
 
@@ -191,9 +194,9 @@ def _subjects_tab(session):
     st.divider()
     with st.form("add_subject"):
         st.subheader("Add subject")
-        code = st.text_input("Code", key="new_subj_code")
-        official_name = st.text_input("Official name", key="new_subj_on")
-        short_name = st.text_input("Short name", key="new_subj_sn")
+        code = text_field("Code", key="add_subject.code")
+        official_name = text_field("Official name", key="add_subject.official_name")
+        short_name = text_field("Short name", key="add_subject.short_name")
         gl_choice = st.selectbox(
             "Grade level",
             options=[gl.id for gl in grade_levels],
@@ -227,7 +230,8 @@ def _subjects_tab(session):
                         track_restriction_id=track_choice,
                     )
                 )
-                try_commit(session, f"Added {official_name}.")
+                if try_commit(session, f"Added {official_name}."):
+                    clear_text_fields("add_subject")
                 st.rerun()
 
     _bulk_upload_subjects(session, grade_levels, categories, tracks)

@@ -3,10 +3,12 @@ from datetime import date
 import streamlit as st
 
 from app.admin_pages._helpers import (
+    clear_text_fields,
     flash,
     flush_or_rollback,
     get_session,
     render_flashes,
+    text_field,
     try_commit,
     try_delete,
 )
@@ -359,14 +361,16 @@ def render() -> None:
 
         with st.form("add_learner"):
             col1, col2, col3 = st.columns(3)
-            last_name = col1.text_input("Last name", key="new_ln")
-            first_name = col2.text_input("First name", key="new_fn")
-            middle_name = col3.text_input("Middle name", key="new_mn")
+            last_name = text_field("Last name", key="add_learner.last_name", container=col1)
+            first_name = text_field("First name", key="add_learner.first_name", container=col2)
+            middle_name = text_field("Middle name", key="add_learner.middle_name", container=col3)
             col1, col2, col3 = st.columns(3)
-            extension_name = col1.text_input("Extension (Jr., III, ...)", key="new_ext")
+            extension_name = text_field(
+                "Extension (Jr., III, ...)", key="add_learner.extension_name", container=col1
+            )
             sex = col2.selectbox("Sex", options=[s.value for s in Sex], key="new_sex")
             birthdate = col3.date_input("Birthdate", value=date(2009, 1, 1), key="new_bd")
-            lrn = st.text_input("LRN (12 digits, blank if not yet assigned)", key="new_lrn")
+            lrn = text_field("LRN (12 digits, blank if not yet assigned)", key="add_learner.lrn")
 
             if st.form_submit_button("Add"):
                 last_name = normalize_name(last_name)
@@ -406,7 +410,11 @@ def render() -> None:
                                 )
                             )
                             message += f" Enrolled in {section.name}."
-                        try_commit(session, message)
+                        # Sex and Birthdate keep their setting: a roster is
+                        # typed in one sitting and the next learner is
+                        # usually the same year group.
+                        if try_commit(session, message):
+                            clear_text_fields("add_learner")
                     st.rerun()
 
         _bulk_upload_section(session, current_user)

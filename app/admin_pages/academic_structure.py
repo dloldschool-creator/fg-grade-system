@@ -1,6 +1,14 @@
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, stateful_tabs, try_commit, try_delete
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    get_session,
+    render_flashes,
+    stateful_tabs,
+    text_field,
+    try_commit,
+    try_delete,
+)
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Strand, Track
 
@@ -29,15 +37,16 @@ def _tracks_tab(session):
     st.divider()
     with st.form("add_track"):
         st.subheader("Add track")
-        code = st.text_input("Code (e.g. ACADEMIC)")
-        name = st.text_input("Name")
+        code = text_field("Code (e.g. ACADEMIC)", key="add_track.code")
+        name = text_field("Name", key="add_track.name")
         display_order = st.number_input("Display order", min_value=0, value=0, step=1)
         if st.form_submit_button("Add"):
             if not code or not name:
                 st.error("Code and name are required.")
             else:
                 session.add(Track(code=code.upper(), name=name, display_order=display_order))
-                try_commit(session, f"Added {name}.")
+                if try_commit(session, f"Added {name}."):
+                    clear_text_fields("add_track")
                 st.rerun()
 
 
@@ -66,8 +75,8 @@ def _strands_tab(session):
         track_choice = st.selectbox(
             "Track", options=[t.id for t in tracks], format_func=lambda tid: track_by_id[tid].name
         )
-        code = st.text_input("Code (e.g. STEM)")
-        name = st.text_input("Name")
+        code = text_field("Code (e.g. STEM)", key="add_strand.code")
+        name = text_field("Name", key="add_strand.name")
         display_order = st.number_input(
             "Display order", min_value=0, value=0, step=1, key="strand_display_order"
         )
@@ -83,7 +92,8 @@ def _strands_tab(session):
                         display_order=display_order,
                     )
                 )
-                try_commit(session, f"Added {name}.")
+                if try_commit(session, f"Added {name}."):
+                    clear_text_fields("add_strand")
                 st.rerun()
 
 

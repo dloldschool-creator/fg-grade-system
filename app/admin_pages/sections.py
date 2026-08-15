@@ -1,6 +1,13 @@
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, try_commit, try_delete
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    get_session,
+    render_flashes,
+    text_field,
+    try_commit,
+    try_delete,
+)
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.organization import SchoolYear
@@ -145,7 +152,7 @@ def render() -> None:
         new_strand_options = [s.id for s in strands if s.track_id == new_track_choice]
 
         with st.form("add_section"):
-            name = st.text_input("Name (e.g. STEM - A)")
+            name = text_field("Name (e.g. STEM - A)", key="add_section.name")
             gl_choice = st.selectbox(
                 "Grade level", options=[gl.id for gl in grade_levels], format_func=lambda v: gl_by_id[v].name
             )
@@ -158,7 +165,7 @@ def render() -> None:
                 options=adviser_options,
                 format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
             )
-            room = st.text_input("Room", key="new_sec_room")
+            room = text_field("Room", key="add_section.room")
             capacity = st.number_input("Capacity", min_value=0, value=0, step=1, key="new_sec_capacity")
 
             if st.form_submit_button("Add"):
@@ -177,5 +184,6 @@ def render() -> None:
                             capacity=capacity or None,
                         )
                     )
-                    try_commit(session, f"Added {name}.")
+                    if try_commit(session, f"Added {name}."):
+                        clear_text_fields("add_section")
                     st.rerun()

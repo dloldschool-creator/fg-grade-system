@@ -10,7 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 
 _FLASH_KEY = "_flash_messages"
+_TEXT_KEYS = "_text_field_keys"
 ALL = "— all —"
+
+# st.toast takes an emoji, not a message kind, so the mapping lives here
+# rather than being guessed at each call site.
+_TOAST_ICONS = {"success": "✅", "error": "🚫", "warning": "⚠️", "info": "ℹ️"}
 
 
 @contextmanager
@@ -195,8 +200,61 @@ def flash(kind: str, message: str) -> None:
 
 
 def render_flashes() -> None:
+    """Shows what flash() queued, twice: in place at the top of the page,
+    and as a toast floating over whatever part of the page you are actually
+    looking at.
+
+    The toast is the copy you see. Every add form on these pages sits
+    *below* the list it adds to, so by the time you press Add the top of
+    the page is scrolled off — and a result you have to go looking for
+    reads as nothing having happened, which is worst for the errors.
+
+    The inline copy stays because a toast dismisses itself after a few
+    seconds; "Couldn't save — that subject code is already used" needs to
+    still be there while you fix it.
+    """
     for kind, message in st.session_state.pop(_FLASH_KEY, []):
         getattr(st, kind)(message)
+        st.toast(message, icon=_TOAST_ICONS.get(kind))
+
+
+def text_field(label: str, *, key: str, area: bool = False, container=None, **kwargs):
+    """A text box an add form can blank again once the row is saved.
+
+    `key` is "<form>.<field>"; `clear_text_fields("<form>")` empties every
+    field registered under that form. Registering here is what keeps the
+    clearing honest — only boxes built by this function are ever cleared,
+    so a tick box or a picker in the same form cannot be blanked by a key
+    that happens to share the prefix.
+
+    `container` takes a column (`col1`) for forms laid out side by side,
+    since `col1.text_input(...)` cannot go through this function.
+    """
+    st.session_state.setdefault(_TEXT_KEYS, set()).add(key)
+    target = container if container is not None else st
+    widget = target.text_area if area else target.text_input
+    return widget(label, key=key, **kwargs)
+
+
+def clear_text_fields(form: str) -> None:
+    """Empties one add form's text boxes, leaving its tick boxes and
+    pickers as they are.
+
+    Adding rows is repetitive work: the grade level, the track, the term,
+    the "Active" tick are usually the same for the next row, while the code
+    and the name are exactly what must not be left sitting there to be
+    submitted twice.
+
+    Deleting the key is what resets a box — assigning "" instead raises,
+    because Streamlit refuses to write to a widget already built this run.
+    Deleting is allowed there and takes effect on the rerun that follows;
+    tests/test_add_form_reset.py pins that behaviour, since it is a
+    Streamlit implementation detail rather than a documented promise.
+    """
+    prefix = f"{form}."
+    for key in [k for k in st.session_state.get(_TEXT_KEYS, ()) if k.startswith(prefix)]:
+        if key in st.session_state:
+            del st.session_state[key]
 
 
 def stateful_tabs(key: str, labels: list[str]) -> str:

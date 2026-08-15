@@ -1,6 +1,13 @@
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, try_commit, try_delete
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    get_session,
+    render_flashes,
+    text_field,
+    try_commit,
+    try_delete,
+)
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Strand, Track
 from app.models.subjects import Subject, SubjectProfile, SubjectProfileSubject
@@ -176,7 +183,7 @@ def render() -> None:
         new_strand_options = [s.id for s in strands if s.track_id == new_track_choice]
 
         with st.form("add_profile"):
-            name = st.text_input("Name (e.g. G11-STEM)")
+            name = text_field("Name (e.g. G11-STEM)", key="add_profile.name")
             gl_choice = st.selectbox(
                 "Grade level", options=[gl.id for gl in grade_levels], format_func=lambda v: gl_by_id[v].name
             )
@@ -195,5 +202,6 @@ def render() -> None:
                             strand_id=strand_choice,
                         )
                     )
-                    try_commit(session, f"Added {name}.")
+                    if try_commit(session, f"Added {name}."):
+                        clear_text_fields("add_profile")
                     st.rerun()

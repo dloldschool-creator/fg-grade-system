@@ -288,7 +288,21 @@ the printed form can't disagree. Don't reimplement either rule in a page.
 **Streamlit**
 
 - `st.success()`/`st.error()` immediately before `st.rerun()` never reach
-  the browser — use `_helpers.flash()` / `render_flashes()`.
+  the browser — use `_helpers.flash()` / `render_flashes()`. `render_flashes`
+  also toasts each message: every add form sits *below* the list it adds to,
+  so the top of the page — where the inline message renders — is scrolled
+  off by the time the button is pressed.
+- **To blank a widget, delete its key; never assign to it.** Assigning to a
+  widget's `session_state` key after that widget is built raises; `del` is
+  accepted and takes effect on the next run. That is what lets
+  `_helpers.clear_text_fields()` empty an add form's text boxes while
+  leaving its tick boxes and pickers set (`clear_on_submit=True` would
+  reset those too, and the next row usually wants them). Only boxes built
+  by `_helpers.text_field()` are ever cleared, so a key that merely shares
+  the form prefix can't be blanked by accident. Both behaviours are
+  Streamlit implementation details, so `tests/test_add_form_reset.py` pins
+  them through `AppTest` — the app's only test that drives the real
+  Streamlit runtime, and the way to test widget lifecycle without a login.
 - `st.tabs()` resets to the first tab on every rerun — use
   `_helpers.stateful_tabs()`.
 - A `SelectboxColumn` cell whose value isn't in `options` renders *empty*,

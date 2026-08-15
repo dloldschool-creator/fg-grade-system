@@ -1,6 +1,12 @@
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    get_session,
+    render_flashes,
+    text_field,
+    try_commit,
+)
 from app.auth import require_role
 from app.models.awards import AwardPolicy, AwardPolicyVersion
 from app.models.enums import AwardScope, PolicyVersionStatus
@@ -163,12 +169,15 @@ def render() -> None:
 
         st.subheader("Add award policy")
         with st.form("add_award_policy"):
-            name = st.text_input("Name")
-            description = st.text_area("Description", value="")
+            name = text_field("Name", key="add_award_policy.name")
+            description = text_field(
+                "Description", key="add_award_policy.description", area=True
+            )
             if st.form_submit_button("Add"):
                 if not name:
                     st.error("Name is required.")
                 else:
                     session.add(AwardPolicy(name=name, description=description or None))
-                    try_commit(session, f"Added {name}.")
+                    if try_commit(session, f"Added {name}."):
+                        clear_text_fields("add_award_policy")
                     st.rerun()

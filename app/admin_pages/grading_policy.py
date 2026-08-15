@@ -1,6 +1,12 @@
 import streamlit as st
 
-from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    get_session,
+    render_flashes,
+    text_field,
+    try_commit,
+)
 from app.auth import require_role
 from app.models.enums import PolicyVersionStatus
 from app.models.organization import SchoolYear
@@ -88,13 +94,17 @@ def render() -> None:
 
         st.subheader("Add grading policy")
         with st.form("add_policy"):
-            name = st.text_input("Name")
-            description = st.text_area("Description", value="")
+            name = text_field("Name", key="add_policy.name")
+            description = text_field("Description", key="add_policy.description", area=True)
             if st.form_submit_button("Add"):
                 if not name:
                     st.error("Name is required.")
                 else:
                     session.add(GradingPolicy(name=name, description=description or None))
-                    session.commit()
-                    flash("success", f"Added {name}.")
+                    # try_commit rather than a bare commit + flash: an
+                    # IntegrityError here would otherwise take the whole
+                    # page down instead of showing a message, and the
+                    # clear below has to know whether the save worked.
+                    if try_commit(session, f"Added {name}."):
+                        clear_text_fields("add_policy")
                     st.rerun()

@@ -4,7 +4,15 @@ import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes, stateful_tabs, try_commit
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    flash,
+    get_session,
+    render_flashes,
+    stateful_tabs,
+    text_field,
+    try_commit,
+)
 from app.auth import require_role
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus
@@ -295,12 +303,26 @@ def _roster_tab(session, adviser_user_id, current_user):
                 effective_date = st.date_input(
                     "Effective date", value=date.today(), key=f"mv_date_{enrollment.id}"
                 )
-                details = st.text_input("Details", key=f"mv_details_{enrollment.id}")
+                # One movement form per enrollment, so the form name — and
+                # with it everything clear_text_fields touches — is scoped
+                # to this learner.
+                movement_form = f"add_movement_{enrollment.id}"
+                details = text_field("Details", key=f"{movement_form}.details")
                 col1, col2 = st.columns(2)
-                previous_school = col1.text_input("Previous school (if applicable)", key=f"mv_prev_{enrollment.id}")
-                receiving_school = col2.text_input("Receiving school (if applicable)", key=f"mv_recv_{enrollment.id}")
-                nls_reason = st.text_input("NLS reason (if applicable)", key=f"mv_nls_{enrollment.id}")
-                remarks = st.text_input("Remarks", key=f"mv_remarks_{enrollment.id}")
+                previous_school = text_field(
+                    "Previous school (if applicable)",
+                    key=f"{movement_form}.previous_school",
+                    container=col1,
+                )
+                receiving_school = text_field(
+                    "Receiving school (if applicable)",
+                    key=f"{movement_form}.receiving_school",
+                    container=col2,
+                )
+                nls_reason = text_field(
+                    "NLS reason (if applicable)", key=f"{movement_form}.nls_reason"
+                )
+                remarks = text_field("Remarks", key=f"{movement_form}.remarks")
 
                 if st.form_submit_button("Log movement"):
                     previous_status = enrollment.enrollment_status
@@ -336,7 +358,8 @@ def _roster_tab(session, adviser_user_id, current_user):
                         },
                         reason=details or remarks or None,
                     )
-                    try_commit(session, "Movement logged.")
+                    if try_commit(session, "Movement logged."):
+                        clear_text_fields(movement_form)
                     st.rerun()
 
 
