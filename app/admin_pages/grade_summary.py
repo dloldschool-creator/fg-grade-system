@@ -12,6 +12,7 @@ from app.admin_pages._helpers import (
     try_commit,
 )
 from app.auth import require_role
+from app.display_time import format_time
 from app.grading_service import recompute_enrollment_grades
 from app.report_card import build_learning_area_rows, load_report_context
 from app.models.enums import CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
@@ -51,12 +52,12 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
     is_finalized = latest_record is not None and latest_record.status == FinalizationRecordStatus.FINALIZED
 
     if is_finalized:
-        st.success(f"Finalized {latest_record.finalized_at:%Y-%m-%d %H:%M}.")
+        st.success(f"Finalized {format_time(latest_record.finalized_at)}.")
         snapshot = get_academic_record(session, enrollment.id)
         if snapshot is not None:
             st.caption(
                 f"Permanent academic record captured "
-                f"{snapshot.snapshot_at:%Y-%m-%d %H:%M}"
+                f"{format_time(snapshot.snapshot_at)}"
                 f"{f' (revision {snapshot.revision})' if snapshot.revision > 1 else ''} — "
                 "this learner's result is now kept exactly as it stands today."
             )

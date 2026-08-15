@@ -4,6 +4,7 @@ from app.admin_pages._helpers import (
     clear_text_fields,
     get_session,
     render_flashes,
+    section_filters,
     text_field,
     try_commit,
     try_delete,
@@ -54,7 +55,16 @@ def render() -> None:
             .all()
         )
 
-        for section in sections:
+        # The same filters every other section page has. This one lists all
+        # 30 sections as expanders rather than picking one, so the filters
+        # narrow the list instead of a dropdown.
+        visible_sections, _ = section_filters(
+            sections, gl_by_id, strand_by_id, key="sections_list"
+        )
+        if sections and not visible_sections:
+            st.info("No sections match those filters.")
+
+        for section in visible_sections:
             adviser_label = (
                 adviser_by_id[section.adviser_user_id].full_name
                 if section.adviser_user_id in adviser_by_id

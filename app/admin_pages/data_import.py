@@ -4,6 +4,7 @@ import streamlit as st
 from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
+from app.display_time import format_time
 from app.import_pipeline import (
     apply_mapping,
     create_job,
@@ -32,7 +33,7 @@ def _recent_jobs(session) -> None:
     st.table(
         [
             {
-                "When": job.created_at.strftime("%Y-%m-%d %H:%M") if job.created_at else "",
+                "When": format_time(job.created_at),
                 "Type": job.job_type.value,
                 "File": job.file_path,
                 "Status": job.status.value,

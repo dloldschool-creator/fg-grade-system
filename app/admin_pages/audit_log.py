@@ -12,6 +12,7 @@ import streamlit as st
 from app import audit_service
 from app.admin_pages._helpers import get_session, render_flashes
 from app.auth import require_role
+from app.display_time import LOG_FORMAT, format_time
 from app.models.admin import AuditLog
 from app.models.rbac import User
 
@@ -111,9 +112,7 @@ def render() -> None:
             pd.DataFrame(
                 [
                     {
-                        "When": entry.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                        if entry.created_at
-                        else "",
+                        "When": format_time(entry.created_at, LOG_FORMAT),
                         "Who": (
                             users[entry.user_id].full_name
                             if entry.user_id in users

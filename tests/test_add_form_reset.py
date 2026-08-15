@@ -6,17 +6,24 @@ not sit there to be submitted twice. So `clear_text_fields` empties the
 typed boxes and leaves the pickers set.
 
 This is tested through Streamlit's own runtime (`AppTest`) rather than by
-reading the source, because the whole feature *is* widget lifecycle. Two
-things here are Streamlit implementation details rather than documented
-promises, and both would fail silently in a structural test:
+reading the source, because the whole feature *is* widget lifecycle.
 
-  * assigning "" to a widget's key after the widget is built raises,
-    while deleting the key is accepted and takes effect on the next run;
-  * a form's widgets are built before its submit button reports True, so
-    the clear runs in the same script run that drew the boxes.
+**Read this before trusting a green run here.** The first implementation
+deleted each box's `session_state` key. Every test below passed, and the
+boxes did not clear in a browser: a widget inside `st.form` also holds a
+value in the *frontend*, which the form keeps across the rerun and
+re-submits, so the server believed the box was empty while it still read
+"STEM - A" on screen. AppTest has no browser and cannot see that — it
+only ever showed the server's side of the disagreement.
+
+What actually clears a box is `clear_text_fields` bumping the form's
+generation, which gives every text box a key Streamlit has never seen;
+a brand-new widget has nothing to restore, frontend included. So the
+generation test below is the one carrying the weight, and a change to
+this mechanism needs a real browser, not another assertion here.
 
 requirements.txt pins streamlit>=1.38,<2.0, so a minor upgrade reaching
-the host could change either. Then this fails, which is the point.
+the host could change this. Then these fail, which is the point.
 """
 
 import streamlit as st
@@ -49,17 +56,30 @@ with st.form("add_thing"):
 """
 
 
+def box(at: AppTest, label: str):
+    """Look a text box up by its label, not its key.
+
+    text_field's keys carry the form's generation ("add_thing.code#0"),
+    which is the whole mechanism — so a test that addressed boxes by key
+    would have to know the generation it is asserting about.
+    """
+    for widget in list(at.text_input) + list(at.text_area):
+        if widget.label == label:
+            return widget
+    raise AssertionError(f"no text box labelled {label!r}")
+
+
 def filled_form(succeeds: bool = True) -> AppTest:
     """An add form with every widget filled in, submitted once."""
     at = AppTest.from_string(ADD_FORM_SCRIPT, default_timeout=30)
     at.session_state["succeeds"] = succeeds
     at.run()
-    at.text_input("add_thing.code").set_value("ORAL-COMM")
-    at.text_area("add_thing.note").set_value("three terms")
-    at.text_input("add_thing.room").set_value("Room 12")
+    box(at, "Code").set_value("ORAL-COMM")
+    box(at, "Note").set_value("three terms")
+    box(at, "Room").set_value("Room 12")
     at.checkbox("add_thing.active").set_value(True)
     at.selectbox("add_thing.grade").set_value("Grade 12")
-    at.text_input("untracked_box").set_value("left alone")
+    box(at, "Untracked").set_value("left alone")
     return at.button[0].click().run()
 
 
@@ -69,8 +89,8 @@ def filled_form(succeeds: bool = True) -> AppTest:
 def test_the_text_boxes_come_back_blank():
     at = filled_form()
 
-    assert at.text_input("add_thing.code").value == ""
-    assert at.text_area("add_thing.note").value == ""
+    assert box(at, "Code").value == ""
+    assert box(at, "Note").value == ""
 
 
 def test_a_box_built_inside_a_column_clears_too():
@@ -78,7 +98,24 @@ def test_a_box_built_inside_a_column_clears_too():
     means text_field(container=col1) rather than a bare st.text_input."""
     at = filled_form()
 
-    assert at.text_input("add_thing.room").value == ""
+    assert box(at, "Room").value == ""
+
+
+def test_the_cleared_boxes_are_new_widgets_to_streamlit():
+    """The assertion that actually corresponds to what a user sees.
+
+    Clearing works by identity: after a successful add, every text box in
+    the form carries a key Streamlit has never issued before, so nothing
+    — server state or the browser's own copy of the form — has anything
+    to restore into it. An emptied value with the *same* key is the
+    version of this feature that passed its tests and shipped broken.
+    """
+    at = filled_form()
+
+    keys = [w.key for w in at.text_input if w.label in {"Code", "Room"}]
+    assert keys == ["add_thing.code#1", "add_thing.room#1"]
+    assert box(at, "Note").key == "add_thing.note#1"
+    assert box(at, "Untracked").key == "untracked_box"
 
 
 def test_the_tick_box_and_the_picker_keep_their_setting():
@@ -91,16 +128,14 @@ def test_the_tick_box_and_the_picker_keep_their_setting():
 
 
 def test_a_text_box_not_built_by_text_field_is_left_alone():
-    """Only boxes registered by text_field are cleared, so a key that
-    merely shares the prefix cannot be blanked by accident."""
+    """Only boxes built by text_field carry a generation, so nothing else
+    on the page can be blanked by a clear."""
     at = filled_form()
 
-    assert at.text_input("untracked_box").value == "left alone"
+    assert box(at, "Untracked").value == "left alone"
 
 
 def test_nothing_raises_on_the_clearing_run():
-    """Assigning to a built widget's key raises StreamlitAPIException;
-    deleting it does not. If that ever flips, the add button breaks."""
     at = filled_form()
 
     assert not at.exception
@@ -114,8 +149,9 @@ def test_a_failed_save_keeps_what_was_typed():
     and the row was not created — so the text has to survive."""
     at = filled_form(succeeds=False)
 
-    assert at.text_input("add_thing.code").value == "ORAL-COMM"
-    assert at.text_area("add_thing.note").value == "three terms"
+    assert box(at, "Code").value == "ORAL-COMM"
+    assert box(at, "Note").value == "three terms"
+    assert box(at, "Code").key == "add_thing.code#0", "the generation must not advance"
 
 
 # --- The notification -----------------------------------------------------

@@ -292,17 +292,28 @@ the printed form can't disagree. Don't reimplement either rule in a page.
   also toasts each message: every add form sits *below* the list it adds to,
   so the top of the page — where the inline message renders — is scrolled
   off by the time the button is pressed.
-- **To blank a widget, delete its key; never assign to it.** Assigning to a
-  widget's `session_state` key after that widget is built raises; `del` is
-  accepted and takes effect on the next run. That is what lets
-  `_helpers.clear_text_fields()` empty an add form's text boxes while
-  leaving its tick boxes and pickers set (`clear_on_submit=True` would
-  reset those too, and the next row usually wants them). Only boxes built
-  by `_helpers.text_field()` are ever cleared, so a key that merely shares
-  the form prefix can't be blanked by accident. Both behaviours are
-  Streamlit implementation details, so `tests/test_add_form_reset.py` pins
-  them through `AppTest` — the app's only test that drives the real
-  Streamlit runtime, and the way to test widget lifecycle without a login.
+- **Clearing a widget inside `st.form` needs a new key, not an empty
+  value** — and the wrong version passes its tests. A form widget keeps a
+  copy of its value in the *frontend*, which survives the rerun and is
+  re-submitted, so deleting its `session_state` key empties the server's
+  copy while the box on screen still shows the old text. That shipped, on
+  Sections. `_helpers.clear_text_fields()` therefore bumps a per-form
+  generation, and `_helpers.text_field()` builds keys like
+  `add_section.name#3`: a key Streamlit has never issued has nothing to
+  restore, browser included. Nothing is deleted, so a tick box or picker in
+  the same form can't be caught by it (`clear_on_submit=True` would reset
+  those too, and the next row usually wants them).
+- **`AppTest` has no browser, and that gap is not theoretical.** It is the
+  right tool for widget lifecycle without a login (`tests/test_add_form_reset.py`
+  is the only test here driving the real Streamlit runtime), but it only
+  ever shows the *server's* side. The clearing bug above passed every
+  assertion in that file. Anything about what a widget displays after a
+  rerun needs a real browser: run one page against
+  `.claude/launch.json` and read the DOM.
+- **The file watcher is off (`server.fileWatcherType = "none"`), so a local
+  Streamlit keeps running the module it already imported.** Editing a
+  helper and reloading the page proves nothing — restart the server, or
+  you will be testing the old code and believing the new code failed.
 - `st.tabs()` resets to the first tab on every rerun — use
   `_helpers.stateful_tabs()`.
 - A `SelectboxColumn` cell whose value isn't in `options` renders *empty*,

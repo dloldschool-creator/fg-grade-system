@@ -26,6 +26,7 @@ from app.attendance_service import (
     validate_month,
 )
 from app.auth import require_role
+from app.display_time import format_time
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
@@ -165,7 +166,9 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
     st.write(f"**Month status:** {current_state.value}")
 
     if status is not None and status.status == FinalizationState.FINALIZED:
-        st.success(f"Finalized {status.finalized_at:%Y-%m-%d %H:%M} — attendance is read-only.")
+        st.success(
+            f"Finalized {format_time(status.finalized_at)} — attendance is read-only."
+        )
         if current_user.has_role("SUPER_ADMIN"):
             with st.form(f"reopen_att_{status.id}"):
                 reason = st.text_area("Reopen reason (required)")

@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 
 _FLASH_KEY = "_flash_messages"
-_TEXT_KEYS = "_text_field_keys"
+_TEXT_GENERATION = "_text_field_generation_"
 ALL = "— all —"
 
 # st.toast takes an emoji, not a message kind, so the mapping lives here
@@ -56,6 +56,69 @@ def picker_options(sections, grade_levels, strands, grade_choice=ALL):
         s for s in strands if any(sec.strand_id == s.id for sec in in_grade)
     ]
     return present_grades, present_strands
+
+
+def section_filters(sections, grade_levels: dict, strands: dict, *, key: str, extra_slots: int = 0):
+    """The Grade level and Strand dropdowns that sit above a list of sections.
+
+    Shared so the two callers cannot drift apart: `section_picker` asks for
+    one trailing slot and puts its Section dropdown there, while the
+    Sections page asks for none and filters the expanders it draws below.
+    The cascade, the "a filter only appears when it would narrow anything"
+    rule and the stale-choice handling are therefore written once.
+
+    Returns `(sections that survive the filters, the trailing containers)`.
+    A caller that asked for slots always gets that many, even when no
+    filter was drawn — they fall back to the page itself, full width.
+    """
+    # Read the grade level out of session state before laying anything out:
+    # the strand options depend on it, and Streamlit has already stored the
+    # new grade by the time this run draws the strand box.
+    grade_key, strand_key = f"{key}_grade", f"{key}_strand"
+    grade_choice = st.session_state.get(grade_key, ALL)
+    present_grades, present_strands = picker_options(
+        sections, grade_levels.values(), strands.values(), grade_choice
+    )
+    _forget_stale(grade_key, [ALL] + [g.id for g in present_grades])
+    _forget_stale(strand_key, [ALL] + [s.id for s in present_strands])
+
+    filters = []
+    if len(present_grades) > 1:
+        filters.append("grade")
+    if len(present_strands) > 1:
+        filters.append("strand")
+
+    grade_choice = strand_choice = ALL
+    if filters:
+        columns = st.columns(len(filters) + extra_slots)
+        index = 0
+        if "grade" in filters:
+            grade_choice = columns[index].selectbox(
+                "Grade level",
+                options=[ALL] + [g.id for g in present_grades],
+                format_func=lambda v: ALL if v == ALL else grade_levels[v].name,
+                key=grade_key,
+            )
+            index += 1
+        if "strand" in filters:
+            strand_choice = columns[index].selectbox(
+                "Strand",
+                options=[ALL] + [s.id for s in present_strands],
+                format_func=lambda v: ALL if v == ALL else strands[v].name,
+                key=strand_key,
+            )
+            index += 1
+        slots = list(columns[index:])
+    else:
+        slots = [st] * extra_slots
+
+    visible = [
+        s
+        for s in sections
+        if (grade_choice == ALL or s.grade_level_id == grade_choice)
+        and (strand_choice == ALL or s.strand_id == strand_choice)
+    ]
+    return visible, slots
 
 
 def _forget_stale(key: str, allowed) -> None:
@@ -128,53 +191,9 @@ def section_picker(
     }
     strands = {s.id: s for s in session.query(Strand).order_by(Strand.name).all()}
 
-    # Read the grade level out of session state before laying anything out:
-    # the strand options depend on it, and Streamlit has already stored the
-    # new grade by the time this run draws the strand box.
-    grade_key, strand_key = f"{key}_grade", f"{key}_strand"
-    grade_choice = st.session_state.get(grade_key, ALL)
-    present_grades, present_strands = picker_options(
-        sections, grade_levels.values(), strands.values(), grade_choice
-    )
-    _forget_stale(grade_key, [ALL] + [g.id for g in present_grades])
-    _forget_stale(strand_key, [ALL] + [s.id for s in present_strands])
+    visible, slots = section_filters(sections, grade_levels, strands, key=key, extra_slots=1)
+    target = slots[0]
 
-    filters = []
-    if len(present_grades) > 1:
-        filters.append("grade")
-    if len(present_strands) > 1:
-        filters.append("strand")
-
-    grade_choice = strand_choice = ALL
-    if filters:
-        columns = st.columns(len(filters) + 1)
-        index = 0
-        if "grade" in filters:
-            grade_choice = columns[index].selectbox(
-                "Grade level",
-                options=[ALL] + [g.id for g in present_grades],
-                format_func=lambda v: ALL if v == ALL else grade_levels[v].name,
-                key=grade_key,
-            )
-            index += 1
-        if "strand" in filters:
-            strand_choice = columns[index].selectbox(
-                "Strand",
-                options=[ALL] + [s.id for s in present_strands],
-                format_func=lambda v: ALL if v == ALL else strands[v].name,
-                key=strand_key,
-            )
-            index += 1
-        target = columns[index]
-    else:
-        target = st
-
-    visible = [
-        s
-        for s in sections
-        if (grade_choice == ALL or s.grade_level_id == grade_choice)
-        and (strand_choice == ALL or s.strand_id == strand_choice)
-    ]
     if not visible:
         target.selectbox(label, options=["— none match —"], disabled=True, key=f"{key}_none")
         st.info("No sections match those filters.")
@@ -222,18 +241,20 @@ def text_field(label: str, *, key: str, area: bool = False, container=None, **kw
     """A text box an add form can blank again once the row is saved.
 
     `key` is "<form>.<field>"; `clear_text_fields("<form>")` empties every
-    field registered under that form. Registering here is what keeps the
-    clearing honest — only boxes built by this function are ever cleared,
-    so a tick box or a picker in the same form cannot be blanked by a key
-    that happens to share the prefix.
+    box built under that form and touches nothing else.
+
+    The real key handed to Streamlit carries a per-form generation number
+    ("add_section.name#3"). That is what makes clearing work *in a
+    browser*: see clear_text_fields.
 
     `container` takes a column (`col1`) for forms laid out side by side,
     since `col1.text_input(...)` cannot go through this function.
     """
-    st.session_state.setdefault(_TEXT_KEYS, set()).add(key)
+    form = key.split(".", 1)[0]
+    generation = st.session_state.get(_TEXT_GENERATION + form, 0)
     target = container if container is not None else st
     widget = target.text_area if area else target.text_input
-    return widget(label, key=key, **kwargs)
+    return widget(label, key=f"{key}#{generation}", **kwargs)
 
 
 def clear_text_fields(form: str) -> None:
@@ -243,18 +264,24 @@ def clear_text_fields(form: str) -> None:
     Adding rows is repetitive work: the grade level, the track, the term,
     the "Active" tick are usually the same for the next row, while the code
     and the name are exactly what must not be left sitting there to be
-    submitted twice.
+    submitted twice. (`clear_on_submit=True` would reset the lot.)
 
-    Deleting the key is what resets a box — assigning "" instead raises,
-    because Streamlit refuses to write to a widget already built this run.
-    Deleting is allowed there and takes effect on the rerun that follows;
-    tests/test_add_form_reset.py pins that behaviour, since it is a
-    Streamlit implementation detail rather than a documented promise.
+    **Deleting the widget's session_state key is not enough, and looks like
+    it is.** The server-side value does clear — an AppTest sees an empty
+    box, and so does any test that never opens a browser. But a widget
+    inside `st.form` also holds a value in the *frontend*, which the form
+    keeps across the rerun and re-submits; the box still reads "STEM - A"
+    while the server believes it is empty. That shipped once, on Sections.
+
+    So the clear works by identity instead: bumping the form's generation
+    gives every one of its text boxes a key Streamlit has never seen, and a
+    brand-new widget has nothing to restore. Nothing is deleted, so no
+    other widget can be caught by it — a tick box keeps its own key and its
+    own value.
     """
-    prefix = f"{form}."
-    for key in [k for k in st.session_state.get(_TEXT_KEYS, ()) if k.startswith(prefix)]:
-        if key in st.session_state:
-            del st.session_state[key]
+    st.session_state[_TEXT_GENERATION + form] = (
+        st.session_state.get(_TEXT_GENERATION + form, 0) + 1
+    )
 
 
 def stateful_tabs(key: str, labels: list[str]) -> str:
