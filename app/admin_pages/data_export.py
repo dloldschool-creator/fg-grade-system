@@ -13,7 +13,6 @@ from app.export_service import (
     gradebook,
     record_export,
     section_masterlist,
-    to_csv,
     to_xlsx,
 )
 from app.models.awards import AwardPolicy, AwardPolicyVersion
@@ -32,7 +31,7 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Export")
     st.caption(
-        "Download any of these as Excel or CSV. LRNs keep their leading zeros "
+        "Download any of these as an Excel file. LRNs keep their leading zeros "
         "when the file is opened in Excel."
     )
     render_flashes()
@@ -126,23 +125,17 @@ def render() -> None:
 
         st.divider()
         stem = f"{table.name.replace(' ', '')}_{section.name.replace(' ', '')}_{sy_by_id[sy_choice].name}"
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.download_button(
-                "Download Excel (.xlsx)",
-                data=to_xlsx(table),
-                file_name=f"{stem}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-            ):
-                record_export(session, export_choice, scope, current_user.id, f"{stem}.xlsx")
-                try_commit(session, "Export recorded.")
-        with col2:
-            if st.download_button(
-                "Download CSV",
-                data=to_csv(table),
-                file_name=f"{stem}.csv",
-                mime="text/csv",
-            ):
-                record_export(session, export_choice, scope, current_user.id, f"{stem}.csv")
-                try_commit(session, "Export recorded.")
+        # .xlsx only, deliberately. A CSV download used to sit beside this
+        # one, and an exported learner list is exactly the file someone
+        # re-uploads later — which is the round trip that turns a 12-digit
+        # LRN into 1.07E+11 and loses it. Offering the format is what
+        # invites that, so it isn't offered.
+        if st.download_button(
+            "Download Excel (.xlsx)",
+            data=to_xlsx(table),
+            file_name=f"{stem}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+        ):
+            record_export(session, export_choice, scope, current_user.id, f"{stem}.xlsx")
+            try_commit(session, "Export recorded.")
