@@ -15,7 +15,11 @@
   // Always the project's own interpreter. A bare `python` is the system
   // one and has none of the project's packages, which surfaces as
   // "ModuleNotFoundError: No module named 'sqlalchemy'".
-  "python.defaultInterpreterPath": ".venv\\Scripts\\python.exe",
+  // Spelled with ${workspaceFolder} rather than as a plain relative
+  // path: the newer "Python Environments" extension resolves a bare
+  // ".venv\Scripts\python.exe" against a different base and reports
+  // "could not be resolved" even though the interpreter is right there.
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
   "python.terminal.activateEnvironment": true,
 
   // --- Tests --------------------------------------------------------
@@ -44,5 +48,20 @@
   // is never what you want.
   "files.associations": {
     "*.xlsx": "binary"
-  }
+  },
+
+  // --- Git ----------------------------------------------------------
+  // master IS the deployment branch: pushing to it redeploys the live
+  // app, and the restart signs everyone out and loses grade entry that
+  // hasn't been saved. So a commit made directly onto master is almost
+  // never what was meant — VS Code asks for a branch name instead and
+  // moves the changes there. Merge to master only when the change is
+  // ready to go live.
+  "git.branchProtection": ["master"],
+  "git.branchProtectionPrompt": "alwaysCommitToNewBranch",
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  // Smart commit stages every changed file when nothing is staged.
+  // Off, so an unrelated edit can't ride along with a deploy.
+  "git.enableSmartCommit": false
 }
