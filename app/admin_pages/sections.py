@@ -15,6 +15,34 @@ from app.models.organization import SchoolYear
 from app.models.rbac import Role, User, UserRole
 
 
+# Bumped after a successful Add, which gives the adviser picker a key
+# Streamlit has never seen and so resets it. See where it is read.
+_NEW_ADVISER_GENERATION = "new_sec_adviser_generation"
+
+# "Nothing chosen yet this session", which is not the same as "— none —".
+# Changing an adviser *to* none is a real edit and has to keep the panel
+# open like any other.
+_UNSET = object()
+
+
+def _panel_should_stay_open(stored, saved) -> bool:
+    """Whether a section's panel has an unsaved adviser change in it.
+
+    `st.expander` has no memory: every rerun rebuilds it closed, and the
+    adviser picker now sits *outside* the form, so choosing someone reruns
+    the script immediately — which slammed the panel shut on the warning
+    it had just produced, before it could be read or the change saved.
+
+    So the panel is held open exactly while the picker disagrees with the
+    database. After Save the two agree again and it closes on its own,
+    which reads as "done" rather than as the same bug.
+
+    `stored` is `st.session_state.get(<adviser key>, _UNSET)`; `saved` is
+    `section.adviser_user_id`.
+    """
+    return stored is not _UNSET and stored != saved
+
+
 def _also_advises(sections, adviser_user_id, *, excluding=None) -> list:
     """The other sections this adviser already holds this school year.
 
@@ -105,9 +133,15 @@ def render() -> None:
                 if section.adviser_user_id in adviser_by_id
                 else "— none —"
             )
+            # Read before the expander is built, because the panel's open
+            # state has to be decided before anything inside it is drawn.
+            adviser_key = f"sec_adviser_{section.id}"
             with st.expander(
                 f"{gl_by_id[section.grade_level_id].code} — {section.name} "
-                f"({strand_by_id[section.strand_id].code}) — Adviser: {adviser_label}"
+                f"({strand_by_id[section.strand_id].code}) — Adviser: {adviser_label}",
+                expanded=_panel_should_stay_open(
+                    st.session_state.get(adviser_key, _UNSET), section.adviser_user_id
+                ),
             ):
                 # Track lives outside the form: st.form only reruns the
                 # script on submit, so a strand dropdown filtered by track
@@ -128,7 +162,6 @@ def render() -> None:
                 # about the chosen adviser would appear one click late —
                 # after the save it was meant to question.
                 adviser_options = [None] + [a.id for a in advisers]
-                adviser_key = f"sec_adviser_{section.id}"
                 if adviser_key not in st.session_state:
                     st.session_state[adviser_key] = (
                         section.adviser_user_id
@@ -210,12 +243,24 @@ def render() -> None:
 
         # Outside the form, as above, so the warning lands before the Add
         # rather than after it.
+        #
+        # The key carries a generation so a successful Add can blank it.
+        # Without that it kept the adviser, and the very next rerun warned
+        # that they already advise a section — naming the section just
+        # created. A warning that fires on its own result teaches people
+        # to ignore warnings. Same mechanism as _helpers.clear_text_fields
+        # and for the same reason: a key Streamlit has never issued has
+        # nothing to restore, so the box really is empty in the browser
+        # too. (clear_text_fields itself deliberately leaves pickers
+        # alone — the next section usually wants the same track, and a
+        # different adviser.)
+        generation = st.session_state.get(_NEW_ADVISER_GENERATION, 0)
         adviser_options = [None] + [a.id for a in advisers]
         adviser_choice = st.selectbox(
             "Adviser",
             options=adviser_options,
             format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
-            key="new_sec_adviser",
+            key=f"new_sec_adviser#{generation}",
         )
         _warn_if_already_advising(sections, adviser_choice, gl_by_id)
 
@@ -248,4 +293,7 @@ def render() -> None:
                     )
                     if try_commit(session, f"Added {name}."):
                         clear_text_fields("add_section")
+                        # Blank the adviser too, so the next rerun doesn't
+                        # warn about the section this just created.
+                        st.session_state[_NEW_ADVISER_GENERATION] = generation + 1
                     st.rerun()

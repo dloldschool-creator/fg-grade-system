@@ -159,3 +159,68 @@ def test_the_warning_costs_no_query():
     panel per section."""
     source = inspect.getsource(sections_page._also_advises)
     assert "query" not in source and "session" not in source
+
+
+# --- Two bugs the warning itself introduced, found in use ------------------
+
+
+def test_the_panel_stays_open_while_an_adviser_change_is_unsaved():
+    """Reported straight away: choosing an adviser on a second section
+    collapsed the panel, so the warning had to be hunted for by reopening
+    it, and the Save button went with it.
+
+    `st.expander` has no memory — every rerun rebuilds it closed — and
+    moving the picker outside the form is exactly what started causing
+    reruns mid-edit. So the panel is held open while the picker disagrees
+    with the database.
+    """
+    assert sections_page._panel_should_stay_open("teacher-2", "teacher-1") is True
+
+
+def test_an_untouched_panel_is_not_forced_open():
+    """Every section draws one of these. Holding them all open would make
+    a 33-section list unusable."""
+    assert sections_page._panel_should_stay_open(sections_page._UNSET, "teacher-1") is False
+    assert sections_page._panel_should_stay_open(sections_page._UNSET, None) is False
+
+
+def test_a_saved_change_lets_the_panel_close_again():
+    """After Save the picker and the database agree, so it closes by
+    itself — which reads as "done" rather than as the same bug."""
+    assert sections_page._panel_should_stay_open("teacher-2", "teacher-2") is False
+
+
+def test_removing_an_adviser_counts_as_a_change():
+    """Setting someone back to "— none —" is a real edit. A plain
+    truthiness check would treat it as nothing chosen and shut the panel
+    on the way to saving it."""
+    assert sections_page._panel_should_stay_open(None, "teacher-1") is True
+
+
+def test_adding_a_section_does_not_warn_about_the_section_it_just_created():
+    """The other report: add a section with an adviser, save, and the page
+    immediately warned that they already advise a section — naming the one
+    just created, on the first assignment that teacher had ever had.
+
+    The picker kept its value while `sections` was re-queried and now
+    included the new row. A warning that fires on its own result is how
+    people learn to ignore warnings, so Add resets the picker.
+    """
+    source = inspect.getsource(sections_page.render)
+    add_block = source[source.index('st.subheader("Add section")'):]
+    assert "_NEW_ADVISER_GENERATION" in add_block
+    # A generation in the key, not a deleted session_state entry: this
+    # repo has already shipped the version that clears the server's copy
+    # while the browser re-sends the old one.
+    assert 'key=f"new_sec_adviser#{generation}"' in add_block
+    assert "st.session_state[_NEW_ADVISER_GENERATION] = generation + 1" in add_block
+
+
+def test_the_reset_only_happens_when_the_section_was_really_added():
+    """Bumping the generation on a failed commit would blank the adviser
+    the user picked while leaving them to retype everything else."""
+    source = inspect.getsource(sections_page.render)
+    add_block = source[source.index('st.subheader("Add section")'):]
+    guard = add_block.index("if try_commit(session,")
+    bump = add_block.index("st.session_state[_NEW_ADVISER_GENERATION]")
+    assert guard < bump, "the reset must sit inside the try_commit success branch"

@@ -1258,3 +1258,34 @@ current number.
       warning's wording and scope, that a section isn't reported against
       itself, that the picker is outside the form (walked from the AST),
       and that the check costs no query.
+      **Two bugs the warning itself introduced**, both reported within
+      minutes of it going live, both caused by moving the adviser picker
+      outside `st.form`:
+      1. *Add a section with an adviser, save, and it warned that they
+         already advise a section* — naming the one just created, on that
+         teacher's first ever assignment. The picker kept its value across
+         the rerun while `sections` was re-queried and now contained the
+         new row. **A warning that fires on its own result is how people
+         learn to ignore warnings.** Add now resets the picker, by the
+         generation-in-the-key mechanism `_helpers.clear_text_fields` uses
+         — not by deleting a `session_state` entry, which this repo has
+         already shipped once and which clears the server's copy while the
+         browser re-sends the old one. (`clear_text_fields` itself still
+         leaves pickers alone on purpose: the next section usually wants
+         the same track and a *different* adviser, so the adviser opts in
+         explicitly.) The reset sits inside the `try_commit` success
+         branch, so a failed add doesn't blank a choice the user has to
+         retype.
+      2. *Choosing an adviser on a second section collapsed the panel*, so
+         the warning had to be hunted for by reopening it — and the Save
+         button went with it. `st.expander` has no memory: every rerun
+         rebuilds it closed, and a picker outside a form reruns on every
+         change, which is the whole point of having moved it. The panel is
+         now held open exactly while the picker disagrees with the
+         database, so it closes by itself after Save. `_UNSET` distinguishes
+         "nothing chosen yet" from "— none —", because clearing an adviser
+         is a real edit and a truthiness check would shut the panel on the
+         way to saving it.
+      Same family as the `stateful_tabs` workaround: **a Streamlit
+      container's open state does not survive a rerun**, and anything that
+      causes reruns mid-edit has to restore it.
