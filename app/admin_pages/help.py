@@ -330,6 +330,21 @@ BY_ROLE = {
                 "genuinely different, make their names say so.",
             ),
             (
+                "Adding the whole staff at once",
+                "**Bulk add from Excel**, at the bottom of Users & Roles, takes "
+                "an .xlsx of Email, Full Name and Roles — several roles in one "
+                "cell, separated by commas. Download the blank template from "
+                "that page.\n\n"
+                "The temporary passwords appear **once**, as one block you can "
+                "copy. Copy them before you leave the page: they are stored "
+                "nowhere, and an account whose password was never written down "
+                "has to be reset one at a time.\n\n"
+                "An address that already has an account is listed and left "
+                "alone — uploading the same file twice will not change anyone's "
+                "password. Use **Reset password** on the person's own panel "
+                "when you actually mean that.",
+            ),
+            (
                 "One role still has no screens",
                 "**Attendance Encoder** is in the role list because the "
                 "specification defines it, but nothing is built for it yet — "

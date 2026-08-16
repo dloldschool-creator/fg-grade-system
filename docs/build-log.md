@@ -1025,3 +1025,45 @@ current number.
       Sex needed no change — `_parse_sex` already accepted `M`/`F`/`MALE`/
       `FEMALE` in any case and returns the `Sex` enum, which persists as
       `MALE`/`FEMALE`; there are now tests pinning that.
+- [x] **Bulk-add users from .xlsx** (2026-08-16). Email / Full Name / Roles,
+      on the Users page rather than the Import page. `app/user_import.py`
+      holds the columns and the checks; `provision_users` in
+      `app/user_provisioning.py` does the work.
+      **Not an `ImportSpec`.** Every spec commits inside the page's own
+      transaction, and creating a user is half a remote call to Supabase
+      Auth that cannot be rolled back — dressing that up as atomic would
+      misreport a partial failure. Registering one would also have needed a
+      new `import_job_type` enum value, i.e. an Alembic enum migration
+      against a live database, for a run the audit log already records. The
+      header-matching (`ColumnSpec`, `suggest_mapping`, `missing_required`,
+      `read_table`) is reused; only the transaction shape differs.
+      **An address that already has an account is skipped, not reset.**
+      `provision_user`'s existing behaviour for a known email is to issue a
+      fresh temporary password, which is right for one deliberate click on
+      one person. Applied to a re-uploaded file it would invalidate the
+      password of every teacher listed, mid-term, for no reason any of them
+      could see. Skipping is reported on screen, and the per-user **Reset
+      password** button remains the way to mean it.
+      **One `admin.list_users()` for the file, not one per row.** That call
+      returns every account in the school; looping over `provision_user`
+      would have made a 40-teacher file 40 full listings plus a session and
+      a role lookup each. The remote half runs first and to completion
+      (each failure recorded, the rest continuing), then the whole database
+      half — user rows, role grants, audit entries — is a single
+      transaction with one flush. `tests/test_user_import.py` fails if
+      `list_users` ever appears inside a loop there.
+      **Validation is pure and takes no session.** The page already loads
+      the roles and the user list to draw itself and hands both in, so a
+      file is checked with zero extra round trips — which matters because
+      Streamlit re-runs the page on every click with the upload still in
+      hand.
+      Passwords are shown once as a copyable block, never a download: a
+      spreadsheet of live passwords sitting in Downloads is the thing the
+      one-at-a-time flow was already avoiding. The blank template ships
+      with **headers only** — a template carrying a worked example gets
+      uploaded with the example still in it, and the school acquires an
+      account for a person who does not exist.
+      Tested through Streamlit's own runtime as well as by unit: `AppTest`
+      drives the upload, the preview and the confirm button with the
+      uploader and the provisioner stubbed, so a page that raises on the
+      rerun after the click cannot pass.
