@@ -3,6 +3,8 @@ import streamlit as st
 from app.admin_pages._helpers import (
     clear_text_fields,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     read_uploaded_csv,
     render_flashes,
     stateful_tabs,
@@ -82,7 +84,9 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
     cat_by_code = {c.code: c for c in categories}
     track_by_code = {t.code: t for t in tracks}
 
-    with st.expander("Bulk-add from CSV"):
+    # Same as Learners: everything after the upload renders in here.
+    _panel = "subject_bulk_add"
+    with st.expander("Bulk-add from CSV", expanded=panel_is_open(_panel)):
         st.caption(
             f"Your file needs a header row with these columns: `{SUBJECT_CSV_COLUMNS}`. "
             "Leave the **track_restriction_code** column empty if the subject is "
@@ -91,7 +95,10 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
             f"Category codes: {', '.join(cat_by_code) or 'none yet'}. "
             f"Track codes: {', '.join(track_by_code) or 'none yet'}."
         )
-        uploaded = st.file_uploader("CSV file", type="csv", key="subject_csv")
+        uploaded = st.file_uploader(
+            "CSV file", type="csv", key="subject_csv",
+            on_change=keep_panel_open, args=(_panel,),
+        )
         if uploaded is None:
             return
 

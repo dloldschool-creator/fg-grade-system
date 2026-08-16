@@ -284,6 +284,47 @@ def clear_text_fields(form: str) -> None:
     )
 
 
+_OPEN_PANEL = "_open_panel"
+
+
+def panel_is_open(panel_id) -> bool:
+    """Whether this expander is the one being worked in.
+
+    **`st.expander` has no memory.** Every rerun rebuilds it closed, and
+    any widget *outside* an `st.form` reruns the script the moment it
+    changes — so a picker, a tick box or a file uploader sitting directly
+    in an expander slams its own panel shut, taking with it whatever it
+    just produced and the Save button underneath.
+
+    That is not a hypothetical: it shipped on Sections, where choosing an
+    adviser closed the panel on the warning it had just raised, and an
+    audit then found the same shape on five more pages — including
+    Learners and Subject Catalog, where the whole import flow renders
+    *inside* the expander, so uploading a file looked like nothing
+    happening at all.
+
+    Pair with `keep_panel_open` as each widget's `on_change`. Only one
+    panel is held open at a time, which is what you want: it is the one
+    you are typing in.
+
+    Same family as `stateful_tabs` — a Streamlit container's open state
+    does not survive a rerun, so anything that causes reruns mid-edit has
+    to put it back.
+    """
+    return st.session_state.get(_OPEN_PANEL) == panel_id
+
+
+def keep_panel_open(panel_id) -> None:
+    """`on_change` callback: marks `panel_id` as the panel being used, so
+    `panel_is_open` re-opens it after the rerun this change causes.
+
+    Runs before the script re-executes, which is why it can be a plain
+    assignment — by the time the expander is rebuilt, the answer is
+    already stored.
+    """
+    st.session_state[_OPEN_PANEL] = panel_id
+
+
 def stateful_tabs(key: str, labels: list[str]) -> str:
     """st.tabs() always resets to the first tab after st.rerun() (a known
     Streamlit limitation, not fixed upstream) — every save/delete action

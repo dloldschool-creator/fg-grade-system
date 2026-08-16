@@ -3,6 +3,8 @@ import streamlit as st
 from app.admin_pages._helpers import (
     clear_text_fields,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     render_flashes,
     text_field,
     try_commit,
@@ -125,7 +127,8 @@ def render() -> None:
             with st.expander(
                 f"{profile.name} — {gl_by_id[profile.grade_level_id].code} / "
                 f"{strand_by_id[profile.strand_id].code}"
-                + ("" if profile.is_active else "  (inactive)")
+                + ("" if profile.is_active else "  (inactive)"),
+                expanded=panel_is_open(profile.id),
             ):
                 track_key = f"profile_track_{profile.id}"
                 if track_key not in st.session_state:
@@ -133,6 +136,7 @@ def render() -> None:
                 track_choice = st.selectbox(
                     "Track", options=[t.id for t in tracks], format_func=lambda v: track_by_id[v].name,
                     key=track_key,
+                    on_change=keep_panel_open, args=(profile.id,),
                 )
                 strand_options = [s.id for s in strands if s.track_id == track_choice]
 

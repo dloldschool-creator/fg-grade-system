@@ -1289,3 +1289,42 @@ current number.
       Same family as the `stateful_tabs` workaround: **a Streamlit
       container's open state does not survive a rerun**, and anything that
       causes reruns mid-edit has to restore it.
+- [x] **Audit: six expanders collapsed on their own widgets** (2026-08-16,
+      after the two Sections reports — "check if there are other
+      collapsing problems").
+      **`st.expander` has no memory.** Every rerun rebuilds it closed, and
+      any widget *outside* an `st.form` reruns the script the moment it
+      changes. So a picker, tick box or file uploader sitting directly in
+      an expander slams its own panel shut, taking with it whatever it
+      just produced and the button underneath. An AST sweep for
+      "rerunning widget inside an expander but outside a form" found six:
+      - **Sections** — the fix shipped hours earlier only covered the
+        Adviser picker. **Track sits outside the form too** (it always
+        has, so the strand list can cascade) and collapsed the panel just
+        the same. The first fix was a dirty-check on one widget; it is now
+        the shared mechanism, on both.
+      - **Users** — changing **Roles** collapsed the panel and took the
+        *Save roles* button with it, and ticking **I'm sure** collapsed it
+        before *Delete* could be reached. Same page worked in all session
+        and never noticed.
+      - **Learners** and **Subject Catalog** — the worst two: the entire
+        import flow (preview, errors, confirm) renders *inside* the
+        expander, so uploading a file collapsed all of it and read as
+        nothing having happened.
+      - **Awards** — four certificate fields, each rerunning on blur, so
+        filling the form closed the panel between fields.
+      - **Subject Profiles** — the Track picker, as on Sections.
+      One mechanism replaces the per-widget fix: `_helpers.panel_is_open`
+      / `keep_panel_open`, paired as `expanded=panel_is_open(id)` on the
+      expander and `on_change=keep_panel_open, args=(id,)` on each live
+      widget. Only one panel is held open at a time — the one being typed
+      in. Same family as `stateful_tabs`, and for the same reason: a
+      Streamlit container's open state does not survive a rerun.
+      `tests/test_expander_state.py` is the audit itself, kept: it walks
+      every page's AST and fails on any expander holding a live widget
+      without the pair. **Both halves were checked non-vacuous** — replayed
+      against the pre-fix files from git it flags all six, and the runtime
+      half (AppTest, driving the real Streamlit) shows a panel collapsing
+      on its own change when the callback is removed and staying open when
+      it is there. Structural tests alone would not have shown that; this
+      session had already been bitten by exactly that gap.

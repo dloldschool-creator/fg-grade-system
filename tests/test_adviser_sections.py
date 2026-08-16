@@ -164,37 +164,43 @@ def test_the_warning_costs_no_query():
 # --- Two bugs the warning itself introduced, found in use ------------------
 
 
-def test_the_panel_stays_open_while_an_adviser_change_is_unsaved():
+def test_both_pickers_outside_the_form_keep_the_panel_open():
     """Reported straight away: choosing an adviser on a second section
     collapsed the panel, so the warning had to be hunted for by reopening
     it, and the Save button went with it.
 
-    `st.expander` has no memory — every rerun rebuilds it closed — and
-    moving the picker outside the form is exactly what started causing
-    reruns mid-edit. So the panel is held open while the picker disagrees
-    with the database.
+    The first fix only covered the Adviser picker. **Track sits outside
+    the form too** — it always has, so the strand list can cascade — and
+    changing it collapsed the panel just the same. Both now mark the panel
+    as the one in use.
+
+    The mechanism itself lives in `_helpers` and is checked across every
+    page by `tests/test_expander_state.py`; this pins that Sections uses
+    it on both.
     """
-    assert sections_page._panel_should_stay_open("teacher-2", "teacher-1") is True
+    tree = ast.parse(inspect.getsource(sections_page.render).strip())
+    handled = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "selectbox"
+            and any(
+                k.arg == "on_change"
+                and isinstance(k.value, ast.Name)
+                and k.value.id == "keep_panel_open"
+                for k in node.keywords
+            )
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            handled.add(node.args[0].value)
+    assert {"Track", "Adviser"} <= handled, f"only {handled} keep the panel open"
 
 
-def test_an_untouched_panel_is_not_forced_open():
-    """Every section draws one of these. Holding them all open would make
-    a 33-section list unusable."""
-    assert sections_page._panel_should_stay_open(sections_page._UNSET, "teacher-1") is False
-    assert sections_page._panel_should_stay_open(sections_page._UNSET, None) is False
-
-
-def test_a_saved_change_lets_the_panel_close_again():
-    """After Save the picker and the database agree, so it closes by
-    itself — which reads as "done" rather than as the same bug."""
-    assert sections_page._panel_should_stay_open("teacher-2", "teacher-2") is False
-
-
-def test_removing_an_adviser_counts_as_a_change():
-    """Setting someone back to "— none —" is a real edit. A plain
-    truthiness check would treat it as nothing chosen and shut the panel
-    on the way to saving it."""
-    assert sections_page._panel_should_stay_open(None, "teacher-1") is True
+def test_the_section_panel_declares_its_open_state():
+    source = inspect.getsource(sections_page.render)
+    assert "expanded=panel_is_open(section.id)" in source
 
 
 def test_adding_a_section_does_not_warn_about_the_section_it_just_created():

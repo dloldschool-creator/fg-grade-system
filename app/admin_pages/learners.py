@@ -7,6 +7,8 @@ from app.admin_pages._helpers import (
     flash,
     flush_or_rollback,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     render_flashes,
     text_field,
     try_commit,
@@ -185,7 +187,11 @@ def _bulk_upload_section(session, current_user) -> None:
     spec = LEARNER_IMPORT
     may_enrol = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
 
-    with st.expander("Bulk-add from a spreadsheet"):
+    # The whole flow below — preview, errors, confirm — renders inside
+    # this panel, so a collapse on upload hid all of it and read as
+    # nothing having happened.
+    _panel = "learner_bulk_add"
+    with st.expander("Bulk-add from a spreadsheet", expanded=panel_is_open(_panel)):
         st.info(
             "**Adding a whole year group? Use Import from Excel instead.** "
             "It walks through the same checks with a bigger preview and keeps "
@@ -216,6 +222,7 @@ def _bulk_upload_section(session, current_user) -> None:
             # still uploads, but it is never offered — see the caption above.
             type=["csv", "xlsx"],
             key="learner_csv",
+            on_change=keep_panel_open, args=(_panel,),
         )
         if uploaded is None:
             return
@@ -247,6 +254,7 @@ def _bulk_upload_section(session, current_user) -> None:
                     options=[sy.id for sy in years],
                     format_func=lambda v: by_id[v].name,
                     key="bulk_learner_sy",
+                    on_change=keep_panel_open, args=(_panel,),
                 )
             else:
                 st.warning(

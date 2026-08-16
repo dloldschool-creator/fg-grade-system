@@ -6,6 +6,8 @@ from app.admin_pages._helpers import (
     clear_text_fields,
     flash,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     render_flashes,
     text_field,
 )
@@ -310,14 +312,16 @@ def render() -> None:
             with st.expander(
                 f"{user.full_name} — {user.email}  "
                 f"[{', '.join(sorted(current_codes)) or 'no role'}]"
-                f"{'  🔑' if user.password_changed_at is None else ''}"
+                f"{'  🔑' if user.password_changed_at is None else ''}",
+                expanded=panel_is_open(user.id),
             ):
                 # Both columns are on the row already loaded above, so
                 # this costs nothing extra — no query per panel.
                 st.caption(_account_state(user))
                 col1, col2 = st.columns(2)
                 is_active = col1.checkbox(
-                    "Active", value=user.is_active, key=f"user_active_{user.id}"
+                    "Active", value=user.is_active, key=f"user_active_{user.id}",
+                    on_change=keep_panel_open, args=(user.id,),
                 )
                 if is_active != user.is_active:
                     audit_service.record(
@@ -339,6 +343,9 @@ def render() -> None:
                     default=[g.role_id for g in grants],
                     format_func=lambda v: role_by_id[v].code,
                     key=f"user_roles_{user.id}",
+                    # Without this, changing the roles collapsed the panel
+                    # and took the Save roles button with it.
+                    on_change=keep_panel_open, args=(user.id,),
                 )
                 if st.button("Save roles", key=f"save_roles_{user.id}"):
                     existing_role_ids = {g.role_id for g in grants}
@@ -391,6 +398,9 @@ def render() -> None:
                     confirmed = st.checkbox(
                         "I'm sure", key=f"confirm_delete_{user.id}",
                         help="Deleting cannot be undone.",
+                        # Ticking this enables Delete — and used to close
+                        # the panel before it could be reached.
+                        on_change=keep_panel_open, args=(user.id,),
                     )
                     if st.button(
                         "Delete user", key=f"delete_{user.id}", disabled=not confirmed,

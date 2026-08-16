@@ -2,7 +2,14 @@ from datetime import date
 
 import streamlit as st
 
-from app.admin_pages._helpers import flash, get_session, render_flashes, section_picker
+from app.admin_pages._helpers import (
+    flash,
+    get_session,
+    keep_panel_open,
+    panel_is_open,
+    render_flashes,
+    section_picker,
+)
 from app.auth import require_role
 from app.award_service import clear_award_override, compute_award_eligibility, set_award_override
 from app.certificate_generator import (
@@ -164,7 +171,12 @@ def _certificate_settings(version, school, school_year):
             school_year.recognition_venue or "",
         )
 
-    with st.expander("Certificate details — signatory and date"):
+    # Four fields, and every one of them reruns the script on blur —
+    # so filling the form used to shut the panel between fields.
+    _panel = "certificate_details"
+    with st.expander(
+        "Certificate details — signatory and date", expanded=panel_is_open(_panel)
+    ):
         st.caption(
             "The signatory and date come from School Info and the school year. "
             "Change them here if these certificates need someone else to sign — a "
@@ -173,23 +185,27 @@ def _certificate_settings(version, school, school_year):
         )
         col1, col2 = st.columns(2)
         signatory = col1.text_input(
-            "Signatory name", value=school.school_head_name or "", key="cert_signatory"
+            "Signatory name", value=school.school_head_name or "", key="cert_signatory",
+            on_change=keep_panel_open, args=(_panel,),
         )
         position = col2.text_input(
             "Signatory position",
             value=school.school_head_position or "",
             key="cert_position",
+            on_change=keep_panel_open, args=(_panel,),
         )
         col1, col2 = st.columns(2)
         issued_on = col1.date_input(
             "Date issued",
             value=school_year.recognition_date or date.today(),
             key="cert_date",
+            on_change=keep_panel_open, args=(_panel,),
         )
         venue = col2.text_input(
             "Venue (optional)",
             value=school_year.recognition_venue or "",
             key="cert_venue",
+            on_change=keep_panel_open, args=(_panel,),
         )
     return signatory, position, issued_on, venue
 
