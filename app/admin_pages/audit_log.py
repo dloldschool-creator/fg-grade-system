@@ -38,7 +38,14 @@ ACTION_GROUPS = {
     "Configuration": [
         audit_service.SUBJECT_OFFERING_CHANGED,
         audit_service.CALENDAR_DAY_CHANGED,
+    ],
+    # Its own group: "who can get into this system, and who gave them the
+    # password" is a question asked on its own, not while looking through
+    # calendar edits.
+    "Accounts": [
+        audit_service.USER_CREATED,
         audit_service.USER_ROLES_CHANGED,
+        audit_service.USER_PASSWORD_RESET,
     ],
     "Awards": [audit_service.AWARD_OVERRIDDEN, audit_service.AWARD_OVERRIDE_CLEARED],
     "Data": [audit_service.DATA_IMPORTED, audit_service.BACKUP_DOWNLOADED],

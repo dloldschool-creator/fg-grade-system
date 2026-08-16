@@ -176,11 +176,14 @@ def test_validating_a_file_costs_no_queries():
 
 
 def test_the_roles_a_bulk_account_gets_are_audit_logged():
-    """Rule 8, and §50's "user permission changed" in particular — the
-    entry that explains how a batch of people came to be able to act."""
+    """Rule 8 and §50. Filed as USER_CREATED rather than the
+    USER_ROLES_CHANGED it originally used: creating an account and
+    changing what an existing one may do are different events, and an
+    admin asking "where did all these accounts come from?" should not
+    have to read them out of a role-change list."""
     source = inspect.getsource(user_provisioning.provision_users)
     assert "audit_service.record" in source
-    assert "USER_ROLES_CHANGED" in source
+    assert "USER_CREATED" in source
 
 
 # --- The page, through Streamlit's own runtime -----------------------------

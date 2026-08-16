@@ -45,6 +45,16 @@ CALENDAR_DAY_CHANGED = "CALENDAR_DAY_CHANGED"
 AWARD_OVERRIDDEN = "AWARD_OVERRIDDEN"
 AWARD_OVERRIDE_CLEARED = "AWARD_OVERRIDE_CLEARED"
 USER_ROLES_CHANGED = "USER_ROLES_CHANGED"
+# Creating an account and issuing a password are separate facts from
+# changing what someone may do, and filing them under USER_ROLES_CHANGED
+# would put a claim in the log that isn't true — a password reset alters
+# no role. Added 2026-08-16, after a Super Admin looked for the account
+# they had just created and found nothing: `provision_user` and
+# `reset_password` had never written an entry at all, which is rule 8 and
+# §50 both. Sensitive changes made outside a page's own session need the
+# recording done where the change is, not where it was requested.
+USER_CREATED = "USER_CREATED"
+USER_PASSWORD_RESET = "USER_PASSWORD_RESET"
 DATA_IMPORTED = "DATA_IMPORTED"
 BACKUP_DOWNLOADED = "BACKUP_DOWNLOADED"
 

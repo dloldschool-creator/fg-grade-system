@@ -160,3 +160,77 @@ def test_the_forced_page_offers_a_way_out():
     """Someone who cannot set a password right now must still be able to
     leave, or a mistyped account is a stuck browser."""
     assert "logout()" in inspect.getsource(auth.password_change_required)
+
+
+# --- Rule 8: every one of these is a sensitive change ----------------------
+#
+# Found 2026-08-16 the way audit gaps are always found: a Super Admin went
+# looking for the account they had just created and the log had nothing.
+# `provision_user` and `reset_password` had never written an entry — only
+# the bulk path did, because it was written after the rule was re-read.
+
+
+def test_creating_an_account_is_audit_logged():
+    source = inspect.getsource(user_provisioning.provision_user)
+    assert "audit_service.record" in source
+    assert "USER_CREATED" in source
+
+
+def test_issuing_a_password_for_someone_else_is_audit_logged():
+    """Reset password hands a working credential for an account that is
+    not yours to somebody. That is exactly what §50 exists to record."""
+    source = inspect.getsource(user_provisioning.reset_password)
+    assert "audit_service.record" in source
+    assert "USER_PASSWORD_RESET" in source
+
+
+def test_a_password_is_never_written_into_the_audit_log():
+    """The log is readable by anyone with the Audit Log page. Recording
+    *that* a password was issued is the point; recording the password
+    would hand it to every future reader.
+
+    Checked against the parsed `record(...)` call rather than the text
+    after it — every one of these functions legitimately mentions the
+    password further down, when returning it to the caller who shows it.
+    """
+    for function in (
+        user_provisioning.provision_user,
+        user_provisioning.reset_password,
+        user_provisioning.provision_users,
+    ):
+        tree = ast.parse(inspect.getsource(function).strip())
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "record"
+            ):
+                continue
+            names = {
+                n.id if isinstance(n, ast.Name) else n.attr
+                for keyword in node.keywords
+                for n in ast.walk(keyword.value)
+                if isinstance(n, (ast.Name, ast.Attribute))
+            }
+            leaked = names & {"temporary_password", "temp_password", "password"}
+            assert not leaked, f"{function.__name__} logs {leaked}"
+
+
+def test_a_reset_is_not_filed_as_a_role_change():
+    """USER_ROLES_CHANGED would put a claim in the log that isn't true —
+    a password reset alters no role, and someone auditing who gained
+    access would be reading noise."""
+    source = inspect.getsource(user_provisioning.reset_password)
+    assert "USER_ROLES_CHANGED" not in source
+
+
+def test_every_account_action_is_reachable_from_the_audit_log_page():
+    """An action the viewer cannot filter on is one nobody will find."""
+    from app.admin_pages import audit_log
+
+    for action in (
+        user_provisioning.audit_service.USER_CREATED,
+        user_provisioning.audit_service.USER_PASSWORD_RESET,
+        user_provisioning.audit_service.USER_ROLES_CHANGED,
+    ):
+        assert action in audit_log.ALL_ACTIONS, action

@@ -1186,3 +1186,30 @@ current number.
       the double-press, and separately asserts the page itself uses
       `text_field`/`clear_text_fields`/`st.rerun` — the script test alone
       would keep passing if the page drifted back to `st.text_input`.
+- [x] **Creating an account and issuing a password were not audit-logged**
+      (2026-08-16, spotted by the Super Admin who went looking for the
+      user they had just made and found nothing).
+      Rule 8 and §50 both. `provision_user` and `reset_password` had never
+      written an entry — only the bulk path did, because it was written
+      after the rule had been re-read. So an account could appear in the
+      system with nothing anywhere saying who created it, and a password
+      could be issued for somebody else's account leaving no trace.
+      **Two new actions rather than reusing `USER_ROLES_CHANGED`.** Filing
+      a password reset as a role change would put a claim in the log that
+      is not true — it alters no role — and someone auditing how a person
+      gained access would be reading noise. `USER_CREATED` and
+      `USER_PASSWORD_RESET` join it in a new **Accounts** group on the
+      Audit Log page, since "who can get into this system, and who gave
+      them the password" is a question asked on its own rather than while
+      looking through calendar edits.
+      The bulk path's entries moved from `USER_ROLES_CHANGED` to
+      `USER_CREATED` for the same reason.
+      `actor_user_id` is threaded through both functions and is optional,
+      because `scripts/bootstrap_admin.py` creates the first Super Admin
+      when there is nobody to attribute it to — that entry records the
+      account with a null actor rather than not existing at all.
+      **The password itself is never recorded.** `tests/test_password_gate.py`
+      parses each `audit_service.record(...)` call and fails if any keyword
+      references the password — checked against the parsed call rather than
+      the source text, because all three functions legitimately mention it
+      further down when returning it to the caller that displays it.

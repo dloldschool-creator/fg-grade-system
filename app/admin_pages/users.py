@@ -376,7 +376,9 @@ def render() -> None:
                     )
                     if st.button("Reset password", key=f"reset_{user.id}"):
                         try:
-                            st.session_state["_last_provisioned"] = reset_password(user.email)
+                            st.session_state["_last_provisioned"] = reset_password(
+                                user.email, actor_user_id=current_user.id
+                            )
                         except UserProvisioningError as exc:
                             flash("error", str(exc))
                         st.rerun()
@@ -437,7 +439,10 @@ def render() -> None:
                 else:
                     try:
                         result = provision_user(
-                            email, full_name, [role_by_id[rid].code for rid in role_choice]
+                            email,
+                            full_name,
+                            [role_by_id[rid].code for rid in role_choice],
+                            actor_user_id=current_user.id,
                         )
                     except UserProvisioningError as exc:
                         st.error(str(exc))

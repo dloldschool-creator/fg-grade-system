@@ -85,7 +85,7 @@ def _create_or_reset_auth_user(email: str, full_name: str) -> ProvisionedUser:
     )
 
 
-def reset_password(email: str) -> ProvisionedUser:
+def reset_password(email: str, *, actor_user_id=None) -> ProvisionedUser:
     """Issues a fresh temporary password for an account that already exists.
 
     Needed because the password is shown exactly once. If the admin loses
@@ -116,6 +116,18 @@ def reset_password(email: str) -> ProvisionedUser:
         row = session.query(User).filter_by(email=email).one_or_none()
         if row is not None:
             row.password_changed_at = None
+            # Handing someone a password for an account that is not theirs
+            # is a sensitive change (rule 8) and was not being recorded.
+            # The password itself is never written here — only that one was
+            # issued, by whom, and for whom.
+            audit_service.record(
+                session,
+                action=audit_service.USER_PASSWORD_RESET,
+                object_type="users",
+                object_id=row.id,
+                user_id=actor_user_id,
+                new={"user": row.email, "must_change_password": True},
+            )
             session.commit()
     finally:
         session.close()
@@ -173,14 +185,22 @@ def delete_user(email: str) -> None:
         admin.delete_user(existing.id)
 
 
-def provision_user(email: str, full_name: str, role_codes: list[str]) -> ProvisionedUser:
+def provision_user(
+    email: str, full_name: str, role_codes: list[str], *, actor_user_id=None
+) -> ProvisionedUser:
     """Creates (or resets the password for an existing) Supabase Auth
     account for `email`, links/creates the matching `users` row, and
     grants each role in `role_codes` via `user_roles`. Idempotent for the
     `users`/`user_roles` side — safe to call again for the same
     email/role combination; each call does generate and set a fresh
     temporary password, though, so only call it when you intend to hand
-    out a new one."""
+    out a new one.
+
+    `actor_user_id` is who is doing it, for the audit entry. It is
+    optional because scripts/bootstrap_admin.py creates the very first
+    Super Admin when there is nobody to attribute it to — that entry
+    records the account with a null actor rather than not existing.
+    """
     # Same uppercase rule as learner names, so advisers and teachers
     # print consistently on SF2/SF9 signature lines and certificates.
     full_name = normalize_name(full_name) or email
@@ -193,6 +213,7 @@ def provision_user(email: str, full_name: str, role_codes: list[str]) -> Provisi
             .filter_by(supabase_auth_user_id=provisioned.user_id)
             .one_or_none()
         )
+        created = user is None
         if user is None:
             user = User(
                 supabase_auth_user_id=provisioned.user_id,
@@ -212,8 +233,29 @@ def provision_user(email: str, full_name: str, role_codes: list[str]) -> Provisi
                 .one_or_none()
             )
             if existing_grant is None:
-                session.add(UserRole(user_id=user.id, role_id=role.id))
+                session.add(
+                    UserRole(user_id=user.id, role_id=role.id, granted_by_user_id=actor_user_id)
+                )
 
+        # Rule 8 and §50. This path had never written an entry, so an
+        # account could appear in the system with nothing anywhere saying
+        # who made it — noticed by a Super Admin looking for the user they
+        # had just created. `created` distinguishes the two things this
+        # function does: a new account, or a fresh password for one that
+        # already existed (which is what a second press of Create does).
+        audit_service.record(
+            session,
+            action=audit_service.USER_CREATED if created else audit_service.USER_PASSWORD_RESET,
+            object_type="users",
+            object_id=user.id,
+            user_id=actor_user_id,
+            new={
+                "user": user.email,
+                "full_name": user.full_name,
+                "roles": sorted(role_codes),
+                "created": created,
+            },
+        )
         session.commit()
     finally:
         session.close()
@@ -340,7 +382,7 @@ def provision_users(rows: list[dict], *, actor_user_id=None) -> BulkOutcome:
             # how a batch of people came to be able to do anything.
             audit_service.record(
                 session,
-                action=audit_service.USER_ROLES_CHANGED,
+                action=audit_service.USER_CREATED,
                 object_type="users",
                 object_id=user.id,
                 user_id=actor_user_id,
