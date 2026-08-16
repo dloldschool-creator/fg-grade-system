@@ -13,7 +13,7 @@ import openpyxl
 import pytest
 
 from app.database import SessionLocal
-from app.export_service import ExportTable, to_csv, to_xlsx
+from app.export_service import ExportTable, to_xlsx
 from app.import_pipeline import (
     apply_mapping,
     missing_required,
@@ -463,13 +463,11 @@ def test_xlsx_export_is_a_real_workbook_with_a_header_row():
     assert worksheet.freeze_panes == "A2"
 
 
-def test_csv_export_quotes_every_field_so_lrn_survives():
-    text = to_csv(_table()).decode("utf-8-sig")
-    assert '"012345678901"' in text
-    lines = text.strip().splitlines()
-    assert lines[0] == '"LRN","Name","Grade"'
-
-
-def test_csv_export_writes_a_missing_grade_as_blank_not_zero():
-    text = to_csv(_table()).decode("utf-8-sig")
-    assert text.strip().splitlines()[2].endswith('""')
+def test_xlsx_export_writes_a_missing_grade_as_blank_not_zero():
+    """Rule 2 at the export boundary: the two CSV tests that used to cover
+    this went with to_csv(), and .xlsx is now the only format."""
+    worksheet = openpyxl.load_workbook(io.BytesIO(to_xlsx(_table()))).active
+    grade_column = [c.value for c in worksheet["C"]]
+    assert grade_column[0] == "Grade"
+    assert None in grade_column[1:]
+    assert 0 not in grade_column[1:]

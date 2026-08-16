@@ -12,7 +12,6 @@ row dicts — so adding one is a matter of writing the query, not the
 plumbing.
 """
 
-import csv
 import io
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -288,15 +287,11 @@ def to_xlsx(table: ExportTable) -> bytes:
     return buffer.getvalue()
 
 
-def to_csv(table: ExportTable) -> bytes:
-    buffer = io.StringIO()
-    # QUOTE_NONNUMERIC would coerce; quoting all keeps an LRN a quoted
-    # string, which is the strongest hint a CSV can give a spreadsheet.
-    writer = csv.writer(buffer, quoting=csv.QUOTE_ALL, lineterminator="\n")
-    writer.writerow(table.columns)
-    for row in table.rows:
-        writer.writerow(["" if row.get(c) is None else row.get(c) for c in table.columns])
-    return buffer.getvalue().encode("utf-8-sig")
+# There was a to_csv() here. It quoted every field, which is the strongest
+# hint a CSV can give a spreadsheet that a 12-digit LRN is text — and it
+# still wasn't enough, because Excel re-reads the column as a number the
+# moment the file is saved again. .xlsx is the only export format now, so
+# the encoder went with the button that offered it.
 
 
 def record_export(session, export_type: str, scope: dict, user_id, filename: str) -> ExportJob:

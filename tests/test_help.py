@@ -35,19 +35,8 @@ def test_the_guide_warns_about_the_role_with_no_screens():
 
 
 def test_no_section_is_empty():
-    assert help_page.UNIVERSAL and help_page.NOTES
+    assert help_page.UNIVERSAL
     for code, (heading, items) in help_page.BY_ROLE.items():
         assert heading and items, code
         for title, body in items:
             assert title.strip() and body.strip(), code
-
-
-def test_the_notes_heading_agrees_with_how_many_there_are():
-    """Trivial, but the heading is written out in full rather than
-    pluralised at runtime, so it silently goes wrong the moment a note is
-    added or removed."""
-    import inspect
-
-    source = inspect.getsource(help_page.render)
-    expected = "Question that comes up" if len(help_page.NOTES) == 1 else "Questions that come up"
-    assert expected in source

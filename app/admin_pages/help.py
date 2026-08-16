@@ -75,7 +75,7 @@ BY_ROLE = {
                 "press Submit a second time.",
             ),
             (
-                "A deadline warning doesn't stop you",
+                "A deadline warning doesn't prevent you from encoding",
                 "If the Gradebook says you're past the submission deadline, you "
                 "can still save and submit — it's telling you, not blocking you. "
                 "What *does* stop you is encoding being closed, which is a "
@@ -127,6 +127,12 @@ BY_ROLE = {
                 "a teacher saves, but if something looks stale after an "
                 "unusual change, press **Recompute**. It only re-reads what is "
                 "already encoded; it never invents a grade.",
+            ),
+            (
+                "Why can't I finalize a learner's grades?",
+                "Their annual record isn't complete — at least one applicable "
+                "subject has no grade. Encode the missing grades, press "
+                "Recompute on Grade Summary, and the button becomes available.",
             ),
             (
                 "Printing a whole class",
@@ -217,11 +223,9 @@ BY_ROLE = {
         "School Head — Read-only view",
         [
             (
-                "You can see everything and change nothing",
-                "That's deliberate. The Dashboard, Grade Summary and the "
-                "report pages are open to you school-wide; the buttons that "
-                "encode, recompute, finalize or reopen are not drawn at all "
-                "rather than shown and refused.",
+                "You can see everything",
+                "The Dashboard, Grade Summary and the report pages are open to "
+                "you school-wide.",
             ),
             (
                 "Start at the Dashboard",
@@ -343,15 +347,11 @@ BY_ROLE = {
     ),
 }
 
-# Asked often enough to be worth answering once, in writing.
-NOTES = [
-    (
-        "Why can't I finalize a learner's grades?",
-        "Their annual record isn't complete — at least one applicable subject "
-        "has no grade. Encode the missing grades, press Recompute on Grade "
-        "Summary, and the button becomes available.",
-    ),
-]
+# There was a NOTES list here, rendered under its own heading at the foot
+# of the page. It held one question — why a learner's grades won't
+# finalize — which is an adviser's question, so it lives in the adviser's
+# own section now. A separate heading for one item made the reader look in
+# two places for the same kind of answer.
 
 
 def _render_items(items) -> None:
@@ -365,8 +365,8 @@ def render() -> None:
     current_user = get_current_user()
     st.title("Quick Guide")
     st.caption(
-        "Think of this as a quick cheat sheet for the parts of the pages that "
-        "aren't super obvious. Everything else is pretty self-explanatory. Let "
+        "Think of this as a quick guide sheet for the parts of the pages that "
+        "aren't obvious. Everything else is pretty self-explanatory. Let "
         "the super admin know if you get stuck on anything! -DL"
     )
     render_flashes()
@@ -394,9 +394,3 @@ def render() -> None:
             heading, items = BY_ROLE[code]
             with st.expander(heading):
                 _render_items(items)
-
-    st.divider()
-    st.subheader("Question that comes up")
-    for question, answer in NOTES:
-        with st.expander(question):
-            st.markdown(answer)

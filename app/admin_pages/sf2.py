@@ -133,8 +133,8 @@ def render() -> None:
         st.subheader("Preview")
         st.caption(
             "Blank means present — that is the form's own convention. "
-            "**X** absent, **T-L** late, **T-C** cutting, **·** before the learner "
-            "joined or after they left."
+            "**X** absent, **T-L** late, **T-C** cutting, **·** (dot) before the "
+            "learner joined or after they left."
         )
         st.dataframe(_preview_frame(session, roster, class_days), hide_index=True, use_container_width=True)
 

@@ -321,7 +321,7 @@ def render() -> None:
         st.caption(
             "Marks everyone **Present** on every class day that has no entry yet, "
             "so you only need to change the learners who were absent or late.\n\n"
-            "Press it again whenever a new learner joins the section, or the "
+            "Refresh it again whenever a new learner joins the section, or the "
             "school calendar changes."
         )
 

@@ -100,15 +100,14 @@ def _bulk_enroll_tab(session, adviser_user_id):
     st.caption(
         "Puts several learners into one section at once. Use it when the "
         "learners are already in the system — for example after an Excel "
-        "upload on the Learner Masterlist, or when a group moves into your section "
-        "partway through the year."
+        "upload on the Learner Masterlist."
     )
     st.markdown(
         "1. Pick the school year and the section to enroll into.\n"
         "2. Tick every learner who belongs in that section. You can type a "
         "name in the box to find someone quickly.\n"
         "3. Press **Enroll selected**.\n\n"
-        "Only learners **not yet enrolled anywhere** for that school year are "
+        "Only learners **not yet enrolled** for that school year are "
         "listed, so nobody can be enrolled twice. To move a learner who is "
         "already in another section, use the Section Roster tab and log a "
         "movement instead."
