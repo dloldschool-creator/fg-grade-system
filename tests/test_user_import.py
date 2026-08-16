@@ -261,3 +261,111 @@ def test_confirming_provisions_only_the_new_rows_and_shows_the_passwords():
     # fails to print it the account is stranded until someone resets it.
     assert any("s3cret-temp-pw" in c.value for c in app.code)
     assert any("left untouched" in i.value for i in app.info)
+
+
+# --- The double-submit that invalidated a password already written down ----
+
+# Diagnosed 2026-08-16 from a live account: auth.users created at 04:22:44
+# and updated at 04:23:24, with the app row untouched — so `provision_user`
+# ran a second time rather than `reset_password`. The admin had copied the
+# first password; the second one silently replaced it, and sign-in failed
+# with "Invalid login credentials" against an account that was in every
+# other respect healthy.
+#
+# The form made it the natural thing to do: the password renders at the
+# TOP of the page while the form sits at the bottom, so pressing Create
+# changed nothing visible from where the button is — and st.form keeps its
+# values in the frontend, so the email was still sitting there.
+ADD_USER_SCRIPT = """
+import uuid
+from types import SimpleNamespace
+
+import streamlit as st
+
+from app.admin_pages import users as page
+from app.admin_pages._helpers import clear_text_fields, flash, render_flashes, text_field
+from app.user_provisioning import ProvisionedUser
+
+calls = st.session_state.setdefault("calls", [])
+roles = [SimpleNamespace(id=uuid.uuid4(), code="ADVISER")]
+role_by_id = {r.id: r for r in roles}
+
+render_flashes()
+
+with st.form("add_user"):
+    email = text_field("Email", key="add_user.email")
+    full_name = text_field("Full name", key="add_user.full_name")
+    role_choice = st.multiselect("Roles", options=[r.id for r in roles],
+                                 format_func=lambda v: role_by_id[v].code)
+    if st.form_submit_button("Create"):
+        if not email or not full_name:
+            st.error("Email and full name are required.")
+        else:
+            calls.append(email)
+            st.session_state["_last_provisioned"] = ProvisionedUser(
+                "id-1", email, "pw-%d" % len(calls), False)
+            flash("success", "Created %s" % email)
+            clear_text_fields("add_user")
+            st.rerun()
+"""
+
+
+def _add_user_page():
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_string(ADD_USER_SCRIPT)
+    app.run()
+    return app
+
+
+def test_the_add_form_empties_itself_so_create_cannot_run_twice():
+    """The regression that cost a live password.
+
+    Pressing Create a second time re-provisions the same email, and
+    `provision_user` resets an address it already knows — so the password
+    the admin had just copied stopped working. Clearing the boxes turns
+    the second press into a validation error instead.
+    """
+    app = _add_user_page()
+    app.text_input[0].set_value("test@test.com").run()
+    app.text_input[1].set_value("TEST ONLY").run()
+    app.button[0].click().run()
+
+    assert app.session_state["calls"] == ["test@test.com"]
+    # The real fix: a *new* widget key, so nothing is left to re-submit.
+    # Deleting the session_state key instead passes this and still ships
+    # the bug — see _helpers.clear_text_fields.
+    assert app.text_input[0].value in ("", None)
+
+    app.button[0].click().run()
+    assert app.session_state["calls"] == ["test@test.com"], (
+        "Create ran twice — the second call resets the account and "
+        "invalidates the password already handed out"
+    )
+    assert any("required" in e.value for e in app.error)
+
+
+def test_the_result_is_flashed_so_something_happens_where_you_clicked():
+    """The password renders at the top of a long page; the button is at
+    the bottom. Without a toast, a successful create looks like nothing
+    happened, which is what invites the second press."""
+    app = _add_user_page()
+    app.text_input[0].set_value("test@test.com").run()
+    app.text_input[1].set_value("TEST ONLY").run()
+    app.button[0].click().run()
+    assert any("Created test@test.com" in s.value for s in app.success)
+
+
+def test_the_real_add_form_clears_and_reruns():
+    """The script above proves the *pattern*; this proves the page uses
+    it. Without both, the page can drift back to a plain `st.text_input`
+    that keeps its value and the pattern test still passes."""
+    import inspect
+
+    from app.admin_pages import users
+
+    source = inspect.getsource(users.render)
+    block = source[source.index('st.form("add_user")'):]
+    assert 'text_field("Email"' in block, "a plain text_input keeps its value across the rerun"
+    assert 'clear_text_fields("add_user")' in block
+    assert "st.rerun()" in block

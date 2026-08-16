@@ -1151,3 +1151,38 @@ current number.
       Additive migration (`e2b6c1f4a733`), so per `docs/operations.md` it
       went **before** the code — and had to: the model carrying a column
       the database lacked failed nine tests that touch a real database.
+- [x] **The Add User form could silently invalidate a password already
+      handed out** (found 2026-08-16 by a sign-in that failed on a
+      brand-new account).
+      Symptom: "Invalid login credentials" for an account that was
+      confirmed, unbanned, undeleted and held a password hash.
+      Diagnosis, all read-only: `auth.users` said created 04:22:44,
+      **updated 04:23:24** — something changed the account 40 seconds
+      after making it. `SELECT encrypted_password = crypt(<the password
+      shown>, encrypted_password)` returned **false**, so the password on
+      screen was not the account's. And `public.users.updated_at` had
+      never moved, which rules out `reset_password` (that writes to the
+      app row) and leaves a second `provision_user` — the Create form ran
+      twice.
+      **Why pressing it twice was the natural thing to do.** The temporary
+      password renders at the *top* of the page; the form sits at the
+      bottom, below every user panel. Pressing Create changed nothing
+      visible from where the button is. And `st.form` keeps its values in
+      the browser, so the email was still sitting in the box. Meanwhile
+      `provision_user` resets an address it already knows — deliberately,
+      so a lost password is recoverable — so the second press issued a new
+      password and quietly retired the one the admin had written down.
+      Same shape as the trap already recorded for other add forms: "every
+      add form sits below the list it adds to, so the top of the page is
+      scrolled off by the time the button is pressed". The Users form had
+      never been given `flash`/`render_flashes` or the field clearing.
+      Fixed with the machinery that already exists for exactly this:
+      `text_field` + `clear_text_fields("add_user")` (a **new widget key**,
+      not a deleted session_state entry — see the trap on why the wrong
+      version passes its tests), then `st.rerun()`, plus a flash so a
+      toast appears where the click happened. A second press now hits
+      "Email and full name are required" instead of re-provisioning.
+      `tests/test_user_import.py` drives the real Streamlit runtime for
+      the double-press, and separately asserts the page itself uses
+      `text_field`/`clear_text_fields`/`st.rerun` — the script test alone
+      would keep passing if the page drifted back to `st.text_input`.

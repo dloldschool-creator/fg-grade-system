@@ -2,7 +2,13 @@ import pandas as pd
 import streamlit as st
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    flash,
+    get_session,
+    render_flashes,
+    text_field,
+)
 from app.auth import require_role
 from app.display_time import format_time
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
@@ -266,6 +272,12 @@ def _bulk_add(current_user, roles, existing_emails) -> None:
             flash("error", str(exc))
         else:
             st.session_state["_last_bulk_provisioned"] = outcome
+            flash(
+                "success",
+                f"Created {len(outcome.provisioned)} account(s) — the temporary "
+                "passwords are at the top of this page. Copy them before doing "
+                "anything else.",
+            )
         st.rerun()
 
 
@@ -407,13 +419,15 @@ def render() -> None:
         st.subheader("Add user")
         st.caption(
             "Creates the account and shows a temporary password once. Give it to the "
-            "person directly — they set their own from **Change Password** after "
-            "signing in. If that email already has an account, its password is reset "
-            "instead of a second account being made."
+            "person directly — they set their own the first time they sign in. "
+            "**Pressing Create twice for the same email issues a second password and "
+            "invalidates the first**, because an email that already has an account is "
+            "reset rather than duplicated. The boxes empty themselves after a "
+            "successful create so that can't happen by accident."
         )
         with st.form("add_user"):
-            email = st.text_input("Email")
-            full_name = st.text_input("Full name")
+            email = text_field("Email", key="add_user.email")
+            full_name = text_field("Full name", key="add_user.full_name")
             role_choice = st.multiselect(
                 "Roles", options=[r.id for r in roles], format_func=lambda v: role_by_id[v].code
             )
@@ -429,6 +443,25 @@ def render() -> None:
                         st.error(str(exc))
                     else:
                         st.session_state["_last_provisioned"] = result
+                        # Toasts over wherever you are looking, which is
+                        # down here by the button and not up there by the
+                        # password. render_flashes handles that.
+                        flash(
+                            "success",
+                            f"Created {result.email} — the temporary password is at "
+                            "the top of this page. Copy it before doing anything else.",
+                        )
+                        # Both halves matter, and this form had neither.
+                        # The password renders at the *top* of a page this
+                        # form sits at the bottom of, so pressing Create
+                        # changed nothing you could see from here — and
+                        # the boxes kept the email, so pressing it again
+                        # was the natural thing to do. That reset the
+                        # account and invalidated the password already
+                        # written down. Diagnosed 2026-08-16 from an
+                        # auth.users row updated 40s after it was created.
+                        clear_text_fields("add_user")
+                        st.rerun()
 
         st.divider()
         # Given the roles and the email list the page already loaded, so a
