@@ -40,7 +40,7 @@ def _fmt(value):
 
 def _finalization_section(session, current_user, enrollment: Enrollment) -> None:
     st.subheader("Finalization")
-    # A School Head reviews finalized records (§3F) but never finalizes or
+    # A School Head reviews finalized records (§3E) but never finalizes or
     # reopens one, so the state is shown and the controls are not drawn.
     read_only = current_user.is_read_only()
     latest_record = (
@@ -233,7 +233,7 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
         st.caption("No computed grades yet — encode grades on the Gradebook page, or click Recompute below.")
 
     # Recompute writes to the derived tables, so it counts as changing
-    # official data even though it invents nothing (§3F).
+    # official data even though it invents nothing (§3E).
     if not current_user.is_read_only():
         if st.button("Recompute", key=f"recompute_{enrollment.id}"):
             recompute_enrollment_grades(session, enrollment.id)
@@ -329,7 +329,7 @@ def render() -> None:
     # Registrar/Super Admin see every section; an Adviser-only account
     # (no Registrar/Super Admin role) is scoped to sections they're the
     # actual adviser of, per §3C — not a school-wide view. A School Head
-    # reviews section summaries school-wide (§3F), so they aren't scoped
+    # reviews section summaries school-wide (§3E), so they aren't scoped
     # either — they just can't change anything.
     adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 

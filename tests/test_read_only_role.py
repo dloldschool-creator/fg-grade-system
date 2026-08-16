@@ -1,4 +1,4 @@
-"""The School Head read-only guarantee (§3F: "cannot change official data").
+"""The School Head read-only guarantee (§3E: "cannot change official data").
 
 The risk with a read-only role is that it's enforced by remembering to
 hide each control, and one missed control is a silent hole. So these

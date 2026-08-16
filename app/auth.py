@@ -22,10 +22,11 @@ SESSION_KEY = "auth_user"
 LAST_SEEN_KEY = "auth_last_seen"
 
 # Roles that may change official data. SCHOOL_HEAD is deliberately absent
-# (§3F) — see AuthUser.is_read_only. This is now every role there is:
+# (§3E) — see AuthUser.is_read_only. This is now every role there is:
 # ATTENDANCE_ENCODER was removed on 2026-08-16 (advisers encode their own
 # section's attendance), so a role that grants no editing is the read-only
-# viewer and nothing else.
+# viewer and nothing else. That removal is also why the School Head is
+# §3E and not §3F — the withdrawn role's letter was closed up.
 EDITING_ROLES = frozenset({"SUPER_ADMIN", "REGISTRAR", "ADVISER", "SUBJECT_TEACHER"})
 
 # §53's "inactivity/session timeout where appropriate". Teachers encode
@@ -62,7 +63,7 @@ class AuthUser:
     def is_read_only(self) -> bool:
         """True for a School Head with no working role alongside it.
 
-        §3F is explicit that this role "cannot change official data", so
+        §3E is explicit that this role "cannot change official data", so
         the check is deliberately *positive* about who may edit rather
         than listing what a viewer can't do: a role added later is
         read-only here until someone decides otherwise, which is the safe

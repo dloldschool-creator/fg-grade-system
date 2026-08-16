@@ -1,7 +1,10 @@
 """Remove the ATTENDANCE_ENCODER role
 
-§3E defines an Attendance Encoder, but the school's class advisers encode
-their own section's attendance and always have. The role was seeded so an
+The spec defined an Attendance Encoder, but the school's class advisers
+encode their own section's attendance and always have. (That section has
+since been withdrawn, and the School Head moved up into its letter, so
+§3E now means the read-only viewer — don't read this note as citing it.)
+The role was seeded so an
 administrator *could* grant it, and then no screens were ever built for
 it — `EDITING_ROLES` in ``app/auth.py`` never included it, and no page
 lists it in its `require_role`. Granting it on its own produced an

@@ -58,12 +58,13 @@ ROLES = [
     ("REGISTRAR", "School Administrator / Registrar"),
     ("ADVISER", "Class Adviser"),
     ("SUBJECT_TEACHER", "Subject Teacher"),
-    # No ATTENDANCE_ENCODER. The specification defines one (§3E), but the
+    # No ATTENDANCE_ENCODER. The specification used to define one, but the
     # school's advisers encode their own section's attendance, so the role
     # was never granted to anyone and no screens were ever built for it —
     # it existed only as a dead entry in every role picker. Removed
     # 2026-08-16, together with the `roles` row (see the alembic revision
-    # `d41f7a2c9e50`). Re-adding it means writing its screens first.
+    # `d41f7a2c9e50`) and its section of the spec, whose letter the School
+    # Head then took over. Re-adding it means writing its screens first.
     ("SCHOOL_HEAD", "School Head / Read-Only Viewer"),
 ]
 

@@ -820,9 +820,10 @@ current number.
       either alone landed the user on "not authorized". SCHOOL_HEAD was
       built out immediately after (below); `ATTENDANCE_ENCODER` is still
       open, and the guide says to grant ADVISER instead meanwhile.
-- [x] **School Head read-only view** (§3F: view dashboards, review section
-      summaries, review finalized records, view/print reports, **cannot
-      change official data**).
+- [x] **School Head read-only view** (§3E — numbered §3F when this was
+      written: view dashboards, review section summaries, review
+      finalized records, view/print reports, **cannot change official
+      data**).
       **`AuthUser.is_read_only()`** is the single rule, and it is
       deliberately *positive* about who may edit — `EDITING_ROLES` lists
       the four working roles, and anything else (including a brand-new
@@ -841,7 +842,7 @@ current number.
       only generate documents). **Grade Summary is the one exception**:
       it can write, so Recompute (single and section-wide) and the whole
       finalize/reopen block are gated on `is_read_only()`.
-      Scoping note: a School Head is **not** adviser-scoped — §3F says
+      Scoping note: a School Head is **not** adviser-scoped — §3E says
       review *section summaries*, plural — so the four report pages and
       Grade Summary all treat SCHOOL_HEAD like REGISTRAR for section
       visibility while still refusing every write.
@@ -1096,8 +1097,17 @@ current number.
       **`docs/master-spec.md` §3E withdrawn too**, on a second explicit
       instruction — the spec is the source of truth and edits to it are
       asked for, not assumed, so it went in its own commit after the code.
-      The letter is kept as a tombstone rather than closed up: `§3F` (the
-      School Head) is cited by name in `app/admin_pages/dashboard.py`,
-      `app/admin_pages/grade_summary.py` and `app/auth.py`, and
-      renumbering F to E would silently repoint all of them at a section
-      that no longer says what they claim it says.
+      It was first left as a tombstone (`## E. *(withdrawn)*`) to avoid
+      moving the School Head, then renumbered on a third instruction: **the
+      School Head is now §3E, not §3F.** Ten citations moved with it —
+      `dashboard.py`, `grade_summary.py` (three), `auth.py` (two),
+      `test_dashboard.py`, `test_read_only_role.py`, and two historical
+      entries in this file, which now name both numbers so an old quote
+      still resolves. `docs/schema.md` says outright that anything citing
+      §3F predates the change.
+      **A renumbered spec section is the failure mode to watch for here**:
+      every one of those references still *resolved* after the letters
+      moved, they just resolved to a section about a different role. That
+      is worse than a dangling link, which at least announces itself —
+      hence changing them in one commit with the spec rather than as they
+      are noticed.

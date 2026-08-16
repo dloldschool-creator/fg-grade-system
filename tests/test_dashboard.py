@@ -1,4 +1,4 @@
-"""The School Dashboard (§3F "view dashboards", "review section summaries")."""
+"""The School Dashboard (§3E "view dashboards", "review section summaries")."""
 
 import pytest
 

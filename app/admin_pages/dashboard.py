@@ -1,4 +1,4 @@
-"""School-wide dashboard (§3F "view dashboards", "review section summaries").
+"""School-wide dashboard (§3E "view dashboards", "review section summaries").
 
 Read-only by construction: it draws no control that writes anything, so a
 School Head reaching it cannot change official data whatever else changes

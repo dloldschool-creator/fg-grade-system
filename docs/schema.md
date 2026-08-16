@@ -111,15 +111,16 @@ Never stores passwords — auth is delegated to Supabase Auth.
 | created_at, updated_at | TIMESTAMPTZ | |
 
 ### `roles`
-Seed rows for 5 of the 6 roles in §3: `SUPER_ADMIN`, `REGISTRAR`,
-`ADVISER`, `SUBJECT_TEACHER`, `SCHOOL_HEAD`.
+Seed rows for the 5 roles in §3: `SUPER_ADMIN`, `REGISTRAR`, `ADVISER`,
+`SUBJECT_TEACHER`, `SCHOOL_HEAD`.
 
-§3E's **`ATTENDANCE_ENCODER` is deliberately not seeded** and its row was
-deleted on 2026-08-16 (revision `d41f7a2c9e50`). The school's advisers
-encode their own section's attendance, so it was never granted and no
-screens were built for it — it only ever appeared as a dead entry in the
-role pickers. The spec still describes the role; the database no longer
-offers it.
+There were six. **`ATTENDANCE_ENCODER` was removed on 2026-08-16** — from
+the seed list, from the `roles` table (revision `d41f7a2c9e50`), and from
+the spec, whose §3E it had been. The school's advisers encode their own
+section's attendance, so it was never granted and no screens were built
+for it; it only ever appeared as a dead entry in the role pickers.
+**§3E now means the School Head**, which moved up a letter — anything
+citing §3F predates this.
 
 | Column | Type | Notes |
 |---|---|---|
