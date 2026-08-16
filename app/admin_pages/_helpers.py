@@ -303,7 +303,10 @@ _CONSTRAINT_MESSAGES = {
     "uq_enrollments_learner_id": "This learner already has an enrollment for that school year.",
     "uq_subject_profile_subjects_subject_profile_id": "That subject is already on this profile.",
     "uq_section_subject_offerings_section_id": "That subject is already offered in this section/term.",
-    "uq_sections_adviser_per_school_year": "That user is already the adviser of another section this school year.",
+    # No uq_sections_adviser_per_school_year entry: that index was dropped
+    # on 2026-08-16 (an adviser may hold several sections — the SNED ones
+    # are one adviser over two). The Sections page warns instead of
+    # refusing. See app/models/academic_structure.py.
     "uq_tracks_code": "That track code is already used.",
     "uq_strands_track_id": "That strand code is already used for this track.",
     "uq_schools_deped_school_id": "That DepEd School ID is already used.",

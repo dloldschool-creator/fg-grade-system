@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, Index, SmallInteger, String, UniqueConstraint, text
+from sqlalchemy import Boolean, ForeignKey, SmallInteger, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,21 +41,18 @@ class Strand(UUIDPKMixin, Base):
 
 class Section(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
     __tablename__ = "sections"
-    __table_args__ = (
-        UniqueConstraint("school_year_id", "grade_level_id", "name"),
-        # An adviser is assigned to at most one section per school year —
-        # scoped by year (not a bare global uniqueness on adviser_user_id)
-        # so the same person can legitimately advise a different section
-        # in a later year. Partial (WHERE ... IS NOT NULL) so an
-        # unassigned section (adviser_user_id NULL) never collides.
-        Index(
-            "uq_sections_adviser_per_school_year",
-            "school_year_id",
-            "adviser_user_id",
-            unique=True,
-            postgresql_where=text("adviser_user_id IS NOT NULL"),
-        ),
-    )
+    # **An adviser may hold more than one section in a school year**, and
+    # there is deliberately no constraint saying otherwise. There was one
+    # (`uq_sections_adviser_per_school_year`, dropped 2026-08-16 in
+    # revision `f8a3d05c1b27`) and it had no source: §3C says an adviser
+    # sees learners in assigned *sections*, plural, and the SNED sections
+    # are one adviser over two of them — same strand, same room, 5 and 7
+    # learners. Every adviser lookup here returns a list already.
+    #
+    # The Sections page warns when an adviser already holds another
+    # section this year, because catching the wrong name in a dropdown
+    # was the one thing the index was genuinely good for.
+    __table_args__ = (UniqueConstraint("school_year_id", "grade_level_id", "name"),)
 
     school_year_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False

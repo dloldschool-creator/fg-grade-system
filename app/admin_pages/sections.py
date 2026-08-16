@@ -15,6 +15,41 @@ from app.models.organization import SchoolYear
 from app.models.rbac import Role, User, UserRole
 
 
+def _also_advises(sections, adviser_user_id, *, excluding=None) -> list:
+    """The other sections this adviser already holds this school year.
+
+    Advising several sections is allowed — the SNED sections are one
+    adviser over two, same strand and same room. What is *usually* a
+    mistake is picking the wrong name out of a dropdown of forty, and
+    that is the only thing the old unique index was good for. So this
+    reports rather than refuses.
+
+    Takes the section list the page already loaded, so it costs nothing:
+    Streamlit re-runs this page on every keystroke in a filter box.
+    """
+    if adviser_user_id is None:
+        return []
+    return [
+        s
+        for s in sections
+        if s.adviser_user_id == adviser_user_id and s.id != excluding
+    ]
+
+
+def _warn_if_already_advising(sections, adviser_user_id, grade_levels, *, excluding=None) -> None:
+    others = _also_advises(sections, adviser_user_id, excluding=excluding)
+    if not others:
+        return
+    named = ", ".join(
+        f"{grade_levels[s.grade_level_id].code} {s.name}" for s in others
+    )
+    st.warning(
+        f"Already advises {named} this school year. That's allowed — check it's "
+        "the name you meant.",
+        icon="⚠️",
+    )
+
+
 def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Sections")
@@ -88,6 +123,28 @@ def render() -> None:
                 )
                 strand_options = [s.id for s in strands if s.track_id == track_choice]
 
+                # Adviser is outside the form for the same reason Track is:
+                # a form only reruns the script on submit, so a warning
+                # about the chosen adviser would appear one click late —
+                # after the save it was meant to question.
+                adviser_options = [None] + [a.id for a in advisers]
+                adviser_key = f"sec_adviser_{section.id}"
+                if adviser_key not in st.session_state:
+                    st.session_state[adviser_key] = (
+                        section.adviser_user_id
+                        if section.adviser_user_id in adviser_options
+                        else None
+                    )
+                adviser_choice = st.selectbox(
+                    "Adviser",
+                    options=adviser_options,
+                    format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
+                    key=adviser_key,
+                )
+                _warn_if_already_advising(
+                    sections, adviser_choice, gl_by_id, excluding=section.id
+                )
+
                 with st.form(f"edit_section_{section.id}"):
                     name = st.text_input("Name", value=section.name, key=f"sec_name_{section.id}")
                     gl_choice = st.selectbox(
@@ -105,16 +162,6 @@ def render() -> None:
                         else 0,
                         format_func=lambda v: strand_by_id[v].name,
                         key=f"sec_strand_{section.id}",
-                    )
-                    adviser_options = [None] + [a.id for a in advisers]
-                    adviser_choice = st.selectbox(
-                        "Adviser",
-                        options=adviser_options,
-                        index=adviser_options.index(section.adviser_user_id)
-                        if section.adviser_user_id in adviser_options
-                        else 0,
-                        format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
-                        key=f"sec_adviser_{section.id}",
                     )
                     room = st.text_input("Room", value=section.room or "", key=f"sec_room_{section.id}")
                     capacity = st.number_input(
@@ -161,6 +208,17 @@ def render() -> None:
         )
         new_strand_options = [s.id for s in strands if s.track_id == new_track_choice]
 
+        # Outside the form, as above, so the warning lands before the Add
+        # rather than after it.
+        adviser_options = [None] + [a.id for a in advisers]
+        adviser_choice = st.selectbox(
+            "Adviser",
+            options=adviser_options,
+            format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
+            key="new_sec_adviser",
+        )
+        _warn_if_already_advising(sections, adviser_choice, gl_by_id)
+
         with st.form("add_section"):
             name = text_field("Name (e.g. STEM - A)", key="add_section.name")
             gl_choice = st.selectbox(
@@ -168,12 +226,6 @@ def render() -> None:
             )
             strand_choice = st.selectbox(
                 "Strand", options=new_strand_options, format_func=lambda v: strand_by_id[v].name
-            )
-            adviser_options = [None] + [a.id for a in advisers]
-            adviser_choice = st.selectbox(
-                "Adviser",
-                options=adviser_options,
-                format_func=lambda v: "— none —" if v is None else adviser_by_id[v].full_name,
             )
             room = text_field("Room", key="add_section.room")
             capacity = st.number_input("Capacity", min_value=0, value=0, step=1, key="new_sec_capacity")

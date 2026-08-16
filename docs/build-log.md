@@ -1213,3 +1213,48 @@ current number.
       references the password — checked against the parsed call rather than
       the source text, because all three functions legitimately mention it
       further down when returning it to the caller that displays it.
+- [x] **An adviser may hold more than one section** (2026-08-16, found
+      while encoding sections for the new year).
+      The school runs SNED sections — 4 in Grade 11, 3 in Grade 12 — and
+      one Grade 11 adviser holds two of them: same strand, same subjects,
+      same room, 5 and 7 learners. `uq_sections_adviser_per_school_year`
+      refused it.
+      **The rule had no source.** The migration that added it
+      (`14e55ba4624b`) is bare autogenerate, "please adjust!" comment
+      included, and the model comment above the index justified only its
+      *scoping* — per year, partial — never the rule itself. §3C says an
+      adviser sees learners in assigned **sections**, plural. And the
+      application was already written for it: every adviser lookup is a
+      `filter_by` returning a list, `section_picker` renders a *dropdown*
+      of an adviser's sections, `delete_user` already says "still advises
+      N section(s)", and nothing anywhere calls `.one()`. One index
+      disagreed with the spec, the code and the school.
+      Two alternatives were proposed and declined: a per-user "may advise
+      several" flag (a column, a UI, a permission to maintain, and it must
+      be set *before* the assignment — friction at exactly the wrong
+      moment), and tags on sections exempting them (a concept the system
+      lacks, plus a conditional partial index, where "tagged" comes to
+      mean "exempt from a rule" rather than describing the section). Both
+      build machinery to preserve a rule with no origin.
+      **Checked before dropping, not after:** awards are computed from
+      thresholds on the general average, never ranked within a section, so
+      splitting 12 learners into 5 and 7 changes nobody's result; and
+      `uq_teacher_assignments_active_offering` constrains one active
+      teacher *per offering*, not one offering per teacher, so the same
+      subject teacher covers both sections without a second wall. The real
+      cost is operational and was stated plainly: each section needs its
+      own Section Subject Offerings (rule 5 — seed **both**, or one
+      section's gradebook is silently empty), and SF2/attendance
+      finalization is two forms a month rather than one.
+      **A warning replaces the refusal.** Picking the wrong name from a
+      dropdown of forty is a real mistake and was the one thing the index
+      caught. The Sections page now names the other sections the chosen
+      adviser holds and says "That's allowed — check it's the name you
+      meant." The adviser picker **moved outside `st.form`** to make that
+      work: a form only reruns on submit, so the warning would otherwise
+      arrive one click late, after the save it existed to question. Track
+      already lived outside the form for the same reason.
+      `tests/test_adviser_sections.py` pins the absent constraint, the
+      warning's wording and scope, that a section isn't reported against
+      itself, that the picker is outside the form (walked from the AST),
+      and that the check costs no query.

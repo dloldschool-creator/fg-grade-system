@@ -220,11 +220,22 @@ Replaces both `programs` and `strands` from the earlier summary.
 | version | INTEGER NOT NULL DEFAULT 1 | |
 | created_at, updated_at | TIMESTAMPTZ | |
 
-`UNIQUE (school_year_id, grade_level_id, name)`. Partial unique index
-`(school_year_id, adviser_user_id) WHERE adviser_user_id IS NOT NULL` —
-an adviser is assigned to at most one section per school year (scoped by
-year, not global, so the same person can advise a different section in a
-later year); unassigned sections (`adviser_user_id` NULL) never collide.
+`UNIQUE (school_year_id, grade_level_id, name)` — so two sections in the
+same grade level need two names.
+
+**There is deliberately no uniqueness on `adviser_user_id`.** An adviser
+may hold several sections in a school year. A partial unique index
+enforcing one apiece existed until 2026-08-16 (dropped in revision
+`f8a3d05c1b27`) and had no source: §3C says an adviser sees learners in
+assigned *sections*, plural, and the school's SNED sections are one
+Grade 11 adviser over two of them — same strand, same subjects, same
+room, 5 and 7 learners. Every adviser lookup in the app is a `filter_by`
+returning a list, and `section_picker` already renders a dropdown of an
+adviser's sections; nothing calls `.one()`.
+
+The Sections page **warns** when an adviser already holds another section
+that year rather than refusing, which keeps the one thing the index was
+good for — catching the wrong name picked out of a long dropdown.
 
 ---
 
