@@ -129,10 +129,10 @@ BY_ROLE = {
                 "already encoded; it never invents a grade.",
             ),
             (
-                "Why can't I finalize a learner's grades?",
-                "Their annual record isn't complete — at least one applicable "
-                "subject has no grade. Encode the missing grades, press "
-                "Recompute on Grade Summary, and the button becomes available.",
+                "A learner's grades won't finalize until their record is complete",
+                "If Finalize is unavailable, at least one applicable subject has "
+                "no grade yet. Encode the missing grades, press **Recompute** on "
+                "Grade Summary, and the button becomes available.",
             ),
             (
                 "Printing a whole class",
