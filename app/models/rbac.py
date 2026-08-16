@@ -18,6 +18,14 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_login_at: Mapped[datetime | None]
+    # NULL means "still on the temporary password an admin issued". The
+    # gate in app/auth.py reads it **once, at login**, and carries the
+    # answer on the session — never per page render, which would put a
+    # round trip on every click in the app.
+    #
+    # An admin's Reset password sets this back to NULL, which is what
+    # makes "reset" mean "and they must choose a new one".
+    password_changed_at: Mapped[datetime | None]
 
     user_roles: Mapped[list["UserRole"]] = relationship(
         back_populates="user", foreign_keys="UserRole.user_id"

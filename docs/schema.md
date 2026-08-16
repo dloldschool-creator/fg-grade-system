@@ -107,7 +107,8 @@ Never stores passwords — auth is delegated to Supabase Auth.
 | email | TEXT NOT NULL UNIQUE | |
 | full_name | TEXT NOT NULL | |
 | is_active | BOOLEAN NOT NULL DEFAULT true | |
-| last_login_at | TIMESTAMPTZ NULL | |
+| last_login_at | TIMESTAMPTZ NULL | Stamped by `_load_or_provision_user` on each sign-in. Nothing wrote to it before 2026-08-16, so NULL on an older account means "not since then", not "never" |
+| password_changed_at | TIMESTAMPTZ NULL | NULL = still on the temporary password an admin issued, which is what arms the first-login gate. Read **once, at login**, never per render — see `AuthUser.must_change_password`. `reset_password` sets it back to NULL |
 | created_at, updated_at | TIMESTAMPTZ | |
 
 ### `roles`

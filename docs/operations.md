@@ -254,6 +254,12 @@ lost, a Super Admin resets it from Users & Roles.
 **"The page says I'm not authorized."** They have no role at all — every
 role that exists now has screens. Grant one on Users & Roles.
 
+**"It won't let me past 'Choose your own password'."** That is working as
+intended: an account stays there until its holder replaces the temporary
+password an admin issued and read. There is no way round it and no need
+for one — setting a password takes a moment. Users & Roles shows a 🔑
+against every account still in that state.
+
 **"The app is slow or erroring for everyone."** Check Supabase first —
 the free tier pauses a project after about a week of inactivity, which
 **school holidays can trigger**. Unpausing is a click in the Supabase

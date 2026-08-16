@@ -105,6 +105,21 @@ def reset_password(email: str) -> ProvisionedUser:
 
     temp_password = _generate_temporary_password()
     admin.update_user_by_id(existing.id, {"password": temp_password})
+
+    # Re-arms the first-login gate: the account is back on a password an
+    # administrator generated, read, and relayed by hand, which is the
+    # exact state `users.password_changed_at IS NULL` describes. Without
+    # this, "reset" would hand out a shared secret that never has to be
+    # replaced. Not a permission change — it alters no role.
+    session = SessionLocal()
+    try:
+        row = session.query(User).filter_by(email=email).one_or_none()
+        if row is not None:
+            row.password_changed_at = None
+            session.commit()
+    finally:
+        session.close()
+
     return ProvisionedUser(
         user_id=existing.id, email=email, temporary_password=temp_password, already_existed=True
     )

@@ -9,6 +9,7 @@ import base64
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import streamlit as st
@@ -47,6 +48,14 @@ class AuthUser:
     access_token: str
     refresh_token: str
     role_codes: set[str] = field(default_factory=set)
+    # Set once, at login, from users.password_changed_at. Deliberately a
+    # plain attribute and not a lookup: `require_role` runs at the top of
+    # every page and Streamlit re-runs the whole script on every click, so
+    # a query here would put a round trip (~85ms) on every interaction in
+    # the app — the single most expensive place a query could go.
+    # `change_password_form` clears it in place when the password is set,
+    # so the gate lifts without another sign-in.
+    must_change_password: bool = False
 
     def has_role(self, *codes: str) -> bool:
         """SUPER_ADMIN implicitly satisfies any role check — a Super Admin
@@ -83,7 +92,14 @@ def _load_or_provision_user(
 ) -> AuthUser:
     """Looks up the `users` row for this Supabase Auth account, creating
     one (with no roles) on first login. A brand-new row has no role until
-    an existing Super Admin grants one via the Users screen."""
+    an existing Super Admin grants one via the Users screen.
+
+    Also stamps `last_login_at` and reads `password_changed_at`. Both ride
+    the session this function already opens, so signing in costs one extra
+    statement and every page afterwards costs nothing — which is the whole
+    reason the must-change flag is resolved here rather than where it is
+    enforced.
+    """
     session = SessionLocal()
     try:
         user = (
@@ -97,7 +113,17 @@ def _load_or_provision_user(
             )
             session.add(user)
             session.flush()
-            session.commit()
+
+        # Read before the stamp below overwrites nothing relevant, and
+        # kept as a bool so the session object carries an answer rather
+        # than a timestamp somebody might be tempted to recompute from.
+        must_change_password = user.password_changed_at is None
+
+        # The column existed from the first migration and nothing had ever
+        # written to it, so "has this account ever been used?" was
+        # unanswerable from inside the app.
+        user.last_login_at = datetime.now(timezone.utc)
+        session.commit()
 
         role_codes = {
             role.code
@@ -116,6 +142,7 @@ def _load_or_provision_user(
             access_token=access_token,
             refresh_token=refresh_token,
             role_codes=role_codes,
+            must_change_password=must_change_password,
         )
     finally:
         session.close()
@@ -292,14 +319,45 @@ def login_form() -> None:
     st.rerun()
 
 
-def change_password_form() -> None:
+# Supabase's own default. Stated here so the form can refuse a short
+# password with a useful message instead of relaying an API error.
+MIN_PASSWORD_LENGTH = 6
+
+
+def _record_password_change(user: AuthUser) -> None:
+    """Stamps `users.password_changed_at` and lifts the gate in place.
+
+    Both halves matter. Without the column write the person is asked to
+    change their password again at the next login; without clearing the
+    flag on the live session object they stay on the forced page until
+    they sign out, having just done the thing that was asked of them.
+    """
+    session = SessionLocal()
+    try:
+        row = session.query(User).filter_by(id=user.id).one_or_none()
+        if row is not None:
+            row.password_changed_at = datetime.now(timezone.utc)
+            session.commit()
+    finally:
+        session.close()
+    user.must_change_password = False
+
+
+def change_password_form(*, forced: bool = False) -> None:
     """Renders inline (e.g. in the sidebar) for any logged-in user —
     needed for someone who just got a generated temporary password from
-    an admin (see app/user_provisioning.py) to set their own."""
+    an admin (see app/user_provisioning.py) to set their own.
+
+    `forced` is the first-login gate: same form, but open rather than
+    folded into an expander nobody has a reason to click, and it reruns
+    afterwards so the app opens up immediately.
+    """
     user = get_current_user()
     if user is None:
         return
-    with st.expander("Change password"):
+
+    container = st.container() if forced else st.expander("Change password")
+    with container:
         with st.form("change_password_form"):
             new_password = st.text_input("New password", type="password")
             confirm_password = st.text_input("Confirm new password", type="password")
@@ -308,6 +366,10 @@ def change_password_form() -> None:
                     st.error("Enter a new password.")
                 elif new_password != confirm_password:
                     st.error("Passwords don't match.")
+                elif len(new_password) < MIN_PASSWORD_LENGTH:
+                    st.error(
+                        f"Use at least {MIN_PASSWORD_LENGTH} characters."
+                    )
                 else:
                     client = get_anon_client()
                     client.auth.set_session(user.access_token, user.refresh_token)
@@ -316,7 +378,43 @@ def change_password_form() -> None:
                     except Exception as exc:
                         st.error(f"Couldn't update password: {exc}")
                     else:
+                        # Only after Supabase confirms it. Stamping first
+                        # would lift the gate on a password that was never
+                        # actually set.
+                        _record_password_change(user)
+                        if forced:
+                            st.rerun()
                         st.success("Password updated.")
+
+
+def password_change_required() -> None:
+    """The only page reachable while someone is still on the temporary
+    password an admin issued.
+
+    The temporary password was generated by an administrator, shown on
+    their screen, and relayed by hand — so until it is replaced it is a
+    shared secret, and every audit entry naming this user is only as
+    strong as that. §50 attributes each grade change and finalization to
+    a person; this is what makes the attribution mean something.
+    """
+    _, centre, _ = st.columns([1, 1.4, 1])
+    with centre:
+        st.title("Choose your own password")
+        st.info(
+            "You're signed in with the temporary password the school gave you. "
+            "Set your own before you continue — it takes a moment, and nobody "
+            "else will know it.",
+            icon="🔑",
+        )
+        change_password_form(forced=True)
+        st.caption(
+            "Someone else chose the password you just used and can still read it "
+            "where it was written down. Anything recorded under your name — a "
+            "grade, a finalized month — is signed with this account."
+        )
+        if st.button("Log out instead"):
+            logout()
+            st.rerun()
 
 
 def require_role(*codes: str) -> AuthUser:
@@ -325,6 +423,14 @@ def require_role(*codes: str) -> AuthUser:
     user = get_current_user()
     if user is None:
         st.warning("Please log in.")
+        st.stop()
+    # Second lock on the same door. streamlit_app.py already refuses to
+    # build a navigation while this is set, so nothing should reach here —
+    # but a page is one `st.Page` away from being reachable by URL, and
+    # this check is an attribute read, not a query, so it costs nothing to
+    # keep. See AuthUser.must_change_password.
+    if user.must_change_password:
+        password_change_required()
         st.stop()
     if not user.has_role(*codes):
         st.error("You don't have access to this page.")

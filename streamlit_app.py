@@ -30,7 +30,13 @@ from app.admin_pages import (
     term_cards,
     users,
 )
-from app.auth import change_password_form, get_current_user, login_form, logout
+from app.auth import (
+    change_password_form,
+    get_current_user,
+    login_form,
+    logout,
+    password_change_required,
+)
 from app.version import version_line
 
 st.set_page_config(page_title="FGNMHS Grading System", layout="wide")
@@ -175,6 +181,18 @@ current_user = get_current_user()
 
 if current_user is None:
     pg = st.navigation([st.Page(login_form, title="Login", default=True)], position="hidden")
+    pg.run()
+elif current_user.must_change_password:
+    # No sidebar and no navigation while someone is still on the
+    # temporary password an admin issued and read. Building the menu and
+    # letting each page refuse would leave the app looking usable and
+    # every entry in it a dead end; withholding the menu says what is
+    # actually being asked. `require_role` carries the same check as a
+    # backstop for a page reached directly by URL.
+    pg = st.navigation(
+        [st.Page(password_change_required, title="Set your password", default=True)],
+        position="hidden",
+    )
     pg.run()
 else:
     with st.sidebar:

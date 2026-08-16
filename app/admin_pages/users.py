@@ -4,6 +4,7 @@ import streamlit as st
 from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes
 from app.auth import require_role
+from app.display_time import format_time
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.models.rbac import Role, User, UserRole
 from app.user_import import (
@@ -51,6 +52,32 @@ def _show_temporary_password() -> None:
         del st.session_state["_last_provisioned"]
         st.rerun()
     st.divider()
+
+
+def _account_state(user) -> str:
+    """Whether this account has been used, and whether its holder still
+    has the password you gave them.
+
+    Both read straight off the `users` row the page already loaded — the
+    point of storing them there rather than asking Supabase per panel.
+
+    "Never signed in" is only true going forward: `last_login_at` was
+    never written until 2026-08-16, so an account created before then
+    shows it until its holder next signs in.
+    """
+    if user.last_login_at is None:
+        signed_in = "Never signed in"
+    else:
+        signed_in = f"Last signed in {format_time(user.last_login_at)}"
+
+    if user.password_changed_at is None:
+        password = (
+            "🔑 **still on the temporary password** — they'll be asked to choose "
+            "their own before they can use the app"
+        )
+    else:
+        password = f"Password set by them {format_time(user.password_changed_at)}"
+    return f"{signed_in} · {password}"
 
 
 def _show_bulk_result() -> None:
@@ -268,7 +295,14 @@ def render() -> None:
         for user in users:
             grants = grants_by_user.get(user.id, [])
             current_codes = {role_by_id[g.role_id].code for g in grants}
-            with st.expander(f"{user.full_name} — {user.email}  [{', '.join(sorted(current_codes)) or 'no role'}]"):
+            with st.expander(
+                f"{user.full_name} — {user.email}  "
+                f"[{', '.join(sorted(current_codes)) or 'no role'}]"
+                f"{'  🔑' if user.password_changed_at is None else ''}"
+            ):
+                # Both columns are on the row already loaded above, so
+                # this costs nothing extra — no query per panel.
+                st.caption(_account_state(user))
                 col1, col2 = st.columns(2)
                 is_active = col1.checkbox(
                     "Active", value=user.is_active, key=f"user_active_{user.id}"

@@ -1111,3 +1111,43 @@ current number.
       is worse than a dangling link, which at least announces itself —
       hence changing them in one commit with the spec rather than as they
       are noticed.
+- [x] **First-login password gate, and `last_login_at` actually written**
+      (2026-08-16). Asked for after establishing that a temporary password
+      never expires: `admin.create_user({"password": ...})` sets an
+      ordinary password, Supabase expires *links* not passwords, and
+      `change_password_form` was a voluntary sidebar expander nothing
+      gated on. So a "temporary" password was permanent unless its holder
+      chose otherwise — and since an admin generated it, read it, and
+      relayed it by hand, every §50 entry naming that user was worth only
+      as much as a shared secret.
+      **Where the check runs is the whole design.** `require_role` is
+      called at the top of every page and Streamlit re-runs the entire
+      script on every widget interaction, so a query there would put ~85ms
+      on *every click in the app* — the most expensive place in this
+      codebase to put one. The flag is resolved **once, at login**, inside
+      the session `_load_or_provision_user` already opens, and carried on
+      `AuthUser.must_change_password`; enforcement is an attribute read.
+      `tests/test_password_gate.py` walks the AST of `require_role` and
+      fails on any `.query`/`.get`/`.execute` in it.
+      `last_login_at` is stamped in the same statement. The column had
+      existed since the initial migration with nothing ever writing to it,
+      so "has this account ever been used?" was unanswerable in-app.
+      **The backfill rule is `auth.users.last_sign_in_at IS NOT NULL`.**
+      The gate reads NULL as "must change", so backfilling nobody would
+      have locked every existing account — the only Super Admin included —
+      out of a live system mid-term, and backfilling everybody would have
+      exempted the accounts it was built for. Supabase already tracks
+      whether an account has ever been used, which settles it without
+      hardcoding a name or a date: signed in ⇒ had the chance to choose
+      their own ⇒ compliant. Run against live it marked the 6 established
+      accounts compliant and gated all 39 staff accounts created that day,
+      none of which had been signed into yet.
+      Two smaller pieces: `reset_password` sets `password_changed_at` back
+      to NULL, so "reset" means "and they must choose a new one" rather
+      than handing out a fresh permanent shared secret; and the Users page
+      shows both facts per account (🔑 in the header, a caption reading
+      "never signed in / still on the temporary password"), read off the
+      row the page already loads, so no query per panel.
+      Additive migration (`e2b6c1f4a733`), so per `docs/operations.md` it
+      went **before** the code — and had to: the model carrying a column
+      the database lacked failed nine tests that touch a real database.
