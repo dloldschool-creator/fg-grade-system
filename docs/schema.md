@@ -111,8 +111,15 @@ Never stores passwords — auth is delegated to Supabase Auth.
 | created_at, updated_at | TIMESTAMPTZ | |
 
 ### `roles`
-Seed rows for the 6 roles in §3: `SUPER_ADMIN`, `REGISTRAR`, `ADVISER`,
-`SUBJECT_TEACHER`, `ATTENDANCE_ENCODER`, `SCHOOL_HEAD`.
+Seed rows for 5 of the 6 roles in §3: `SUPER_ADMIN`, `REGISTRAR`,
+`ADVISER`, `SUBJECT_TEACHER`, `SCHOOL_HEAD`.
+
+§3E's **`ATTENDANCE_ENCODER` is deliberately not seeded** and its row was
+deleted on 2026-08-16 (revision `d41f7a2c9e50`). The school's advisers
+encode their own section's attendance, so it was never granted and no
+screens were built for it — it only ever appeared as a dead entry in the
+role pickers. The spec still describes the role; the database no longer
+offers it.
 
 | Column | Type | Notes |
 |---|---|---|

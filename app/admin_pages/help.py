@@ -345,13 +345,6 @@ BY_ROLE = {
                 "when you actually mean that.",
             ),
             (
-                "One role still has no screens",
-                "**Attendance Encoder** is in the role list because the "
-                "specification defines it, but nothing is built for it yet — "
-                "granting it on its own leaves that person with no pages at "
-                "all. Give them the Adviser role for their section instead.",
-            ),
-            (
                 "The Backup download is not your only backup",
                 "It holds the school's records but **not the login accounts**, "
                 "which live in Supabase. Restore from Supabase's own backups "

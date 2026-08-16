@@ -251,8 +251,8 @@ Enrollment page.
 the browser signs you out. Sign in again. If the password is genuinely
 lost, a Super Admin resets it from Users & Roles.
 
-**"The page says I'm not authorized."** They hold a role with no screens
-(currently `ATTENDANCE_ENCODER`), or no role at all.
+**"The page says I'm not authorized."** They have no role at all — every
+role that exists now has screens. Grant one on Users & Roles.
 
 **"The app is slow or erroring for everyone."** Check Supabase first —
 the free tier pauses a project after about a week of inactivity, which

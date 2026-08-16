@@ -22,8 +22,10 @@ SESSION_KEY = "auth_user"
 LAST_SEEN_KEY = "auth_last_seen"
 
 # Roles that may change official data. SCHOOL_HEAD is deliberately absent
-# (§3F), and so is ATTENDANCE_ENCODER until its screens exist — see
-# AuthUser.is_read_only.
+# (§3F) — see AuthUser.is_read_only. This is now every role there is:
+# ATTENDANCE_ENCODER was removed on 2026-08-16 (advisers encode their own
+# section's attendance), so a role that grants no editing is the read-only
+# viewer and nothing else.
 EDITING_ROLES = frozenset({"SUPER_ADMIN", "REGISTRAR", "ADVISER", "SUBJECT_TEACHER"})
 
 # §53's "inactivity/session timeout where appropriate". Teachers encode

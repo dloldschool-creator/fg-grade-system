@@ -9,11 +9,6 @@ from app.seed import ROLES
 
 SEEDED = {code for code, _ in ROLES}
 
-# Seeded so an administrator can grant it, but no screens are built yet,
-# so the guide covers it in the Super Admin section rather than giving it
-# its own. Moving it out of here means writing its guide entry.
-WITHOUT_SCREENS = {"ATTENDANCE_ENCODER"}
-
 
 def test_every_documented_role_actually_exists():
     """A typo here would silently show a section to nobody, since the
@@ -22,16 +17,16 @@ def test_every_documented_role_actually_exists():
 
 
 def test_every_role_with_screens_is_documented():
-    assert SEEDED - set(help_page.BY_ROLE) == WITHOUT_SCREENS
+    """Every seeded role now has screens and a guide section.
 
-
-def test_the_guide_warns_about_the_role_with_no_screens():
-    """Granting it on its own leaves that person with no pages, which is a
-    confusing thing to discover by accident."""
-    _, admin_items = help_page.BY_ROLE["SUPER_ADMIN"]
-    text = " ".join(body for _, body in admin_items)
-    for code in WITHOUT_SCREENS:
-        assert code.replace("_", " ").title() in text, code
+    This used to allow one exception, ATTENDANCE_ENCODER, which was
+    seeded so it could be granted while nothing was ever built for it.
+    It was removed on 2026-08-16 — advisers encode their own section's
+    attendance — so the exception is gone and a role added without a
+    guide entry fails here. Grant-a-role-that-does-nothing was the state
+    this test was tolerating; it should not come back silently.
+    """
+    assert SEEDED == set(help_page.BY_ROLE)
 
 
 def test_no_section_is_empty():

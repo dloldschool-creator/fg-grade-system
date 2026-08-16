@@ -1067,3 +1067,32 @@ current number.
       drives the upload, the preview and the confirm button with the
       uploader and the provisioner stubbed, so a page that raises on the
       rerun after the click cannot pass.
+- [x] **ATTENDANCE_ENCODER removed** (2026-08-16, at the school's request —
+      the advisers encode their own section's attendance).
+      It was only ever a dead entry in the role pickers: seeded so it
+      *could* be granted, never in `EDITING_ROLES`, named by no page's
+      `require_role`, and given no screens. Granting it on its own
+      produced an account that could sign in and reach nothing, which the
+      quick guide carried a standing warning about. Adding the bulk-add
+      users column, where it would have appeared as a valid role code in
+      the template's example, is what prompted finally deleting it.
+      Removed from `app/seed.py`, the guide entry in
+      `app/admin_pages/help.py`, the `EDITING_ROLES` comment in
+      `app/auth.py`, and both docs. `tests/test_help.py` had an explicit
+      `WITHOUT_SCREENS` exemption for it; that is gone, so
+      `test_every_role_with_screens_is_documented` now asserts plain
+      equality and a future role added without a guide entry fails.
+      **The `roles` row needs the migration** (`d41f7a2c9e50`) — dropping
+      it from the seed list alone leaves the row in the live database and
+      therefore in every picker, since those read the table. Data only, no
+      DDL: it deletes the role's `user_roles` and `role_permissions` rows
+      first (every FK here is ON DELETE RESTRICT, so one stray row aborts
+      it) and then the role. Deleting grants is safe to do silently
+      *because* the role conferred nothing — it cannot narrow anyone's
+      access — and is expected to affect zero rows.
+      Destructive-class per `docs/operations.md`, so the order is code
+      first, then `alembic upgrade head`. The app copes with the row
+      present or absent either way, so the in-between state is harmless.
+      **`docs/master-spec.md` §3E still defines the role** and was left
+      alone — the spec is the source of truth and edits to it are asked
+      for, not assumed. The database no longer offers what §3E describes.
