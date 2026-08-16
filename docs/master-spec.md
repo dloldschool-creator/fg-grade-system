@@ -158,14 +158,22 @@ Can:
 
 After submission/finalization, grades are read-only unless the record is formally reopened.
 
-## E. Attendance Encoder
+## E. *(withdrawn)*
 
-Can:
+An Attendance Encoder was specified here — encode daily attendance and
+permitted learner movements, view attendance reports, no grade access.
+**Withdrawn 2026-08-16 at the school's decision:** class advisers encode
+their own section's attendance, so the role was never granted to anyone
+and no screens were ever built for it. The `roles` row was deleted in
+revision `d41f7a2c9e50`.
 
-- encode daily attendance;
-- encode permitted learner movement information;
-- view attendance reports;
-- cannot edit grades.
+The letter is kept rather than closed up because `§3F` is cited by name
+in `app/admin_pages/dashboard.py`, `app/admin_pages/grade_summary.py` and
+`app/auth.py`; renumbering the School Head to E would silently point all
+of those at a section that no longer says what they claim it says.
+
+Reinstating the role means writing its screens first — the state this
+spec left it in for a year was a grantable role that led nowhere.
 
 ## F. School Head / Read-Only Viewer
 

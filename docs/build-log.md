@@ -1093,6 +1093,11 @@ current number.
       Destructive-class per `docs/operations.md`, so the order is code
       first, then `alembic upgrade head`. The app copes with the row
       present or absent either way, so the in-between state is harmless.
-      **`docs/master-spec.md` §3E still defines the role** and was left
-      alone — the spec is the source of truth and edits to it are asked
-      for, not assumed. The database no longer offers what §3E describes.
+      **`docs/master-spec.md` §3E withdrawn too**, on a second explicit
+      instruction — the spec is the source of truth and edits to it are
+      asked for, not assumed, so it went in its own commit after the code.
+      The letter is kept as a tombstone rather than closed up: `§3F` (the
+      School Head) is cited by name in `app/admin_pages/dashboard.py`,
+      `app/admin_pages/grade_summary.py` and `app/auth.py`, and
+      renumbering F to E would silently repoint all of them at a section
+      that no longer says what they claim it says.
