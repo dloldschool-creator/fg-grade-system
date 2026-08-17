@@ -82,7 +82,9 @@ class ImportSpec:
     description: str
     columns: list[ColumnSpec]
     # (session, rows, mapping) -> ValidationResult. Specs that set
-    # `needs_school_year` also take a `school_year_id` keyword.
+    # `needs_school_year` also take a `school_year_id` keyword; the
+    # learner spec additionally takes `adviser_user_id`, which scopes its
+    # Section column to that adviser's own sections.
     validate: Callable
     # (session, parsed_rows, user_id) -> int rows written
     commit: Callable

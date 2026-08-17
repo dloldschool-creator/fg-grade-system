@@ -421,6 +421,131 @@ def test_a_real_section_carries_its_grade_level(session):
     assert row["school_year_id"] == school_year.id
 
 
+# --- An adviser enrolling their own class (§3C) ----------------------------
+
+
+def _two_sections_in_one_year(session):
+    """Two sections of the same school year, with an adviser put on the
+    first one *inside this test's transaction*.
+
+    Nothing is committed — the fixture rolls back — and a real user id is
+    used so the FK still holds when the validator's own query autoflushes
+    the change.
+    """
+    from app.models.academic_structure import Section
+    from app.models.organization import SchoolYear
+    from app.models.rbac import User
+
+    user = session.query(User).first()
+    if user is None:
+        pytest.skip("no users configured")
+    for school_year in session.query(SchoolYear).all():
+        sections = (
+            session.query(Section)
+            .filter_by(school_year_id=school_year.id)
+            .order_by(Section.name)
+            .all()
+        )
+        # A name shared by two grade levels is a case of its own (below):
+        # it is ambiguous for a Registrar and resolves to the adviser's
+        # own for an adviser, so neither pick here may be one of those.
+        by_name: dict = {}
+        for section in sections:
+            by_name.setdefault(section.name, []).append(section)
+        unique = [group[0] for group in by_name.values() if len(group) == 1]
+        if len(unique) >= 2:
+            mine, theirs = unique[:2]
+            mine.adviser_user_id = user.id
+            if theirs.adviser_user_id == user.id:
+                theirs.adviser_user_id = None
+            return school_year, mine, theirs, user
+    pytest.skip("no school year with two differently-named sections")
+
+
+def test_an_adviser_may_enrol_into_a_section_they_advise(session):
+    school_year, mine, _theirs, user = _two_sections_in_one_year(session)
+    result = validate_learners(
+        session,
+        _learner_rows(section=mine.name),
+        {},
+        school_year_id=school_year.id,
+        adviser_user_id=user.id,
+    )
+    assert result.ok, result.error_dicts()
+    assert result.parsed[0]["section_id"] == mine.id
+    assert result.parsed[0]["grade_level_id"] == mine.grade_level_id
+
+
+def test_an_adviser_is_refused_a_section_they_do_not_advise(session):
+    """§3C: an adviser sees their own sections. The row is refused rather
+    than the column dropped, so the file says which learners were left
+    out instead of quietly creating all of them unenrolled."""
+    school_year, _mine, theirs, user = _two_sections_in_one_year(session)
+    result = validate_learners(
+        session,
+        _learner_rows(section=theirs.name),
+        {},
+        school_year_id=school_year.id,
+        adviser_user_id=user.id,
+    )
+    assert not result.parsed
+    assert any("not one of your sections" in e.message for e in result.errors)
+
+
+def test_a_registrar_is_not_scoped_to_any_adviser(session):
+    """The same file with no adviser id resolves the other section fine —
+    the scoping is the caller's choice, not a new rule for everyone."""
+    school_year, _mine, theirs, _user = _two_sections_in_one_year(session)
+    result = validate_learners(
+        session, _learner_rows(section=theirs.name), {}, school_year_id=school_year.id
+    )
+    assert result.ok, result.error_dicts()
+    assert result.parsed[0]["section_id"] == theirs.id
+
+
+def test_a_name_in_two_grade_levels_resolves_to_the_adviser_s_own(session):
+    """A section name is unique only per grade level, so the same name can
+    exist in Grade 11 and Grade 12. That is ambiguous for a Registrar and
+    is refused — but an adviser holding exactly one of the two has named
+    it unambiguously."""
+    from app.import_specs import _section_lookup
+    from app.models.academic_structure import Section
+    from app.models.organization import SchoolYear
+    from app.models.rbac import User
+
+    user = session.query(User).first()
+    if user is None:
+        pytest.skip("no users configured")
+    pair = None
+    for school_year in session.query(SchoolYear).all():
+        sections = session.query(Section).filter_by(school_year_id=school_year.id).all()
+        by_grade = {}
+        for section in sections:
+            by_grade.setdefault(section.grade_level_id, []).append(section)
+        if len(by_grade) < 2:
+            continue
+        (_g1, first), (_g2, second) = list(by_grade.items())[:2]
+        pair = (school_year, first[0], second[0])
+        break
+    if pair is None:
+        pytest.skip("no school year with sections in two grade levels")
+
+    school_year, mine, clash = pair
+    # Give them the same name and only one of them to the adviser.
+    clash.name = mine.name
+    mine.adviser_user_id = user.id
+    if clash.adviser_user_id == user.id:
+        clash.adviser_user_id = None
+    key = mine.name.strip().upper()
+
+    _by_name, ambiguous = _section_lookup(session, school_year.id)
+    assert key in ambiguous
+
+    by_name, ambiguous = _section_lookup(session, school_year.id, user.id)
+    assert key not in ambiguous
+    assert by_name[key].id == mine.id
+
+
 def test_the_section_column_is_optional_and_auto_detected():
     from app.import_pipeline import suggest_mapping
 

@@ -172,7 +172,7 @@ def _admission_record_form(session, learner: Learner, record=None) -> None:
             st.rerun()
 
 
-def _bulk_upload_section(session, current_user) -> None:
+def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
     """Bulk-add, sharing the Import from Excel machinery rather than its own.
 
     This used to carry a second, stricter copy of the same rules, and every
@@ -183,9 +183,14 @@ def _bulk_upload_section(session, current_user) -> None:
     be manually formatted as text first or Excel turned it into 1.07E+11.
 
     One implementation means a fix lands in both places at once.
+
+    `adviser_user_id` is None for a Registrar or Super Admin and the
+    adviser's own id otherwise; it is what lets an adviser enrol their
+    class straight from the file while keeping them out of everyone
+    else's sections (§3C). Import from Excel is Registrar-only, so this
+    panel is the only way an adviser can enrol in bulk.
     """
     spec = LEARNER_IMPORT
-    may_enrol = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
 
     # The whole flow below — preview, errors, confirm — renders inside
     # this panel, so a collapse on upload hid all of it and read as
@@ -207,6 +212,13 @@ def _bulk_upload_section(session, current_user) -> None:
             "required; the rest can be left empty. Sex can be M/F or "
             "MALE/FEMALE. **Section** is optional — fill it in and the learner "
             "is enrolled into that section in the same step."
+            + (
+                "\n\nAs an adviser you can enrol into the section(s) you advise; "
+                "a row naming any other section is refused and the rest of the "
+                "file still goes in."
+                if adviser_user_id is not None
+                else ""
+            )
         )
         st.caption(
             "**Save the file as Excel (.xlsx).** Nothing else needs "
@@ -246,28 +258,54 @@ def _bulk_upload_section(session, current_user) -> None:
         # common "just create the learners" case asks nothing extra.
         school_year_id = None
         if mapping.get("section"):
-            if may_enrol:
-                years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
-                by_id = {sy.id: sy for sy in years}
-                school_year_id = st.selectbox(
-                    "Enroll into which school year?",
-                    options=[sy.id for sy in years],
-                    format_func=lambda v: by_id[v].name,
-                    key="bulk_learner_sy",
-                    on_change=keep_panel_open, args=(_panel,),
+            years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
+            by_id = {sy.id: sy for sy in years}
+            school_year_id = st.selectbox(
+                "Enroll into which school year?",
+                options=[sy.id for sy in years],
+                format_func=lambda v: by_id[v].name,
+                key="bulk_learner_sy",
+                on_change=keep_panel_open, args=(_panel,),
+            )
+            if adviser_user_id is not None:
+                # An adviser may hold more than one section (see the
+                # Section model), so this is a list, and naming which ones
+                # is what stops a refused row reading as a typo.
+                mine = (
+                    session.query(Section)
+                    .filter_by(school_year_id=school_year_id, adviser_user_id=adviser_user_id)
+                    .order_by(Section.name)
+                    .all()
                 )
-            else:
-                st.warning(
-                    "The Section column will be ignored — only a Registrar or "
-                    "Super Admin can enroll from here. The learners will still "
-                    "be created, and you can enroll your own section on the "
-                    "Enrollment page.",
-                    icon="⚠️",
-                )
-                mapping.pop("section", None)
+                if mine:
+                    st.caption(
+                        "You can enroll into: **"
+                        + "**, **".join(s.name for s in mine)
+                        + "**."
+                    )
+                else:
+                    # Refusing every row here would block the learners
+                    # from being created at all, which is worse than not
+                    # enrolling them — this is what the panel did for
+                    # every adviser before they could enrol.
+                    st.warning(
+                        "You're not the adviser of any section in that school year, "
+                        "so the Section column will be ignored. The learners are "
+                        "still created, and can be enrolled later on the Enrollment "
+                        "page.",
+                        icon="⚠️",
+                    )
+                    mapping.pop("section", None)
+                    school_year_id = None
 
         mapped = apply_mapping(rows, mapping)
-        result = spec.validate(session, mapped, mapping, school_year_id=school_year_id)
+        result = spec.validate(
+            session,
+            mapped,
+            mapping,
+            school_year_id=school_year_id,
+            adviser_user_id=adviser_user_id,
+        )
 
         st.write(f"**{len(result.parsed)} of {len(rows)} row(s) ready to add.**")
         if result.errors:
@@ -426,4 +464,4 @@ def render() -> None:
                             clear_text_fields("add_learner")
                     st.rerun()
 
-        _bulk_upload_section(session, current_user)
+        _bulk_upload_section(session, current_user, adviser_user_id)

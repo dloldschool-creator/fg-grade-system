@@ -1328,3 +1328,38 @@ current number.
       on its own change when the callback is removed and staying open when
       it is there. Structural tests alone would not have shown that; this
       session had already been bitten by exactly that gap.
+- [x] **An adviser can bulk-enrol their own class from the Section
+      column** (2026-08-17). The Learner Masterlist bulk-add already read
+      a Section column and enrolled in the same step, but only for a
+      Registrar or Super Admin: an adviser got a warning, the column was
+      dropped, and the learners were created unenrolled — so the one
+      person who actually types their own class list had to go and repeat
+      it on the Enrollment page. Import from Excel is Registrar-only, so
+      this panel is the only bulk route an adviser has at all.
+      `validate_learners` now takes an **`adviser_user_id`**, which the
+      page passes for an adviser and leaves None for a Registrar. Three
+      choices in it are the whole design:
+      1. **Refused per row, not per column.** A row naming someone else's
+         section errors ("*JOBS is not one of your sections*") and the
+         rest of the file still imports. Dropping the column instead —
+         the old behaviour — would have created every learner
+         unenrolled and said so only in a banner above a preview that
+         looked entirely correct.
+      2. **Sections they don't advise stay in the lookup.** Filtering the
+         query to their own would have reported "unknown section" for a
+         name that exists and is spelled right, sending a teacher to hunt
+         a typo that isn't there.
+      3. **An adviser settles the same-name tie-break.** A section name is
+         unique only per grade level, so `_section_lookup` refuses a name
+         held by two grade levels rather than guessing. An adviser holding
+         exactly one of the two has named it unambiguously, since the
+         other is refused to them anyway — so the narrowing happens before
+         the ambiguity check, and only for them.
+      Advising no section that year still drops the column with a warning:
+      refusing every row would block the learners from being created at
+      all, which is worse than not enrolling them. The panel names the
+      sections the adviser can enrol into, so a refused row reads as a
+      wrong section rather than a broken page.
+      Four tests in `tests/test_import_export.py`, including the
+      registrar path staying unscoped and the two-grade-level case
+      resolving one way for an adviser and refusing for a Registrar.

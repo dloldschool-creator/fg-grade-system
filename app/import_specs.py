@@ -62,7 +62,7 @@ def _parse_sex(raw: str):
     return None, f"{raw!r} is not MALE or FEMALE"
 
 
-def _section_lookup(session, school_year_id) -> tuple[dict, set]:
+def _section_lookup(session, school_year_id, adviser_user_id=None) -> tuple[dict, set]:
     """Sections for the year, keyed by upper-cased name.
 
     A name is only unique per grade level, so the same name may legally
@@ -70,22 +70,41 @@ def _section_lookup(session, school_year_id) -> tuple[dict, set]:
     separately and rejected rather than guessed at — silently enrolling a
     Grade 11 learner into the Grade 12 section of the same name would be
     very hard to notice afterwards.
+
+    `adviser_user_id` settles that tie-break rather than filtering the
+    map: an adviser who holds only one of two same-named sections has
+    named it unambiguously, since the other one is refused to them
+    anyway. Sections they don't advise stay in the map **on purpose** —
+    the caller can then say "that isn't your section" instead of the
+    misleading "unknown section", which would send a teacher off to check
+    a spelling that was right all along.
     """
-    by_name: dict[str, object] = {}
-    ambiguous: set[str] = set()
     if school_year_id is None:
-        return by_name, ambiguous
+        return {}, set()
+
+    candidates: dict[str, list] = {}
     for section in session.query(Section).filter_by(school_year_id=school_year_id).all():
         key = (section.name or "").strip().upper()
-        if key in by_name:
+        candidates.setdefault(key, []).append(section)
+
+    by_name: dict[str, object] = {}
+    ambiguous: set[str] = set()
+    for key, found in candidates.items():
+        if adviser_user_id is not None:
+            found = [s for s in found if s.adviser_user_id == adviser_user_id] or found
+        if len(found) > 1:
             ambiguous.add(key)
-        by_name[key] = section
+        by_name[key] = found[0]
     return by_name, ambiguous
 
 
 def validate_learners(
-    session, rows: list[dict], mapping: dict, *, school_year_id=None
+    session, rows: list[dict], mapping: dict, *, school_year_id=None, adviser_user_id=None
 ) -> ValidationResult:
+    """`adviser_user_id` scopes the Section column to that adviser's own
+    sections (§3C), so an adviser can enrol their class from the file
+    while a row naming someone else's section is refused. Left None — the
+    Registrar and Super Admin path — any section in the year resolves."""
     result = ValidationResult()
 
     existing_lrns = {
@@ -94,7 +113,9 @@ def validate_learners(
     seen_in_file: dict[str, int] = {}
     # Loaded once for the whole file, not per row — a 1,200-row masterlist
     # checked one query at a time would take minutes.
-    sections_by_name, ambiguous_names = _section_lookup(session, school_year_id)
+    sections_by_name, ambiguous_names = _section_lookup(
+        session, school_year_id, adviser_user_id
+    )
 
     # Decided once for the whole column: 03/04/2009 is two different days,
     # and a single unambiguous value elsewhere in the file settles it for
@@ -163,6 +184,21 @@ def validate_learners(
                     result.errors.append(
                         RowError(number, "Section", f"unknown section {raw_section!r}")
                     )
+                elif (
+                    adviser_user_id is not None
+                    and section.adviser_user_id != adviser_user_id
+                ):
+                    # Refused per row rather than by dropping the whole
+                    # column: the rest of the file still imports, and the
+                    # teacher is told which rows were left out.
+                    result.errors.append(
+                        RowError(
+                            number, "Section",
+                            f"{section.name} is not one of your sections — you can only "
+                            "enrol into a section you advise",
+                        )
+                    )
+                    section = None
 
         if len(result.errors) == errors_before:
             result.parsed.append(
