@@ -431,6 +431,12 @@ def _two_sections_in_one_year(session):
     Nothing is committed — the fixture rolls back — and a real user id is
     used so the FK still holds when the validator's own query autoflushes
     the change.
+
+    **The tests below pass `str(user.id)`, not `user.id`.** That is what
+    the app passes — `AuthUser.id` is our `users.id` as a str — and
+    calling these with the ORM's `uuid.UUID` is how the first version of
+    this feature shipped a comparison that refused every adviser their
+    own section while every test passed.
     """
     from app.models.academic_structure import Section
     from app.models.organization import SchoolYear
@@ -469,11 +475,31 @@ def test_an_adviser_may_enrol_into_a_section_they_advise(session):
         _learner_rows(section=mine.name),
         {},
         school_year_id=school_year.id,
-        adviser_user_id=user.id,
+        adviser_user_id=str(user.id),
     )
     assert result.ok, result.error_dicts()
     assert result.parsed[0]["section_id"] == mine.id
     assert result.parsed[0]["grade_level_id"] == mine.grade_level_id
+
+
+def test_the_adviser_id_is_matched_whether_it_is_a_str_or_a_uuid(session):
+    """The regression this feature shipped with. The page hands over
+    `AuthUser.id`, a **str**; the column holds a `uuid.UUID`. Postgres
+    coerces one to the other — so the panel listed the adviser's sections
+    correctly — while Python's `==` quietly said no to every one of them,
+    and the adviser saw "MUSK is not one of your sections" for the
+    section she advises."""
+    school_year, mine, _theirs, user = _two_sections_in_one_year(session)
+    for adviser_user_id in (str(user.id), user.id):
+        result = validate_learners(
+            session,
+            _learner_rows(section=mine.name),
+            {},
+            school_year_id=school_year.id,
+            adviser_user_id=adviser_user_id,
+        )
+        assert result.ok, (type(adviser_user_id).__name__, result.error_dicts())
+        assert result.parsed[0]["section_id"] == mine.id
 
 
 def test_an_adviser_is_refused_a_section_they_do_not_advise(session):
@@ -486,7 +512,7 @@ def test_an_adviser_is_refused_a_section_they_do_not_advise(session):
         _learner_rows(section=theirs.name),
         {},
         school_year_id=school_year.id,
-        adviser_user_id=user.id,
+        adviser_user_id=str(user.id),
     )
     assert not result.parsed
     assert any("not one of your sections" in e.message for e in result.errors)
@@ -541,7 +567,7 @@ def test_a_name_in_two_grade_levels_resolves_to_the_adviser_s_own(session):
     _by_name, ambiguous = _section_lookup(session, school_year.id)
     assert key in ambiguous
 
-    by_name, ambiguous = _section_lookup(session, school_year.id, user.id)
+    by_name, ambiguous = _section_lookup(session, school_year.id, str(user.id))
     assert key not in ambiguous
     assert by_name[key].id == mine.id
 

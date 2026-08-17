@@ -218,6 +218,15 @@ of each is in `docs/build-log.md`.
   is what enforces this; don't loosen it.
 - **`VersionMixin` is not universal.** Don't copy `.version += 1` onto a
   model without checking `docs/schema.md` that it has the column.
+- **`AuthUser.id` is a `str`; every `*_user_id` column is a `uuid.UUID`.**
+  Postgres coerces between them, so `filter_by(adviser_user_id=current_user.id)`
+  works and hides the mismatch — but the same two values compared **in
+  Python** are never equal. `section.adviser_user_id == current_user.id` is
+  always False. It shipped in the adviser bulk-enrol check on 2026-08-17
+  and told an adviser her own section wasn't hers, while the panel right
+  above it (a SQL query) listed that section correctly. Compare with
+  `str(...) == str(...)`, and **pass `str(user.id)` in tests** — passing the
+  ORM's UUID is what let four tests miss it.
 - **Never order a roster on `Learner.sex` directly.** The stored strings
   are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
   the opposite of what every DepEd form and the teachers' workbook use.

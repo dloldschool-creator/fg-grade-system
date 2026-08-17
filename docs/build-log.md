@@ -1363,3 +1363,22 @@ current number.
       Four tests in `tests/test_import_export.py`, including the
       registrar path staying unscoped and the two-grade-level case
       resolving one way for an adviser and refusing for a Registrar.
+- [x] **…and it refused every adviser her own section** (2026-08-17, an
+      hour later, reported from the live app: "*MUSK is not one of your
+      sections*", 22 rows, from the adviser of MUSK).
+      **`AuthUser.id` is our `users.id` as a `str`; the column is a
+      `uuid.UUID`.** Postgres coerces one to the other, so the panel's own
+      "which sections do you advise" query found MUSK and offered it by
+      name — and then the row check, the same comparison in *Python*, said
+      no. `str != UUID` is always true. Every adviser, every section, every
+      row.
+      Now `_is_advised_by()` compares as text, in the two places that
+      needed it (the row check and the same-name tie-break).
+      **The four tests written with the feature all passed** — they built
+      the adviser id as `user.id` from the ORM, a real UUID, so they
+      exercised a call the app never makes. They now pass `str(user.id)`,
+      the docstring says why, and a fifth pins both types. Replaying them
+      against the shipped comparison fails three, with the adviser's own
+      error message.
+      The lesson is in CLAUDE.md's traps: an id that crosses the
+      auth/ORM boundary changes type, SQL hides it, and Python doesn't.

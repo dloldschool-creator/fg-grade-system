@@ -62,6 +62,21 @@ def _parse_sex(raw: str):
     return None, f"{raw!r} is not MALE or FEMALE"
 
 
+def _is_advised_by(section, adviser_user_id) -> bool:
+    """Compared as text, because the two sides are not the same type.
+
+    `AuthUser.id` is our `users.id` **as a str** (app/auth.py) while
+    `sections.adviser_user_id` is a `uuid.UUID`. Postgres coerces one to
+    the other, so the page's own "which sections do you advise" query
+    finds them and the panel lists them — but Python's `==` does not, and
+    this check then called every one of the adviser's own sections
+    somebody else's. It shipped that way on 2026-08-17 and the tests
+    missed it by passing the ORM's UUID rather than the str the app
+    actually passes.
+    """
+    return str(section.adviser_user_id) == str(adviser_user_id)
+
+
 def _section_lookup(session, school_year_id, adviser_user_id=None) -> tuple[dict, set]:
     """Sections for the year, keyed by upper-cased name.
 
@@ -91,7 +106,7 @@ def _section_lookup(session, school_year_id, adviser_user_id=None) -> tuple[dict
     ambiguous: set[str] = set()
     for key, found in candidates.items():
         if adviser_user_id is not None:
-            found = [s for s in found if s.adviser_user_id == adviser_user_id] or found
+            found = [s for s in found if _is_advised_by(s, adviser_user_id)] or found
         if len(found) > 1:
             ambiguous.add(key)
         by_name[key] = found[0]
@@ -184,9 +199,8 @@ def validate_learners(
                     result.errors.append(
                         RowError(number, "Section", f"unknown section {raw_section!r}")
                     )
-                elif (
-                    adviser_user_id is not None
-                    and section.adviser_user_id != adviser_user_id
+                elif adviser_user_id is not None and not _is_advised_by(
+                    section, adviser_user_id
                 ):
                     # Refused per row rather than by dropping the whole
                     # column: the rest of the file still imports, and the
