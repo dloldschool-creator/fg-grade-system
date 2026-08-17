@@ -1382,3 +1382,32 @@ current number.
       error message.
       The lesson is in CLAUDE.md's traps: an id that crosses the
       auth/ORM boundary changes type, SQL hides it, and Python doesn't.
+- [x] **Bulk teacher assignment, and the Grade 11 roster encoded**
+      (2026-08-17). `scripts/import_teacher_assignments.py` takes a
+      tab-separated SECTION/SUBJECT/TEACHER file and writes one
+      `teacher_assignments` row per **offering** — a teacher is named per
+      subject, but an assignment lives on a term, so a three-term core
+      subject writes three rows and a one-term elective writes one. The
+      Teacher Assignments page is right for a mid-year reassignment and
+      wrong for setting up a year: 16 sections x 7 subjects x 3 terms is
+      over 300 clicks.
+      **It creates nothing.** No sections, no subjects, no accounts — an
+      unresolvable name is an error, never a new row, and the run refuses
+      to write while any row is unresolved. That is the whole safety
+      property: the worst it can do is refuse. `--confirm` to write,
+      `--replace` (off by default) to reassign an offering that already
+      has a different teacher, which deactivates rather than deletes
+      (§47).
+      Used it the same day for the Grade 11 roster: **315 assignments
+      across all 16 sections**, 47 → 362 active. Every Grade 11 offering
+      now carries a teacher except SKINNER's PKLP and Life and Career
+      Skills, which the source table left blank.
+      The interesting half was the matching, and it was done as a
+      read-only pass first, with every unresolved name asked about rather
+      than guessed: a section typo (BABBGAGE), two teachers whose middle
+      initial or surname spelling differed from their account, two
+      TechPro subjects catalogued with an `NC III` suffix the file
+      omitted, and six rows naming an elective *slot* ("ASSH Elective")
+      rather than a subject — each of which is three subjects, one per
+      term, and had to be confirmed section by section. None of those
+      would have failed loudly if guessed.

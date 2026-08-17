@@ -379,10 +379,15 @@ Full phase-by-phase build history, including the reasoning behind every
 decision above: see `docs/build-log.md` (not auto-loaded — read it when you
 need the history).
 
-**Remaining before real use:** migrating the rest of the ~1,200 learners
-(the database currently holds 22 learners across 27 sections), teacher
-accounts and assignments, filling in the empty subject profiles, and an
-end-to-end dress rehearsal on one section.
+**Remaining before real use:** migrating the rest of the ~1,200 learners,
+filling in the empty subject profiles (the Grade 12 ones are the blocker
+— see the dress rehearsal below), and an end-to-end dress rehearsal on
+one section.
+**Done since:** 43 teacher accounts exist, and **every Grade 11 offering
+carries a teacher** as of 2026-08-17 — 315 assignments written by
+`scripts/import_teacher_assignments.py`, all 16 sections, 362 active
+assignments in total. Grade 12's are still partial. Advisers can also
+bulk-enrol their own class from the Learner Masterlist upload.
 **Term 1 closes 15 September 2026.**
 
 ## Dress rehearsal, 2026-08-13 — what it found
