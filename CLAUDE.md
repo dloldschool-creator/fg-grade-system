@@ -428,12 +428,30 @@ award tiers and the not-eligible reasons, and every generated document.
    can be finalized without ever being submitted. Not fixed: who verifies,
    on which page, and at what granularity is a decision, not a bug fix.
 
-**The Grade 12 curriculum is the real blocker for real use.** Six of the
-eight G12 subject profiles hold zero subjects, and the two CSS ones hold
-three each — so JOBS, the only section with real learners, offers three
-subjects total, one per term, with no core subjects. Grade 11 BE is the
-only complete profile. Nothing is wrong with the code; the data is not
-entered yet.
+**The Grade 12 curriculum is the real blocker for real use.** As the
+rehearsal found it (2026-08-13): six of the eight G12 subject profiles
+held zero subjects, and the two CSS ones three each — so JOBS, the only
+section with real learners, offered three subjects total. Nothing is
+wrong with the code; the data was not entered yet.
+
+**Where that stands on 2026-08-17** — checked against the database, so
+trust this over the paragraph above:
+
+- **No G12 profile is empty any more.** There are twelve of them, each
+  holding 1–4 subjects. Grade 11's five are complete (7–9 subjects each),
+  not just BE.
+- **The gap is now terms, not subjects.** Outside `G12-TECHPRO-CSS-JOBS`
+  and `-MUSK`, every G12 subject sits in **Term 1 only** — DESCARTES,
+  FREUD, LOCKE, MASLOW and SMITH have four subjects in T1 and *nothing*
+  in T2 and T3, and the Home Economics sections carry one subject for the
+  year. A General Average can't be computed from that (rule 4 reads each
+  subject's real term pattern), so this is what to fill in first.
+- **G12 teaching assignments are all but done**: 32 of the 33 existing
+  offerings carry a teacher. The only one that doesn't is DARWIN /
+  Tourism Services / T1.
+- Grade 11 is fully assigned — see the build-log entry for
+  `scripts/import_teacher_assignments.py`, which is the tool to reuse
+  once the T2/T3 offerings exist.
 
 ### Still open
 
