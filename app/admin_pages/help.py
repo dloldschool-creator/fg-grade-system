@@ -46,9 +46,10 @@ UNIVERSAL = [
     (
         "Sensitive changes are recorded",
         "Changing a grade, altering attendance, reopening a finalized record, "
-        "overriding an award or moving a learner is logged with your name, the "
-        "old value, the new value and the time. That's normal and expected — "
-        "it protects you as much as the record.",
+        "overriding an award, assigning a teacher to a subject or moving a "
+        "learner is logged with your name, the old value, the new value and "
+        "the time. That's normal and expected — it protects you as much as "
+        "the record.",
     ),
 ]
 
@@ -89,14 +90,61 @@ BY_ROLE = {
             ),
             (
                 "You only see your own assigned classes",
-                "If a class is missing, your teacher assignment hasn't been made "
-                "yet — that's a Super Admin task.",
+                "If a class is missing, nobody has assigned you to it yet. Ask "
+                "**that section's adviser** — they can do it themselves on the "
+                "Teacher Assignments page — or a Super Admin.",
             ),
         ],
     ),
     "ADVISER": (
-        "Advisers — Attendance, cards and awards",
+        "Advisers — Your section's teachers, attendance, cards and awards",
         [
+            (
+                "You name the teachers for your own section",
+                "**Setup → Teacher Assignments**. Pick the school year, pick "
+                "your section, and for each subject choose the teacher who "
+                "handles it, then press **Assign**.\n\n"
+                "You only ever see the sections you advise. If the picker says "
+                "you advise none, the school year at the top is probably the "
+                "wrong one.",
+            ),
+            (
+                "Assigning is what gives that teacher their gradebook",
+                "A subject teacher sees a class **only** if they are assigned "
+                "to it. So when a colleague says your section isn't showing up "
+                "for them, this page is the answer — you don't need to wait for "
+                "the Super Admin.\n\n"
+                "Because it hands out access, every assignment is recorded with "
+                "your name and the date.",
+            ),
+            (
+                "One choice covers every term that subject runs",
+                "You name a teacher for the *subject*, not for a term. A "
+                "three-term core subject takes one Assign; a one-term elective "
+                "takes the same one Assign. The caption under each subject "
+                "tells you which terms it runs.\n\n"
+                "If two different teachers already hold different terms of the "
+                "same subject, it says **Split across terms** and names both. "
+                "That's allowed — but choosing a name and pressing Assign hands "
+                "all of that subject's terms to that one person.",
+            ),
+            (
+                "Changing the teacher never touches the grades",
+                "Reassigning keeps the previous teacher on record — who taught "
+                "what is never lost — and grades already encoded stay exactly "
+                "as they are. The new teacher simply picks up the same "
+                "gradebook.\n\n"
+                "**Unassign** removes access only. Nothing encoded is deleted, "
+                "and the subject stays on the learners' report cards.",
+            ),
+            (
+                "If a teacher or a subject is missing from that page",
+                "A name only appears in the dropdown once the account exists "
+                "and carries the **Subject Teacher** role, and a subject only "
+                "appears once it is a Section Subject Offering for your "
+                "section. Both are Super Admin tasks — ask, rather than working "
+                "around it.",
+            ),
             (
                 "Prepare the month's sheet before encoding attendance",
                 "Press **Prepare / refresh this month's sheet** first. It marks "
