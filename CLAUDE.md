@@ -224,9 +224,11 @@ of each is in `docs/build-log.md`.
   Python** are never equal. `section.adviser_user_id == current_user.id` is
   always False. It shipped in the adviser bulk-enrol check on 2026-08-17
   and told an adviser her own section wasn't hers, while the panel right
-  above it (a SQL query) listed that section correctly. Compare with
-  `str(...) == str(...)`, and **pass `str(user.id)` in tests** — passing the
-  ORM's UUID is what let four tests miss it.
+  above it (a SQL query) listed that section correctly. Use
+  **`app.section_access.is_advised_by(section, user_id)`** — the one
+  implementation, deliberately dependency-free so importing it can never
+  affect import order — and **pass `str(user.id)` in tests**, since passing
+  the ORM's UUID is what let four tests miss it.
 - **Never order a roster on `Learner.sex` directly.** The stored strings
   are `"MALE"` and `"FEMALE"`, so alphabetical order puts FEMALE first —
   the opposite of what every DepEd form and the teachers' workbook use.

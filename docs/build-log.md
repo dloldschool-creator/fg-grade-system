@@ -1411,3 +1411,42 @@ current number.
       rather than a subject — each of which is three subjects, one per
       term, and had to be confirmed section by section. None of those
       would have failed loudly if guessed.
+- [x] **An adviser can assign teachers in their own section** (2026-08-17,
+      asked as "give all teachers access to assign their own teaching
+      assignments — how, securely?").
+      **The answer was to move the grant, not to open it up.** A teaching
+      assignment is not a label: `gradebook.py` decides what a teacher may
+      encode purely from `teacher_assignments.teacher_user_id`, with no
+      second check. So "teachers assign themselves" means "teachers grant
+      themselves grade-entry access to any roster", which is the one
+      operation that should never be self-served. Advisers assign instead:
+      the person granting access is never the person receiving it, and it
+      reuses `sections.adviser_user_id` scoping that five pages already
+      share, so there is no new permission model and no migration.
+      Holding SUBJECT_TEACHER alone still grants nothing, in your own
+      adviser's section included — `test_a_subject_teacher_may_not_assign_at_all`
+      is the design in one test.
+      `app/teacher_assignment_service.py` holds the rules so they are
+      testable without Streamlit, and `may_assign()` is checked against
+      the section that came back from the picker rather than trusted from
+      how it was chosen.
+      Three things came out of it:
+      1. **Assignment is per subject now, per offering in the database.**
+         A teacher is named for a subject, not a term, so one action
+         writes every term that subject runs — 7 decisions per section
+         where 21 were being asked for. A subject whose terms have
+         different teachers is legal and shows as "Split across terms"
+         rather than displaying one of them.
+      2. **Assignments are audit-logged at last** (`TEACHER_ASSIGNED` /
+         `TEACHER_UNASSIGNED`; `action` is a plain string column, so no
+         migration). Granting a roster is an access change in everything
+         but name, and neither path recorded one before. **One entry per
+         subject, not per term** — three term rows are one decision.
+      3. **`str` vs `uuid.UUID` has one implementation now**, in
+         `app/section_access.py`, dependency-free so importing it can
+         never affect import order. `import_specs` was switched to it the
+         same day the comparison bug shipped there.
+      `load_section_subjects` is four queries flat with a test pinning it:
+      the page renders a control per subject, and resolving the subject,
+      terms and current assignment in that loop would be ~60 round trips
+      per rerun.

@@ -120,7 +120,7 @@ GROUPS = [
             (subject_catalog, "Subject Catalog", "📚", "subject-catalog", ("SUPER_ADMIN",)),
             (subject_profiles, "Subject Profiles", "🗂️", "subject-profiles", ("SUPER_ADMIN",)),
             (section_offerings, "Section Subject Offerings", "📋", "section-offerings", ("SUPER_ADMIN",)),
-            (teacher_assignments, "Teacher Assignments", "🧑‍🏫", "teacher-assignments", ("SUPER_ADMIN",)),
+            (teacher_assignments, "Teacher Assignments", "🧑‍🏫", "teacher-assignments", ("SUPER_ADMIN", "ADVISER")),
             (grading_policy, "Grading Policy", "✅", "grading-policy", ("SUPER_ADMIN",)),
             (award_policy, "Award Policy", "🏅", "award-policy", ("SUPER_ADMIN",)),
         ],

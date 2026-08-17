@@ -55,6 +55,14 @@ USER_ROLES_CHANGED = "USER_ROLES_CHANGED"
 # recording done where the change is, not where it was requested.
 USER_CREATED = "USER_CREATED"
 USER_PASSWORD_RESET = "USER_PASSWORD_RESET"
+# A teaching assignment is what the Gradebook checks to decide who may
+# encode a section's grades, so assigning one grants access and clearing
+# one revokes it — §50's "role and permission changes" in everything but
+# name. Unlogged until 2026-08-17, which was tolerable while only a Super
+# Admin could do it and is not now that an adviser can assign within
+# their own section.
+TEACHER_ASSIGNED = "TEACHER_ASSIGNED"
+TEACHER_UNASSIGNED = "TEACHER_UNASSIGNED"
 DATA_IMPORTED = "DATA_IMPORTED"
 BACKUP_DOWNLOADED = "BACKUP_DOWNLOADED"
 
