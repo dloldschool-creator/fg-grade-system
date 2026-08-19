@@ -291,9 +291,9 @@ def build_term_subject_rows(
     term_number: int,
     context: ReportCardContext | None = None,
 ) -> list[tuple[str, Decimal | None]]:
-    """(subject name, grade) for the subjects actually active in one term
-    — what a temporary term card lists (§39: "show only subjects active
-    during the selected term").
+    """(subject name, grade) for the subjects actually active in one term,
+    in the section's print order — what a temporary term card lists (§39:
+    "show only subjects active during the selected term").
 
     Note this deliberately does **not** use the combined-language parent
     row. §17 keeps Effective Communication and Mabisang Komunikasyon as
@@ -308,15 +308,28 @@ def build_term_subject_rows(
     if context is None:
         context = load_report_context(session, [enrollment])
 
-    rows: list[tuple[str, Decimal | None]] = []
+    ordered: list[tuple[int, str, Decimal | None]] = []
     for subject_id, by_term in context.offerings_by_subject.items():
         if term_number not in by_term:
             continue  # subject doesn't run this term
         subject = context.subjects.get(subject_id)
         if subject is None:
             continue
-        rows.append(
-            (subject.official_name, context.term_grades.get((enrollment.id, by_term[term_number])))
+        ordered.append(
+            (
+                context.subject_order.get(subject_id, 9999),
+                subject.official_name,
+                context.term_grades.get((enrollment.id, by_term[term_number])),
+            )
         )
-    rows.sort(key=lambda row: row[0])
-    return rows
+    # The section's own print order (the Order column on Section Subject
+    # Offerings, seeded from the subject profile) — **not** alphabetical.
+    # This sorted on the name until 2026-08-17, which put Events
+    # Management above General Mathematics on a printed card while the
+    # annual report card, the gradebook and the teachers' own workbook all
+    # listed the languages first. `build_learning_area_rows` already used
+    # `subject_order`; the two now agree, so a subject sits in the same
+    # place on both cards. The name only breaks a tie between two subjects
+    # sharing an order.
+    ordered.sort(key=lambda row: (row[0], row[1]))
+    return [(name, grade) for _, name, grade in ordered]
