@@ -87,6 +87,71 @@ revert is one command; a migration does not undo itself.
 
 ---
 
+## 3a. Switching on DO 017's unit system
+
+DepEd Order 017 s. 2026 makes the Term Average and General Average
+unit-weighted from SY 2026-2027. It applies to **both grade levels** here:
+the order lets non-pilot schools keep Grade 12 on the old curriculum for a
+year, but FGNMHS piloted, so that exemption doesn't apply.
+
+It is three separate steps on purpose, and only the third changes a number
+anyone sees.
+
+**Step 1 — migrate.** Additive, so it goes before the code push, and on its
+own it changes nothing:
+
+```bash
+.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+**Step 2 — see what would be written.** No flag, no writes:
+
+```bash
+.venv\Scripts\python.exe -m scripts.apply_do17_units
+```
+
+Read the tail of the output. It lists any subject that would still count as
+**1 unit** because DO 017 doesn't settle its weight from its category —
+mostly the Field Exposure / Arts cluster, which mixes 80-hour and 160-hour
+subjects. Set `subjects.units_per_term` for each of those before going on:
+80 hours a term is 3, 160 is 6, 320 is 12, and 160 spread over three terms
+is 2. A wrong unit does not error; it produces a slightly wrong average.
+
+**Step 3 — write, then recompute.** The first command writes the units and
+activates the policy. The second rebuilds every learner's cached averages,
+and **is the moment the numbers on screen change**:
+
+```bash
+.venv\Scripts\python.exe -m scripts.apply_do17_units --confirm
+```
+
+```bash
+.venv\Scripts\python.exe -m scripts.apply_do17_units --recompute --confirm
+```
+
+**Do the recompute outside encoding hours**, and take a backup first. It
+touches every non-finalized enrollment. Finalized years are skipped
+deliberately — a policy change never rewrites a year that has been closed
+out.
+
+**Expect averages to move by a mark or two**, in both directions. That is
+the point of the change, not a fault: a 3-unit elective now counts more
+than a 2-unit core, where before they counted the same, and a Grade 12
+TechPro elective at 12 units now outweighs four academic ones. Tell
+advisers before you run it, or the first person to notice will report it as
+a bug.
+
+**The Grade 11 language pair changes shape on the term card**, from two
+flat rows to a parent row with its two components indented under it — the
+way it has always printed on the report card. The parent is the row that
+counts; the components are shown so the number can be checked. Worth
+mentioning to advisers at the same time.
+
+To check afterwards: the Grade Summary screen shows "Unit-weighted over N
+units" beneath a General Average.
+
+---
+
 ## 4. Adding the SF10 template (or any revised DepEd form)
 
 This is expected to happen mid-year, while live. It is a **code update,

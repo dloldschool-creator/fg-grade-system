@@ -1,5 +1,6 @@
 """Tests for app/term_card.py — the temporary term card layout (§39)."""
 
+import io
 import re
 from decimal import Decimal
 
@@ -106,3 +107,80 @@ def test_a_card_with_a_comment_still_fits_one_sheet():
         [_card(comment="Keep up the excellent work this term.") for _ in range(8)]
     )
     assert len(_page_sizes(pdf)) == 1
+
+
+# --- The combined language pair (DO 017 s. 2026) --------------------------
+
+
+def test_a_full_grade_11_term_fits_now_that_the_pair_takes_three_lines():
+    """The realistic worst case after the pair became a parent plus two
+    indented components: five cores (one of them the pair) and three
+    electives is ten lines, where the old flat layout was nine.
+
+    `MAX_SUBJECT_LINES` was 8 before DO 017, so this list would have been
+    elided — real subjects hidden behind "+2 more" on a card that goes home
+    to a parent. Asserting the count rather than the rendering because the
+    elision is the failure that matters.
+    """
+    from app.report_card import COMPONENT_INDENT
+
+    subjects = [
+        ("Effective Communication / Mabisang Komunikasyon", D(85)),
+        (f"{COMPONENT_INDENT}Effective Communication", D(80)),
+        (f"{COMPONENT_INDENT}Mabisang Komunikasyon", D(90)),
+        ("General Mathematics", D(90)),
+        ("General Science", D(76)),
+        ("Life and Career Skills", D(80)),
+        ("Pag-aaral ng Kasaysayan at Lipunang Pilipino", D(93)),
+        ("Creative Composition 1", D(88)),
+        ("Basic Accounting", D(91)),
+        ("Biology 1", D(87)),
+    ]
+    assert len(subjects) <= MAX_SUBJECT_LINES
+    pdf = generate_term_cards([_card(subjects=subjects, average=D(86))])
+    assert len(_page_sizes(pdf)) == 1
+
+
+def test_the_component_indent_survives_the_cards_truncation():
+    """The indent is carried in the name string, so nothing in this module
+    knows the §16 rule — which also means `_fit` is the one place that could
+    silently destroy it, since it truncates names to the column width.
+
+    A component name must still measure wider than the same name unindented,
+    or the parent and its components render indistinguishable on the card.
+    Checked through `_fit` at the card's real font and column width, because
+    that is what the drawing code passes.
+    """
+    from reportlab.pdfgen import canvas
+
+    from app.report_card import COMPONENT_INDENT
+    from app.term_card import _fit
+
+    c = canvas.Canvas(io.BytesIO())
+    name = "Effective Communication"
+    # The card's own values: 6.6pt Helvetica, name column ~26pt narrower
+    # than the inner width.
+    font, size, width = "Helvetica", 6.6, 160
+
+    plain = _fit(c, name, font, size, width)
+    indented = _fit(c, f"{COMPONENT_INDENT}{name}", font, size, width)
+
+    assert indented.startswith(" ")
+    assert c.stringWidth(indented, font, size) > c.stringWidth(plain, font, size)
+
+
+def test_a_component_name_too_long_to_fit_is_still_indented():
+    """Truncation eats the end of the name, never the indent at the front —
+    otherwise the longest component names would be the ones that lose their
+    indentation, which is the opposite of helpful."""
+    from reportlab.pdfgen import canvas
+
+    from app.report_card import COMPONENT_INDENT
+    from app.term_card import _fit
+
+    c = canvas.Canvas(io.BytesIO())
+    long_name = f"{COMPONENT_INDENT}Pag-aaral ng Kasaysayan at Lipunang Pilipino"
+    fitted = _fit(c, long_name, "Helvetica", 6.6, 60)
+
+    assert fitted.startswith(COMPONENT_INDENT)
+    assert fitted.endswith("…")

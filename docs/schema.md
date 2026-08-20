@@ -260,6 +260,17 @@ term only, so its Final Grade is that one term's grade, not an average
 | code | TEXT NOT NULL UNIQUE | |
 | name | TEXT NOT NULL | |
 | default_grading_policy_id | UUID FK → grading_policies NULL | |
+| units_per_term | NUMERIC(5,2) NULL | DO 017 s. 2026 Table 19; broadest level of the unit chain |
+
+**Units (DO 017 s. 2026, Table 19).** Core 2, Other Academic Elective 3,
+Arts/Sports/Health 3, Research/Design 3, Work Immersion 12. Two categories
+are deliberately left NULL: **TechPro Elective**, because the order gives
+it 4 units in Grade 11 and 12 in Grade 12 and one category cannot say both
+(set per subject); and **Field Exposure/Arts Apprenticeship/Creative
+Production**, because the order puts Arts Apprenticeship and Creative
+Production at 6 (160 hours per term) while Field Exposure is an ordinary
+80-hour elective at 3, and this one category holds both. NULL resolves to
+**1 unit**, i.e. counting once, never to 0.
 
 ### `grading_policies`
 Logical, named policy family (one per category above, initially).
@@ -297,7 +308,11 @@ back-reference.
 | grading_policy_id | UUID FK → grading_policies NOT NULL | |
 | version_number | INTEGER NOT NULL | |
 | effective_school_year_id | UUID FK → school_years NULL | first year this version applies |
+| effective_grade_level_id | UUID FK → grade_levels NULL | NULL = every grade level; set to scope one curriculum to one |
 | passing_grade | NUMERIC(5,2) NOT NULL DEFAULT 75 | never hardcoded elsewhere, §21 |
+| averaging_method | ENUM(`UNWEIGHTED`,`UNIT_WEIGHTED`) NOT NULL DEFAULT `UNWEIGHTED` | DO 017 s. 2026 Annex E |
+| combine_language_pair_in_term_average | BOOLEAN NOT NULL DEFAULT false | false = master-spec §17; **true** = DO 017 Table 1, what the school runs |
+| average_from_unrounded_finals | BOOLEAN NOT NULL DEFAULT false | true reproduces Annex E's own arithmetic |
 | min_grade | NUMERIC(5,2) NOT NULL DEFAULT 60 | |
 | max_grade | NUMERIC(5,2) NOT NULL DEFAULT 100 | |
 | status | ENUM(`DRAFT`,`ACTIVE`,`ARCHIVED`) NOT NULL DEFAULT `DRAFT` | |
@@ -305,6 +320,29 @@ back-reference.
 | created_at | TIMESTAMPTZ | |
 
 `UNIQUE (grading_policy_id, version_number)`
+
+**It now versions the averaging rules too, not just the passing grade.**
+DepEd Order 017 s. 2026 makes both averages unit-weighted, and phases that
+in by grade level — Grade 11 in SY 2026-2027, Grade 12 in SY 2027-2028 —
+so for a normal school two different rules are simultaneously correct
+within one year. **FGNMHS is a pilot school, so both grade levels move
+together here** and its DO 017 version is left unscoped by grade level;
+`effective_grade_level_id` stays on the table because the phased case is
+the general one.
+
+`app/curriculum_policy.py` picks the **most specific** ACTIVE version — a
+year+grade-level match beats a year-only one beats a global one — and at
+equal specificity the **highest `version_number`** wins, which is how a new
+curriculum supersedes its predecessor without the predecessor being
+archived. Every new column defaults to the pre-DO-017 behaviour, so a
+version that says nothing computes what the app computed before they
+existed (rule 6).
+
+The FK on `effective_grade_level_id` is named
+`fk_gpv_effective_grade_level_grade_levels` rather than following the
+project's `fk_%(table)s_%(column)s_%(referred)s` convention: that would
+generate 64 characters, one over Postgres's 63-byte identifier limit, and
+Postgres truncates silently rather than erroring.
 
 ### `subjects`
 Immutable-ID catalog; names are never used as keys (§8).
@@ -321,8 +359,16 @@ Immutable-ID catalog; names are never used as keys (§8).
 | default_grading_policy_id | UUID FK → grading_policies NULL | overrides category default |
 | is_active | BOOLEAN NOT NULL DEFAULT true | |
 | sort_order | SMALLINT NOT NULL DEFAULT 0 | |
+| units_per_term | NUMERIC(5,2) NULL | overrides the category; how one category carries two values |
+| instructional_hours_per_year | SMALLINT NULL | DO 017's prescribed hours; not read at runtime |
 | archived_at | TIMESTAMPTZ NULL | |
 | created_at, updated_at | TIMESTAMPTZ | |
+
+`units_per_term` exists because DO 017 Table 19 gives a TechPro elective 4
+units in Grade 11 and 12 in Grade 12 — same category, two values.
+`instructional_hours_per_year` is documentation and a seeding aid:
+`grading_engine.units_from_hours` derives units from it, and every row of
+Table 19 is the same rate, 3 units per 80 hours in a term.
 
 ### `combined_learning_areas` / `combined_learning_area_components`
 Models the Grade 11 Effective Communication / Mabisang Komunikasyon rule as
@@ -332,7 +378,13 @@ changes.
 
 `combined_learning_areas`: `id`, `name` (e.g. "Effective Communication /
 Mabisang Komunikasyon"), `grade_level_id` FK NOT NULL, `display_order`,
-`is_active`.
+`is_active`, `units_per_term NUMERIC(5,2) NULL`.
+
+`units_per_term` is the weight the pair carries as **one** learning area —
+2, a single core subject, because DO 017 Table 1 makes the pair one
+160-hour core subject. Deliberately **not** the sum of its components,
+which would weight the languages twice, which is the double-counting §19
+exists to prevent. NULL falls back to one component's units.
 
 `combined_learning_area_components`: `id`, `combined_learning_area_id` FK NOT NULL,
 `subject_id` FK → subjects NOT NULL UNIQUE, `display_order`.
@@ -367,6 +419,7 @@ SF10, and temp cards — nothing else may substitute for it.
 | grading_policy_version_id | UUID FK → grading_policy_versions NULL | override; else resolved from subject/category |
 | is_required | BOOLEAN NOT NULL DEFAULT true | |
 | display_order | SMALLINT NOT NULL DEFAULT 0 | |
+| units_per_term | NUMERIC(5,2) NULL | narrowest unit override; normally NULL |
 | status | ENUM(`PLACEHOLDER`,`CONFIRMED`) NOT NULL DEFAULT `PLACEHOLDER` | "Elective 2"/"Elective 3" style labels must be resolved before grading, §13 |
 | version | INTEGER NOT NULL DEFAULT 1 | |
 | created_at, updated_at | TIMESTAMPTZ | |
@@ -547,6 +600,9 @@ whenever a contributing term grade changes, never entered directly.
 | subject_id | UUID FK → subjects NOT NULL | |
 | school_year_id | UUID FK → school_years NOT NULL | |
 | final_grade | NUMERIC(5,2) NULL | NULL if any required term is missing |
+| units_per_term | NUMERIC(5,2) NULL | what the subject weighed per term (DO 017 Annex E) |
+| units | NUMERIC(7,2) NULL | annual units = per-term x the terms it actually ran |
+| unrounded_final_grade | NUMERIC(9,4) NULL | the value the weighting used; `final_grade` stays the reported whole number |
 | remark | ENUM(`PASSED`,`FAILED`,`INCOMPLETE`) NULL | |
 | computed_at | TIMESTAMPTZ NULL | |
 | version | INTEGER NOT NULL DEFAULT 1 | |
@@ -567,6 +623,9 @@ displayed/counted for the combined parent row.
 | school_year_id | UUID FK → school_years NOT NULL | |
 | term1_combined, term2_combined, term3_combined | NUMERIC(5,2) NULL | |
 | final_grade | NUMERIC(5,2) NULL | |
+| units_per_term | NUMERIC(5,2) NULL | the pair's weight as ONE area, never its components' sum |
+| units | NUMERIC(7,2) NULL | annual units = per-term x the terms it actually ran |
+| unrounded_final_grade | NUMERIC(9,4) NULL | the value the weighting used; `final_grade` stays the reported whole number |
 | remark | ENUM(`PASSED`,`FAILED`,`INCOMPLETE`) NULL | |
 | computed_at | TIMESTAMPTZ NULL | |
 | version | INTEGER NOT NULL DEFAULT 1 | |
@@ -584,7 +643,15 @@ separate subjects**, because §17 says explicitly "Do not substitute the
 combined language grade when calculating the Term Average". The General
 Average below does the opposite, collapsing the pair into one virtual
 learning area (§19). Same two subjects, two different treatments,
-depending on which figure is being computed.
+depending on which figure is being computed. **DO 017 s. 2026 collapsed
+that asymmetry**: Table 1 makes the pair one core subject, so the school
+now counts it once in both figures
+(`grading_policy_versions.combine_language_pair_in_term_average` = true).
+The column keeps §17 as its *default* for any database that hasn't opted
+in, and the asymmetry above is what that default still describes. `averaging_method`/`total_units` record how the stored
+average was actually reached — without them a unit that should have been 12
+and was 2 is invisible, because the result is simply a different plausible
+number.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -593,6 +660,8 @@ depending on which figure is being computed.
 | school_year_id | UUID FK → school_years NOT NULL | |
 | term_id | UUID FK → terms NOT NULL | |
 | term_average | NUMERIC(5,2) NULL | §17; NULL while any subject in the term is un-encoded |
+| averaging_method | ENUM(`UNWEIGHTED`,`UNIT_WEIGHTED`) NOT NULL DEFAULT `UNWEIGHTED` | how the average above was reached |
+| total_units | NUMERIC(7,2) NULL | the denominator it used |
 | lowest_term_grade | NUMERIC(5,2) NULL | |
 | failed_subject_count | SMALLINT NULL | |
 | completion_status | ENUM(`COMPLETE`,`INCOMPLETE`) NOT NULL DEFAULT `INCOMPLETE` | |
@@ -608,6 +677,8 @@ depending on which figure is being computed.
 | enrollment_id | UUID FK → enrollments NOT NULL UNIQUE | one per enrollment (already one enrollment per learner-year) |
 | school_year_id | UUID FK → school_years NOT NULL | |
 | general_average | NUMERIC(5,2) NULL | never (T1+T2+T3)/3 — computed from applicable Final Grades, §61 |
+| averaging_method | ENUM(`UNWEIGHTED`,`UNIT_WEIGHTED`) NOT NULL DEFAULT `UNWEIGHTED` | how the average above was reached |
+| total_units | NUMERIC(7,2) NULL | the denominator it used |
 | lowest_final_grade | NUMERIC(5,2) NULL | combined-language final counted once for G11, §19 |
 | failed_subject_count | SMALLINT NULL | |
 | completion_status | ENUM(`COMPLETE`,`INCOMPLETE`) NOT NULL DEFAULT `INCOMPLETE` | |

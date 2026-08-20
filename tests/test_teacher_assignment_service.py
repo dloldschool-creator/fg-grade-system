@@ -249,21 +249,37 @@ def test_assigning_and_unassigning_are_audit_logged(session, fixture_section):
     actor = FakeUser(teacher.id, "SUPER_ADMIN")
 
     before = session.query(AuditLog).count()
+    # Which assignment entries already exist. These tests run against the
+    # real database, so `audit_logs` accumulates across runs — an unscoped
+    # query here returns every TEACHER_ASSIGNED ever written, and picking
+    # "the assigned one" out of it means picking an arbitrary old row from
+    # some other section. That is what this test used to do, and it only
+    # started failing once a second run had left a row behind.
+    existing_ids = {
+        row_id
+        for (row_id,) in session.query(AuditLog.id).filter(
+            AuditLog.action.in_(
+                [audit_service.TEACHER_ASSIGNED, audit_service.TEACHER_UNASSIGNED]
+            )
+        )
+    }
+
     assign_subject(session, row, str(teacher.id), actor_user_id=actor.id, section=section)
     session.flush()
     unassign_subject(session, row, actor_user_id=actor.id, section=section)
     session.flush()
 
-    entries = (
-        session.query(AuditLog)
-        .filter(
+    entries = [
+        entry
+        for entry in session.query(AuditLog).filter(
             AuditLog.action.in_(
                 [audit_service.TEACHER_ASSIGNED, audit_service.TEACHER_UNASSIGNED]
             )
         )
-        .all()
-    )
+        if entry.id not in existing_ids
+    ]
     assert session.query(AuditLog).count() == before + 2
+    assert len(entries) == 2
     actions = [e.action for e in entries]
     assert audit_service.TEACHER_ASSIGNED in actions
     assert audit_service.TEACHER_UNASSIGNED in actions

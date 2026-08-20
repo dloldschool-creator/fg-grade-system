@@ -10,11 +10,14 @@ Like the award certificates, one drawing routine renders a single card
 into an arbitrary rectangle and the page builder tiles it — so the
 per-learner print and the whole-section batch cannot drift apart.
 
-The subject list comes from `report_card.build_term_subject_rows`, which
-itemises the Grade 11 language pair as two separate subjects. That is
-deliberate and matches §17: the Term Average printed at the foot of the
-card is computed from those two, so collapsing them into the combined
-parent would show a list that doesn't add up to the figure beneath it.
+The subject list comes from `report_card.build_term_subject_rows`, and how
+it treats the Grade 11 language pair follows the grading policy in force,
+because **the list has to add up to the Term Average printed beneath it**.
+Under DO 017 s. 2026 the pair is one learning area counted once, and prints
+as a parent row with its two components indented under it; under
+master-spec §17 it is two ordinary subjects, listed flat. This module draws
+whatever it is handed and doesn't know which rule applied — the indent
+arrives already in the name, exactly as it does on the SF9.
 """
 
 import io
@@ -38,10 +41,15 @@ CARDS_ACROSS = 2
 CARDS_DOWN = 4
 CARDS_PER_PAGE = CARDS_ACROSS * CARDS_DOWN
 
-# How many subject lines fit before the card has to elide. A term rarely
-# carries more than seven for one learner, but the card must degrade
-# gracefully rather than overrun into the one beneath it.
-MAX_SUBJECT_LINES = 8
+# How many subject lines fit before the card has to elide.
+#
+# The geometry allows about 14.9 lines at 7.6pt between the first subject
+# line and the rule above TERM AVERAGE, so 12 leaves room for the "+N more"
+# line and a margin of error. It was 8 while the Grade 11 language pair
+# printed as two flat rows; under DO 017 the pair prints as a parent plus
+# two indented components, which is three lines, and a Grade 11 term with
+# three electives would have elided real subjects at the old cap.
+MAX_SUBJECT_LINES = 12
 
 
 @dataclass

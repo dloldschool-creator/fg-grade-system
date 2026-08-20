@@ -1450,3 +1450,171 @@ current number.
       the page renders a control per subject, and resolving the subject,
       terms and current assignment in that loop would be ~60 round trips
       per rerun.
+- [x] **DepEd Order 017 s. 2026 — the unit system** (2026-08-20, asked as
+      "summarise how it affects the computations and how to fix it", then
+      "fix it and make it flexible for the future").
+      **The order makes both averages unit-weighted, and that is the whole
+      change to the arithmetic.** `Σ(grade × units) ÷ Σ(units)` for the
+      Term Average and the General Average alike, with Table 19 setting
+      the units: core 2 per term, academic elective 3, arts elective 6,
+      TechPro elective 4 in Grade 11 and **12** in Grade 12, work
+      immersion 12. Annual units are per-term × the terms the subject
+      actually ran, which is how a three-term core reaches 6 and a
+      one-term elective 3.
+      Reading it took some doing: the PDF is a 100-page scan with no text
+      layer, and no renderer was installed, so the page images were pulled
+      out of the file with pypdf and read directly.
+      **How much it matters depends entirely on whether units differ
+      inside one average.** DepEd's own Grade 12 cross-track example —
+      eight 3-unit electives and one 12-unit TechPro elective — is **87**
+      flat and **89** weighted. Their Grade 11 Term 1 example is 82.5 flat
+      (so 83) and exactly 82 weighted. Where every subject in a term
+      carries the same units, weighting changes nothing, which is a useful
+      thing to be able to assert.
+      **`weighted_average` is the only averaging implementation**, and
+      unweighted is the same function with every unit forced to 1. The two
+      policies therefore cannot disagree about anything except the
+      weights, and there is no second code path to drift. `AveragingMethod`
+      is defined in `grading_engine.py` and re-exported by
+      `app/models/enums.py` rather than the other way round, so the engine
+      stays free of any `app.models` import and can never influence the
+      app's import order — the same property `section_access.py` was given
+      deliberately.
+      **Two curricula run at once and both are correct**, which is the
+      thing that shaped the design. DO 017 ¶7 phases SSHS in by grade
+      level — Grade 11 this year, Grade 12 not until SY 2027-2028 — so a
+      Grade 11 General Average is weighted and a Grade 12 one is not.
+      That ruled out a setting or a constant, so the rules hang off
+      `grading_policy_versions` with a new `effective_grade_level_id`, and
+      `app/curriculum_policy.py` picks the most specific ACTIVE version.
+      Every new column defaults to the pre-DO-017 behaviour, so the
+      migration alone changes no number anywhere; `scripts/apply_do17_units.py`
+      is what switches it on, dry-run by default.
+      Units resolve offering → subject → category → **1**. The fallback is
+      1 and not 0 on purpose: an unconfigured subject has to keep counting
+      once, exactly as it did before units existed, rather than silently
+      dropping out of the denominator.
+      **Two things the order does not settle on its own**, so both are
+      stored as switches rather than decided in code, and the school
+      answered both the same day. Its Table 1 makes the language pair one
+      core subject while master-spec §17 says count the two components
+      separately — **the pair now counts once, at one core subject's
+      weight (2 units, not 2 + 2)**, which leaves §17's text out of date
+      and needing an amendment that is not ours to make. And its worked
+      examples weight **unrounded** subject finals (78.66… where the same
+      table prints 78), while the same annex prints that subject as **78
+      on p. 84 and 79 on p. 86** — set to unrounded, because that is what
+      reproduces DepEd's own totals.
+      **Display and computation moved separately, which is the useful
+      part.** The instruction was that the pair "still appear as
+      parent-component but follow the new computation", and those are
+      genuinely independent: the pair now prints on the *term card* the
+      way §16 has always printed it on the report card — parent row
+      carrying the grade that counts, components indented beneath for
+      information — while contributing one weighted entry. The old term
+      card listed the two components flat because the old Term Average
+      counted both. The invariant is unchanged and is the whole reason
+      this is delicate: the printed list and the average must come from
+      the same switch, or the card shows a list that doesn't add up to the
+      figure under it. `MAX_SUBJECT_LINES` went 8 → 12 for it; the card
+      geometry allows about 14.9 lines, so 8 was conservative and three
+      lines for the pair would have elided real subjects.
+      **Both grade levels moved, not just Grade 11.** ¶7 keeps Grade 12 on
+      the 2016 curriculum for SY 2026-2027 *only for learners not enrolled
+      in pilot schools*, and FGNMHS piloted under DepEd Memorandum 048 s.
+      2025 — so the exemption doesn't apply and the policy version is left
+      unscoped by grade level. `effective_grade_level_id` stays on the
+      table anyway: the phased case is the general one, and the machinery
+      cost nothing once the resolution was written. It matters most for
+      Grade 12 TechPro, where an elective is **12 units per term** — the
+      heaviest weight in Table 19, six times a core.
+      `tests/test_do17_unit_system.py` reproduces all seven Annex E tables
+      exactly. They are worth having because a unit-weighting bug does not
+      raise: it produces a slightly different plausible number, 87 where
+      the answer is 89, and the only way to catch that is to check against
+      arithmetic someone else published. Two of them caught real bugs
+      while being written — `units_from_hours(320, 3)` returning
+      4.000000000000000000000000001 because it divided before multiplying,
+      and a test of my own that asserted rounded and unrounded finals
+      differ on the Annex E dataset when they happen not to (78.66… and
+      95.33… round to 79 and 95, and the thirds cancel). The second was my
+      error, not the code's; the earlier claim of "85.69" came from using
+      DepEd's misprinted 78.
+      **Frozen into the permanent record, not referenced from it.** The
+      units, the method and the unrounded finals are copied into
+      `learner_academic_records*` for the same reason §38 copies subject
+      names: Table 19 is a DepEd table and DepEd revises tables, and a
+      record that stored a reference would be silently re-derived by the
+      next revision. `total_units` also surfaces on the Grade Summary
+      screen when weighting is on, because an adviser can check five
+      grades in their head but not five grades against thirty-nine units.
+      **What DO 017 does not change**, despite being about grading: the
+      passing mark, retention, promotion, graduation and honors are all
+      deferred by §25 and §26 to a forthcoming assessment/awards policy.
+      Nothing in `passing_grade` or the award tiers was touched. One
+      non-arithmetic rule from it is noted and not yet built: a learner
+      taking more than the minimum number of electives must pass **all**
+      of them to graduate (p. 15).
+      Incidentally settles the four-quarter question in the other
+      direction — SSHS is built on terms, and Annex D2 ships an official
+      three-term class program for the outgoing Grade 12 cohort.
+      **Migrated live 2026-08-20**, 27 columns, and verified to have
+      changed nothing: every summary row still read `UNWEIGHTED`
+      afterwards and no units were written. That separation is the point —
+      schema in one step, curriculum data in another, and the recompute
+      that actually moves numbers in a third the school schedules itself.
+      Two things surfaced while applying it, both worth keeping:
+      1. **A dry run that reads the pre-state reports nothing anyone can
+         act on.** `apply_do17_units.py` listed all 30 subjects as having
+         unresolved units, including the cores that were about to get 2
+         from their category — because `report_undecided` queried the
+         database before the writes it was proposing. It now stages every
+         change into the session and rolls back instead of committing, so
+         the report describes the state the run *would* produce. Corrected
+         output: 5 category defaults, 6 TechPro overrides, the combined
+         area at 2, one policy version, and **zero** unresolved subjects.
+      2. **`test_assigning_and_unassigning_are_audit_logged` was querying
+         the whole audit log.** It picked "the TEACHER_ASSIGNED entry" out
+         of every one ever written and compared it to the current row, so
+         it passed only while exactly one existed. These tests run against
+         the real database and `audit_logs` accumulates, so the second
+         full-suite run of the day broke it — asserting on a Tourism
+         Services row from an earlier run. Now snapshots the existing ids
+         and considers only what the test itself wrote. Pre-existing, and
+         unrelated to DO 017 except that running the suite twice is what
+         exposed it.
+      **`docs/master-spec.md` §17 amended 2026-08-20**, with approval, plus
+      NOTE 7 — which stated the same rule from the other direction and would
+      have left the spec contradicting itself. §17 now carries the weighted
+      formula and the pair counted once, with the superseded flat rule kept
+      at the foot of the section rather than deleted: a Term Average
+      computed before the amendment was correct under the rule then in
+      force, and §59 forbids recomputing it. A new §17A holds Table 19, the
+      annual-units rule, the pilot-school applicability and the note that
+      units are versioned policy data rather than constants.
+      §14 was left alone and is still right — the pair is *encoded and
+      stored* as two subjects; only the averaging changed. §68's Test A
+      likewise still holds. §19, §20 and §61 remain on the flat formula and
+      need the same approval.
+      **§19, §20 and §61 amended the same day**, on a second approval, so
+      the spec no longer carries a flat formula anywhere. §19 gained the
+      weighted General Average plus two clarifications the code already
+      implemented but nothing had written down: that the **unrounded**
+      subject final is what gets weighted (DO 017's annex shows the same
+      subject as 78 on one page and 79 on another, so the arithmetic is the
+      only reliable guide), and that the lowest-final-grade and
+      failing-subject *counts* are deliberately **not** weighted — a
+      12-unit subject that fails is one failing learning area, not twelve.
+      §20 got the Grade 12 case, where it bites hardest: a Tech-Pro
+      Elective is 12 units against an Academic Elective's 3, and DepEd's
+      own cross-track example is 87 flat against 89 weighted. §61 now names
+      **two** mistakes rather than one — averaging the Term Averages, and
+      taking a flat mean of the Final Grades — since after DO 017 the
+      second is as wrong as the first and looks just as reasonable.
+      Each amended section keeps its superseded formula at the foot rather
+      than deleting it, for the §59 reason: figures computed under the old
+      rule were correct then and must not read as errors now.
+      A grep for every `AVERAGE(` left in the spec confirmed the remaining
+      ones are all **within** a subject — §14 and §15 combining the language
+      components, §18 averaging a subject's own terms — where units never
+      apply. §68 still has no required test for the unit system.

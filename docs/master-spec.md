@@ -764,31 +764,73 @@ This rule applies to Grade 11.
 
 # 17. TERM AVERAGE COMPUTATION
 
-Within each term, calculate the Term Average using every active subject actually encoded for the learner.
+> **Amended 2026-08-20** to follow DepEd Order No. 017, s. 2026 (Strengthened
+> Senior High School Curriculum), Annex E. Two things changed: the Term
+> Average is now **weighted by subject units** rather than a flat average, and
+> the Grade 11 language pair is counted **once** rather than twice. The
+> superseded rule is recorded at the end of this section, because a Term
+> Average computed before the amendment was correct under the rule then in
+> force and must not be treated as an error.
 
-For Grade 11, Effective Communication and Mabisang Komunikasyon remain two separate subjects for purposes of the **Term Average**.
+Within each term, calculate the Term Average using every active subject actually encoded for the learner, weighted by the units each subject carries that term.
 
 Formula:
 
 Term Average =\
 ROUND(\
-AVERAGE(all active subject grades for that term),\
+SUM(subject grade × subject units for that term)\
+/\
+SUM(subject units for that term),\
 0\
 )
 
-Example for a G11 academic section:
+Units come from DO 017 Annex E, Table 19 — see Section 17A.
 
-- Effective Communication
-- Mabisang Komunikasyon
-- General Mathematics
-- General Science
-- Life and Career Skills
-- Pag-aaral ng Kasaysayan at Lipunang Pilipino
-- Term-specific elective
+For Grade 11, Effective Communication and Mabisang Komunikasyon are counted **once**, as the single combined learning area, using the combined term grade defined in Section 15. DO 017 Table 1 establishes the pair as one 160-hour core subject, so it carries **one core subject's units (2)** — not the sum of its two components, which would weight the languages twice.
 
-These are seven term-grade entries.
+Example for a G11 academic section, Term 1:
 
-Do not substitute the combined language grade when calculating the Term Average.
+| Entry | Grade | Units |
+|---|---|---|
+| Effective Communication / Mabisang Komunikasyon (combined) | 85 | 2 |
+| General Mathematics | 90 | 2 |
+| General Science | 76 | 2 |
+| Life and Career Skills | 80 | 2 |
+| Pag-aaral ng Kasaysayan at Lipunang Pilipino | 93 | 2 |
+| Term-specific elective | 76 | 3 |
+
+Six entries, 13 units. Term Average = ROUND(1076 / 13) = 83.
+
+**Display is not the same question as computation.** The pair is counted once, but it still *prints* the way Section 16 prints it on the report card: the parent row carries the combined grade that counts, with its two component subjects listed beneath it, indented, showing their own term grades. The components are shown so the figure can be checked; they are not added in again. The printed list must always reconcile with the Term Average beneath it.
+
+## Superseded rule (in force before 2026-08-20)
+
+Term Average was the flat average of every active subject grade, and Effective Communication and Mabisang Komunikasyon were counted as **two separate entries** — seven entries for the section above, rather than six. Grades finalized under that rule stand; Section 59's prohibition on retroactive recomputation applies to this amendment as it does to any other.
+
+---
+
+# 17A. SUBJECT UNITS
+
+DO 017, s. 2026, Annex E, Table 19 assigns each subject classification an equivalent number of units **per term**:
+
+| Subject classification | Instructional hours | Units per term |
+|---|---|---|
+| Core Subjects | 160 across 3 terms | 2 |
+| Academic Electives | 80 per term | 3 |
+| Arts Electives (Arts Apprenticeship, Creative Production and Presentation) | 160 per term | 6 |
+| Tech-Pro Electives, Grade 11 | 320 across 3 terms | 4 |
+| Tech-Pro Electives, Grade 12 | 320 per term | 12 |
+| Work Immersion | 320 per term | 12 |
+
+Every row is the same rate: **3 units per 80 hours of instruction in a term**. A subject DepEd adds later therefore needs its prescribed hours recorded, not a new rule.
+
+A subject's **annual** units are its units per term multiplied by the number of terms it is actually offered in, taken from Section Subject Offerings (Section 48) — six for a three-term core subject, three for a one-term academic elective. This is what the annual General Average weights by.
+
+The combined Grade 11 language area carries **2** units per term as a single learning area.
+
+**Applicability.** DO 017 phases the Strengthened SHS Curriculum in by grade level — Grade 11 in SY 2026-2027, Grade 12 in SY 2027-2028 — but exempts only learners *not* enrolled in pilot schools. FGNMHS is a pilot school under DepEd Memorandum No. 048, s. 2025, so both grade levels use this system from SY 2026-2027.
+
+**Versioning.** Units and the averaging rules are stored as versioned policy data, not fixed in code, so a later DepEd revision applies to new school years without altering finalized ones (Sections 6 and 59).
 
 ---
 
@@ -826,6 +868,12 @@ If a required grade is missing:
 
 # 19. GRADE 11 GENERAL AVERAGE
 
+> **Amended 2026-08-20** to follow DepEd Order No. 017, s. 2026, Annex E.
+> The General Average is now **weighted by each subject's annual units**
+> rather than a flat average of Final Grades. The rule about counting the
+> language pair once is unchanged and was already correct. The superseded
+> formula is recorded at the end of this section.
+
 Grade 11 annual General Average has a special rule.
 
 Do NOT count:
@@ -839,39 +887,69 @@ Instead count the combined:
 
 **Effective Communication / Mabisang Komunikasyon Final Grade**
 
-only once.
+only once, carrying the combined learning area's own annual units (Section 17A) — **not** the sum of its two components' units, which would weight the languages twice and reintroduce exactly the double-counting this section exists to prevent.
 
 Therefore:
 
 General Average =\
 ROUND(\
-(\
-Combined Language Final Grade\
-\+ sum of all other applicable final grades\
-)\
+SUM(applicable Final Grade × that subject's annual units)\
 /\
-(\
-1\
-\+ number of other applicable final subjects\
-),\
+SUM(applicable annual units),\
 0\
 )
 
-The Grade 11 lowest final grade and number of failing learning areas must also use the combined language final ONCE rather than counting the two language components separately.
+where the applicable learning areas are the combined language area plus every other subject the learner was actually offered, each counted once, and annual units are as defined in Section 17A.
+
+## Which Final Grade is weighted
+
+DO 017's worked examples weight the **unweighted, unrounded** subject final — a three-term subject on 76 / 78 / 82 enters the year's total as 78.666…, not as the 79 that prints on the report card. The order's own annex is inconsistent about this: it shows that subject's Final Grade as 78 on one page and 79 on another. The system follows the arithmetic rather than either printed value, because that is what reproduces DO 017's published totals.
+
+The **reported** Final Grade — the whole number on SF9 and SF10 — is unaffected and remains as defined in Section 18. Only the value fed into the weighting differs, and which of the two is used is versioned policy data, not a constant.
+
+## What is NOT weighted
+
+The Grade 11 **lowest final grade** and the **number of failing learning areas** must use the combined language final ONCE, as before, but they are a minimum and a count — units do not enter into either. A 12-unit subject that fails is one failing learning area, not twelve.
+
+## Superseded rule (in force before 2026-08-20)
+
+The General Average was the flat mean of the applicable Final Grades:
+
+ROUND( (Combined Language Final + sum of all other applicable final grades) / (1 + number of other applicable final subjects), 0 )
+
+Grades finalized under that rule stand; Section 59 applies.
 
 ---
 
 # 20. GRADE 12 GENERAL AVERAGE
 
+> **Amended 2026-08-20** to follow DepEd Order No. 017, s. 2026, Annex E —
+> the same weighting change as Section 19. The superseded formula is
+> recorded at the end of this section.
+
 Unless a future policy/profile explicitly defines another combined learning area:
 
 General Average =\
 ROUND(\
-AVERAGE(all applicable Grade 12 Final Grades),\
+SUM(applicable Final Grade × that subject's annual units)\
+/\
+SUM(applicable annual units),\
 0\
 )
 
-Term-specific electives must appear only once in the annual computation.
+Section 19's rules on which Final Grade is weighted, and on what is not weighted, apply here identically.
+
+Term-specific electives must appear only once in the annual computation, carrying the units of the single term they ran in.
+
+**Weighting matters most in Grade 12.** A Tech-Pro Elective is 12 units per term there — the heaviest weight in Table 19, six times a Core Subject and four times an Academic Elective. DO 017's own Grade 12 Academic-with-cross-track example, eight 3-unit academic electives against one 12-unit Tech-Pro elective, gives **87** as a flat average and **89** weighted. Two marks, on the exact shape this school's Grade 12 Tech-Pro sections have.
+
+**Applicability.** DO 017 would ordinarily keep Grade 12 on the 2016 K to 12 SHS curriculum for SY 2026-2027, but that exemption covers only learners not enrolled in pilot schools. FGNMHS is a pilot school, so this section applies from SY 2026-2027 — see Section 17A.
+
+## Superseded rule (in force before 2026-08-20)
+
+ROUND( AVERAGE(all applicable Grade 12 Final Grades), 0 )
+
+Grades finalized under that rule stand; Section 59 applies.
 
 ---
 
@@ -2147,13 +2225,23 @@ Do not calculate the same official result using separate independent formulas in
 
 This is important.
 
-The annual General Average must be calculated from applicable **Final Grades according to subject structure**, including the Grade 11 combined language rule.
+The annual General Average must be calculated from applicable **Final Grades according to subject structure**, including the Grade 11 combined language rule, and **weighted by each subject's annual units** (Sections 17A, 19, 20).
 
-Do NOT simply do:
+There are therefore two distinct mistakes to avoid, not one.
+
+**First**, do NOT do:
 
 (Term 1 Average + Term 2 Average + Term 3 Average) / 3
 
-because different electives can be offered during different terms.
+because different electives can be offered during different terms, so the three Term Averages are not built from the same set of subjects and averaging them again is meaningless.
+
+**Second** — added 2026-08-20 — do NOT take the flat mean of the Final Grades either:
+
+AVERAGE(all applicable Final Grades)
+
+because subjects do not carry equal weight. Under DO 017, s. 2026, a Grade 12 Tech-Pro Elective is 12 units and an Academic Elective is 3, so treating them as one entry each understates the subject the learner spent four times as long on. On DepEd's own worked example this is the difference between **87** and **89**.
+
+Both mistakes produce a plausible number rather than an error, which is why this section exists.
 
 ---
 
@@ -2394,6 +2482,53 @@ Missing grade must remain NULL.
 
 It must never be converted to zero.
 
+### Test G – Unit-weighted averages
+
+> Added 2026-08-20, alongside the Section 17/19/20 amendments.
+
+A unit-weighting error does not raise. It produces a slightly different, entirely plausible number — the wrong mark, on a card that goes home. So each case below must assert both the correct answer **and** the specific wrong answer it replaces.
+
+**G1 – Term Average, Grade 11 academic section, Term 1**
+
+| Entry | Grade | Units |
+|---|---|---|
+| Effective Communication (encoded) | 80 | — |
+| Mabisang Komunikasyon (encoded) | 90 | — |
+| → combined language area | 85 | 2 |
+| General Mathematics | 90 | 2 |
+| General Science | 76 | 2 |
+| Life and Career Skills | 80 | 2 |
+| Pag-aaral ng Kasaysayan at Lipunang Pilipino | 93 | 2 |
+| Term-specific elective | 76 | 3 |
+
+Expected: 13 units, weighted total 1076, **Term Average = 83**.
+
+Must NOT be **84**, which is the pre-amendment answer — the flat mean of seven entries with the two language components counted separately.
+
+**G2 – General Average, Grade 12 academic with cross-track**
+
+Eight Academic Electives at 3 units each (76, 88, 90, 93, 95, 86, 78, 81) and one Tech-Pro Elective at 12 units (96).
+
+Expected: 36 units, weighted total 3213, **General Average = 89**.
+
+Must NOT be **87**, the flat mean of the nine Final Grades. This is DO 017's own worked example and the widest divergence it publishes.
+
+**G3 – The language pair carries one subject's units**
+
+The combined area must weigh **2** units per term, not 4. Counting each component at 2 is the double-count Section 19 exists to prevent, and it survives a casual reading because the resulting average is still in range.
+
+**G4 – Units do not change a subject's own Final Grade**
+
+A three-term subject on 80 / 85 / 90 has a Final Grade of 85 whatever its units. Units weight subjects against each other; they never apply within one subject (Sections 14, 15, 18).
+
+**G5 – Weighting does not defeat null handling**
+
+If any applicable grade is still NULL, the weighted average must be NULL/INCOMPLETE — never a weighted average of the subjects that happen to be encoded, and never with the missing subject's units quietly dropped from the denominator.
+
+**G6 – Table 19 reproduced**
+
+Every classification in Section 17A must return its published unit value, and the whole of DO 017 Annex E's seven worked tables should be reproduced as fixtures. They are published figures rather than values this project chose, which is what makes them worth testing against.
+
 ---
 
 # 69. DATABASE TESTING
@@ -2561,11 +2696,17 @@ Keep the learner academic database independent of the temporary printable SF10 l
 
 This Grade 11 computation must be unit-tested. It is a major source of possible General Average errors if implemented incorrectly.
 
-### NOTE 7 — Term Average and annual General Average use different subject treatment
+### NOTE 7 — Term Average and annual General Average treat the language pair the same way
 
-Term Average counts Effective Communication and Mabisang Komunikasyon separately because both are actually graded that term.
+> **Amended 2026-08-20 alongside Section 17**, and reversed. This note
+> previously recorded the two figures as deliberately *different*, which was
+> the single most bug-prone rule in the system.
 
-Annual Grade 11 General Average counts the combined learning area only once.
+Effective Communication and Mabisang Komunikasyon are counted **once**, as the combined learning area, in both the Term Average (Section 17) and the annual Grade 11 General Average (Section 19). DO 017, s. 2026, Table 1 establishes the pair as one 160-hour core subject, so there is no longer a figure in which the two components count separately.
+
+What still differs between the two figures is the **weight**, not the treatment: the Term Average uses each subject's units for that term, the General Average uses its annual units (Section 17A).
+
+Both components keep their own encoded term grades and their own Final Grades in the database; Section 16 governs which of those a given form prints.
 
 ### NOTE 8 — Elective subjects must not be averaged across terms in which they were not offered
 

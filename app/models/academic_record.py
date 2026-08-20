@@ -81,6 +81,14 @@ class LearnerAcademicRecord(UUIDPKMixin, Base):
     # from — kept as a number so a later policy edit can't change how a
     # past record reads (§38).
     passing_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    # How the General Average above was computed, and out of how many units.
+    # Frozen for the same reason the subject names are: DO 017's Table 19 is
+    # a DepEd table, and DepEd revises tables. A record that stored only the
+    # number would be silently re-explained by the next revision, and one
+    # that stored a *reference* to the policy would be silently recomputed —
+    # both are the failure §38 exists to prevent.
+    averaging_method: Mapped[str | None] = mapped_column(String)
+    total_units: Mapped[float | None] = mapped_column(Numeric(7, 2))
     grading_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("grading_policy_versions.id", ondelete="SET NULL")
     )
@@ -136,6 +144,16 @@ class LearnerAcademicRecordSubject(UUIDPKMixin, Base):
     final_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
     remark: Mapped[str | None] = mapped_column(String)
 
+    # What this learning area contributed to the General Average, frozen
+    # (§38): its per-term unit value, the annual units that value produced
+    # once multiplied by the terms it actually ran, and the unrounded final
+    # that was weighted — DO 017's own arithmetic uses 78.666… where the
+    # printed card shows 78, so storing only the printed value would make a
+    # finalized General Average impossible to reproduce from its own record.
+    units_per_term: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    units: Mapped[float | None] = mapped_column(Numeric(7, 2))
+    unrounded_final_grade: Mapped[float | None] = mapped_column(Numeric(9, 4))
+
     is_combined_parent: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_component: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # A component's own Final Grade, which §16 blanks on the printed card
@@ -155,6 +173,9 @@ class LearnerAcademicRecordTerm(UUIDPKMixin, Base):
     term_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     term_name: Mapped[str | None] = mapped_column(String)
     term_average: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    # As on the header: how this term's average was reached, frozen (§38).
+    averaging_method: Mapped[str | None] = mapped_column(String)
+    total_units: Mapped[float | None] = mapped_column(Numeric(7, 2))
     completion_status: Mapped[CompletionStatus] = mapped_column(
         default=CompletionStatus.INCOMPLETE, server_default=CompletionStatus.INCOMPLETE.value
     )

@@ -73,7 +73,12 @@ def test_loading_a_roster_costs_a_fixed_number_of_queries(session, roster):
     inside it is an IN(...) over the whole list."""
     with QueryCounter() as counter:
         load_report_context(session, roster)
-    assert counter.count <= 8, (
+    # Was 8; 9 since the context also resolves the section's averaging rules
+    # (DO 017 s. 2026), which `build_term_subject_rows` needs to decide
+    # whether the language pair prints as one row or two. One query for the
+    # whole section — the number that must not move is the per-learner one,
+    # asserted below.
+    assert counter.count <= 9, (
         f"{counter.count} queries to load a {len(roster)}-learner roster; "
         "something inside load_report_context is querying per learner"
     )

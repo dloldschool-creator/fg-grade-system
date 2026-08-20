@@ -30,7 +30,12 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.academic_structure import GradeLevel, Strand, Track
 from app.models.awards import AwardPolicy, AwardPolicyVersion
-from app.models.enums import AwardScope, PolicyVersionStatus, SchoolYearStatus
+from app.models.enums import (
+    AveragingMethod,
+    AwardScope,
+    PolicyVersionStatus,
+    SchoolYearStatus,
+)
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import Role
 from app.models.subjects import (
@@ -83,20 +88,37 @@ STRANDS = [
     ("TECHPRO", "HE", "Hospitality and Tourism (Home Economics)", 4),
 ]
 
+# (code, name, units_per_term) — units from DepEd Order 017 s. 2026, Table 19.
+#
+# `None` means DO 017 does not settle it from the category alone, so the
+# category weights 1 until someone decides; see `scripts/apply_do17_units.py`,
+# which reports those rather than guessing. FIELD_EXPOSURE_ARTS_CPI is the one
+# such case here: Table 19 puts Arts Apprenticeship and Creative Production at
+# 6 units (160 hours per term) but Field Exposure is an ordinary 80-hour
+# academic elective at 3, and this single category holds both. Resolve it per
+# subject via `subjects.units_per_term`.
+#
+# TECHPRO_ELECTIVE is also None on purpose, for a different reason: DO 017
+# gives it 4 units in Grade 11 (320 hours across 3 terms) and 12 in Grade 12
+# (320 hours in one term). One category, two values — so it is set per subject
+# from the subject's grade level, below.
 SUBJECT_CATEGORIES = [
     # Split from the spec's single "Core / Other Academic Elective" weight
     # profile (§9) — that grouping no longer matters now that grade entry
     # is direct-only (Mode B), but the term-offering distinction it
     # papered over does: CORE_SUBJECT is offered/averaged across all 3
     # terms, OTHER_ACADEMIC_ELECTIVE is offered in a single term only.
-    ("CORE_SUBJECT", "Core Subject"),
-    ("OTHER_ACADEMIC_ELECTIVE", "Other Academic Elective"),
-    ("FIELD_EXPOSURE_ARTS_CPI", "Field Exposure / Arts Apprenticeship / Creative Production & Innovation"),
-    ("ARTS_SPORTS_HEALTH", "Arts / Sports / Health and Wellness"),
-    ("RESEARCH_DESIGN_INNOVATION", "Research / Design and Innovation"),
-    ("TECHPRO_ELECTIVE", "TechPro Elective"),
-    ("WORK_IMMERSION", "Work Immersion"),
+    ("CORE_SUBJECT", "Core Subject", 2),
+    ("OTHER_ACADEMIC_ELECTIVE", "Other Academic Elective", 3),
+    ("FIELD_EXPOSURE_ARTS_CPI", "Field Exposure / Arts Apprenticeship / Creative Production & Innovation", None),
+    ("ARTS_SPORTS_HEALTH", "Arts / Sports / Health and Wellness", 3),
+    ("RESEARCH_DESIGN_INNOVATION", "Research / Design and Innovation", 3),
+    ("TECHPRO_ELECTIVE", "TechPro Elective", None),
+    ("WORK_IMMERSION", "Work Immersion", 12),
 ]
+
+# DO 017 Table 19, the two values one category cannot express.
+TECHPRO_UNITS_BY_GRADE_LEVEL = {"G11": 4, "G12": 12}
 
 # (code, official_name, short_name, grade_level, category, track_restriction)
 SUBJECTS = [
@@ -190,8 +212,13 @@ def seed() -> None:
             )
 
         categories_by_code = {}
-        for code, name in SUBJECT_CATEGORIES:
-            cat, _ = get_or_create(session, SubjectCategory, code=code, defaults=dict(name=name))
+        for code, name, units_per_term in SUBJECT_CATEGORIES:
+            cat, _ = get_or_create(
+                session,
+                SubjectCategory,
+                code=code,
+                defaults=dict(name=name, units_per_term=units_per_term),
+            )
             categories_by_code[code] = cat
 
         school_year, _ = get_or_create(
@@ -226,6 +253,9 @@ def seed() -> None:
             name="Standard SHS Grading",
             defaults=dict(description="Passing-grade policy for direct term-grade entry (Mode B)."),
         )
+        # v1 — the pre-DO-017 baseline: unweighted, §17 language rule. Kept
+        # as the fallback any later version is measured against, and because
+        # the live database already has it; nothing is enrolled under it now.
         get_or_create(
             session,
             GradingPolicyVersion,
@@ -236,6 +266,41 @@ def seed() -> None:
                 passing_grade=75,
                 min_grade=60,
                 max_grade=100,
+                status=PolicyVersionStatus.ACTIVE,
+            ),
+        )
+        # v2 — the Strengthened SHS Curriculum's unit-weighted averaging
+        # (DO 017 s. 2026, Annex E), for **both grade levels**.
+        #
+        # DO 017 ¶7 phases SSHS in by grade level and leaves Grade 12 on the
+        # 2016 K to 12 curriculum for SY 2026-2027 — *except* in pilot
+        # schools, and FGNMHS is one (DepEd Memorandum 048 s. 2025). So the
+        # exemption doesn't apply here and both grade levels are SSHS this
+        # year. `effective_grade_level_id` is left NULL accordingly; it stays
+        # on the table because a school that isn't a pilot needs it, and
+        # because scoping a future policy to one grade level is a normal
+        # thing to want.
+        #
+        # `average_from_unrounded_finals=True` is the arithmetic Annex E's
+        # worked examples actually perform.
+        # `combine_language_pair_in_term_average=True` follows DO 017 Table 1,
+        # which makes Effective Communication / Mabisang Komunikasyon a single
+        # core subject: it is counted once, at one core subject's weight. It
+        # still *prints* as a parent row with its two components indented
+        # beneath — the display is §16's, unchanged; only the arithmetic moved.
+        get_or_create(
+            session,
+            GradingPolicyVersion,
+            grading_policy_id=grading_policy.id,
+            version_number=2,
+            defaults=dict(
+                effective_school_year_id=school_year.id,
+                passing_grade=75,
+                min_grade=60,
+                max_grade=100,
+                averaging_method=AveragingMethod.UNIT_WEIGHTED,
+                average_from_unrounded_finals=True,
+                combine_language_pair_in_term_average=True,
                 status=PolicyVersionStatus.ACTIVE,
             ),
         )
@@ -254,6 +319,13 @@ def seed() -> None:
                     track_restriction_id=(
                         tracks_by_code[track_code].id if track_code else None
                     ),
+                    # A TechPro elective's units depend on its grade level, so
+                    # the category can't carry them (DO 017 Table 19).
+                    units_per_term=(
+                        TECHPRO_UNITS_BY_GRADE_LEVEL.get(gl_code)
+                        if cat_code == "TECHPRO_ELECTIVE"
+                        else None
+                    ),
                 ),
             )
             subjects_by_code[code] = subject
@@ -263,7 +335,10 @@ def seed() -> None:
             CombinedLearningArea,
             name="Effective Communication / Mabisang Komunikasyon",
             grade_level_id=grade_levels_by_code["G11"].id,
-            defaults=dict(display_order=1),
+            # 2 units, not 4: DO 017 Table 1 makes the pair a single
+            # 160-hour core subject, so it carries one core subject's
+            # weight however many components it is taught in.
+            defaults=dict(display_order=1, units_per_term=2),
         )
         for i, code in enumerate(["G11-EFFCOMM", "G11-MABKOM"]):
             get_or_create(

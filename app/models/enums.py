@@ -1,5 +1,10 @@
 import enum
 
+# Defined in app/grading_engine.py and re-exported here so the column type is
+# looked up where every other enum lives. The engine owns it because the
+# engine must stay free of any `app.models` import — see its docstring.
+from app.grading_engine import AveragingMethod  # noqa: F401
+
 
 class SchoolYearStatus(str, enum.Enum):
     DRAFT = "DRAFT"

@@ -15,7 +15,7 @@ from app.auth import require_role
 from app.display_time import format_time
 from app.grading_service import recompute_enrollment_grades
 from app.report_card import build_learning_area_rows, load_report_context
-from app.models.enums import CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
+from app.models.enums import AveragingMethod, CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
 from app.models.grades import (
     AnnualGradeSummary,
     CombinedLearningAreaResult,
@@ -36,6 +36,14 @@ def _fmt(value):
     """Grades are always whole numbers (every formula in the spec rounds,
     §60) — display as a plain int, not the raw Decimal(5,2)'s "93.00"."""
     return int(value) if value is not None else DASH
+
+
+def _fmt_units(value):
+    """Units are usually whole (2, 3, 6, 12) but the column allows halves,
+    so drop a trailing ".00" without hiding a real fraction."""
+    if value is None:
+        return DASH
+    return str(int(value)) if value == int(value) else str(value.normalize())
 
 
 def _finalization_section(session, current_user, enrollment: Enrollment) -> None:
@@ -195,6 +203,15 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
     col3.metric("Completion", summary.completion_status.value if summary else "not computed yet")
     if summary and summary.failed_subject_count:
         st.caption(f"{summary.failed_subject_count} subject(s) currently below passing.")
+    # How the General Average was reached. Shown only when it is weighted,
+    # because that is the case where the number cannot be checked by eye —
+    # an adviser can average five grades in their head, but not five grades
+    # against thirty-nine units. A wrong unit is otherwise invisible.
+    if summary is not None and summary.averaging_method == AveragingMethod.UNIT_WEIGHTED:
+        st.caption(
+            f"Unit-weighted over {_fmt_units(summary.total_units)} units "
+            "(DepEd Order 017 s. 2026)."
+        )
 
     # Term Averages (§17) — shown separately from the subject table below
     # because they're computed a different way: the Grade 11 language pair
@@ -209,6 +226,8 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
             col.metric(
                 f"{term_names.get(ts.term_id, 'Term')} Average", str(_fmt(ts.term_average))
             )
+            if ts.averaging_method == AveragingMethod.UNIT_WEIGHTED:
+                col.caption(f"{_fmt_units(ts.total_units)} units")
 
     # Rows come from app/report_card.py, the single implementation of the
     # §16 combined-language display rule — shared with the generated SF9

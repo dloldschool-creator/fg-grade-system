@@ -68,19 +68,26 @@ those formulas with values written by our own grading engine via
 2. **NULL means "not yet encoded." Never default a missing grade/score to 0.**
    Blank grade ≠ zero grade, anywhere in the UI or a report.
 3. **Grade 11 combined-language rule** (Effective Communication / Mabisang
-   Komunikasyon): each is graded separately per term (both count separately
-   in the Term Average), but for the annual General Average the two are
-   combined into ONE virtual learning area (average of their two finals).
+   Komunikasyon): each is **encoded and stored** separately per term, but
+   for averaging the two are combined into ONE virtual learning area —
+   in the annual General Average (average of their two finals) **and, since
+   DO 017 s. 2026, in the Term Average too**, where the pair counts once at
+   one core subject's weight. It used to count twice there; spec §17 and
+   NOTE 7 were amended on 2026-08-20 to match.
    On Grade 11 SF9, the two component subjects show their term grades but
    their individual Final Grade cells stay BLANK — only the combined parent
-   row shows a Final Grade. Modeled via `combined_learning_areas` /
-   `combined_learning_area_components` tables, not hardcoded logic — this
-   rule is unit-tested (see spec Section 68, Test A) and is a major source
-   of General Average bugs if implemented wrong.
+   row shows a Final Grade. The term card now prints the same shape. Modeled
+   via `combined_learning_areas` / `combined_learning_area_components`
+   tables, not hardcoded logic — this rule is unit-tested (see spec Section
+   68, Test A) and is a major source of General Average bugs if implemented
+   wrong.
 4. **General Average is NOT the average of the three Term Averages.**
    It's computed from applicable subject Final Grades (which respect each
    subject's actual term-offering pattern — some electives run one term,
-   some two, some all three).
+   some two, some all three). **Since DepEd Order 017 s. 2026 those finals
+   are weighted by each subject's units, not averaged flat** — and so is
+   the Term Average. See "DO 017 and the unit system" below; the rule above
+   still holds, it is the *combining* step that changed.
 5. **Section Subject Offerings are the single source of truth** for what a
    learner is actually graded on — subject_profiles only seed defaults.
    Grade 12 "Elective 2"/"Elective 3" labels from the old workbook are
@@ -105,6 +112,103 @@ those formulas with values written by our own grading engine via
     tools before they encode the final number. Matches how the current
     Excel workbook actually operates. Do not re-add assessment-level entry
     without discussion.
+
+## DO 017 and the unit system
+
+**DepEd Order 017 s. 2026 (Strengthened SHS Curriculum), signed 4 June
+2026, effective SY 2026-2027.** Read Annex E before touching anything
+that averages. The PDF is a 100-page scan with no text layer; the parts
+that matter are reproduced as executable fixtures in
+`tests/test_do17_unit_system.py`, which is the fastest way to see what
+the order actually requires.
+
+**What changed.** The Term Average and the General Average are now
+**unit-weighted**: `Σ(grade × units) ÷ Σ(units)`, rounded half-up to a
+whole number. Table 19 sets the units — core 2 per term, academic
+elective 3, arts elective 6, TechPro elective 4 in Grade 11 and **12** in
+Grade 12, work immersion 12. Annual units are units-per-term × the terms
+the subject actually ran, so a three-term core is 6 and a one-term
+elective is 3.
+
+It matters most where units differ inside one average. On DepEd's own
+Grade 12 cross-track example — eight 3-unit electives and one 12-unit
+TechPro elective — the flat mean is **87** and the weighted answer is
+**89**. That is the shape the school's Grade 12 TechPro sections have.
+
+**Both grade levels are SSHS this year, because FGNMHS is a pilot
+school.** DO 017 ¶7 phases SSHS in by grade level — Grade 11 in
+SY 2026-2027, Grade 12 in SY 2027-2028 — but the ¶7 exemption keeping
+Grade 12 on the 2016 curriculum applies only to learners *not enrolled in
+pilot schools*, and this school piloted under DepEd Memorandum 048 s.
+2025 (confirmed 2026-08-20). So Grade 12 is unit-weighted here too, and
+its TechPro electives carry **12 units per term**, the heaviest weight in
+Table 19.
+
+The per-grade-level machinery still exists and should stay:
+`grading_policy_versions.effective_grade_level_id` is what would let two
+curricula coexist, which is the ordinary case for a non-pilot school and
+for any future phased change. Never write `if grade_level == "G11"`; the
+rules are resolved from a versioned policy row by
+`app/curriculum_policy.py`, and at equal specificity the **highest
+version number wins**, which is how DO 017's version supersedes the
+unweighted baseline without the baseline being deleted.
+
+**Where the pieces live:**
+
+- `app/grading_engine.py` — the arithmetic, still dependency-free.
+  `weighted_average` is the **only** averaging implementation; unweighted
+  is the same function with every unit forced to 1, so the two policies
+  cannot drift apart. `AveragingMethod` is defined here and re-exported by
+  `app/models/enums.py` — the arrow points that way so importing the
+  engine can never pull in `app.models` and disturb import order.
+- `app/curriculum_policy.py` — which rules apply, and the unit resolution
+  chain: offering → subject → category → 1. The fallback is **1, never
+  0**; an unconfigured subject must keep counting once, not vanish from
+  the average.
+- `grading_policy_versions` — the switches, all defaulting to pre-DO-017
+  behaviour, scoped by `effective_school_year_id` and the new
+  `effective_grade_level_id`. Most specific version wins.
+- `scripts/apply_do17_units.py` — writes the units and activates the
+  Grade 11 policy. Dry-run by default.
+
+**Two things DO 017 does not settle on its own**, both stored as switches
+rather than decided in code, and both now answered by the school:
+
+1. **`combine_language_pair_in_term_average` — True** (decided
+   2026-08-20). Table 1 makes Effective Communication / Mabisang
+   Komunikasyon a single 160-hour core subject, so the pair is counted
+   **once, at one core subject's weight (2 units)** — not 2 + 2. This
+   overrides master-spec §17's "count the two components separately" for
+   the Term Average. **§17 and NOTE 7 were amended to match on 2026-08-20**
+   (with approval); §17 now also carries the unit formula, and a new §17A
+   holds Table 19, the annual-units rule and the pilot-school
+   applicability. **§19, §20 and §61 were amended the same day**, so the
+   spec now carries the weighted formula throughout. §14, §15 and §18 were
+   deliberately left alone — they average a subject's *own* terms, which
+   units never touch.
+2. **`average_from_unrounded_finals` — True.** Annex E's arithmetic
+   weights 78.66… where its own table prints 78; and the same subject
+   prints as **78 on p. 84 and 79 on p. 86** of that annex. True is the
+   setting that reproduces DepEd's own totals.
+
+**Display and computation moved separately, and that is deliberate.** The
+pair still *prints* as §16 always printed it — parent row carrying the
+grade that counts, two components indented beneath for information — on
+the report card **and now on the term card too**, which used to list the
+two components flat. Only the arithmetic changed. The invariant to hold
+onto: whatever the switch says, `build_term_subject_rows` and the Term
+Average must read it the same way, or the card prints a list that doesn't
+add up to the number under it.
+
+**What DO 017 does NOT change**, despite touching the same area: the
+passing mark, retention, promotion, graduation and honors. §25 and §26
+defer all of those to a forthcoming "policy on assessment, grading
+system, and awards and recognition". Don't move `passing_grade` or the
+award tiers on the strength of this order.
+
+One rule from it that isn't about arithmetic: a learner who enrols in
+**more** electives than the required minimum must pass **all** of them to
+graduate (p. 15). Not yet reflected in the finalize guard.
 
 ## The deployed host runs a different Python from local dev
 
@@ -143,6 +247,12 @@ risk that local tests cannot catch.
 ## If DepEd reverts to four quarters
 
 Asked 2026-08-12; audited then, so trust this map over a fresh guess.
+**Less likely since DO 017 s. 2026** (2026-08-20): the Strengthened SHS
+Curriculum is built on terms, not quarters — 160 hours across 3 terms per
+core subject — and Annex D2 ships an official *"Sample Three-Term Class
+Program"* for the outgoing Grade 12 cohort. The school's three-term
+structure is now the nationally illustrated one. The map below still
+stands if it happens.
 **The core is already period-agnostic; four places bake "three" into
 structure rather than logic.**
 
@@ -264,6 +374,22 @@ form, and both are correct:
 
 `app/report_card.py` is the single implementation of both so the screen and
 the printed form can't disagree. Don't reimplement either rule in a page.
+
+**DO 017 s. 2026 overrode §17's half, and the school adopted it**
+(2026-08-20): Table 1 makes the pair one 160-hour core subject, so the Term
+Average counts it **once at 2 units**, and the term card prints it as a
+parent with two indented components instead of two flat rows. So the two
+sides of this trap now agree — the pair is one learning area in both
+figures — and §17 and NOTE 7 were amended on 2026-08-20 to say so, NOTE 7
+having previously recorded the divergence as deliberate.
+
+What has *not* changed is why this section exists: the collapse is a
+display rule and a weighting rule at once, and both must come from
+`grading_policy_versions.combine_language_pair_in_term_average`. If
+`build_term_subject_rows` and the Term Average ever read it differently,
+the card prints a subject list that doesn't add up to the number under it.
+Under weighting the parent carries **one** core subject's units (2), never
+the components' sum, or the languages are weighted twice.
 
 **Excel templates and PDF rendering** (`app/excel_template.py` carries these)
 
@@ -456,6 +582,33 @@ trust this over the paragraph above:
   once the T2/T3 offerings exist.
 
 ### Still open
+
+- [ ] **DO 017's unit system is migrated but not switched on.** Migration
+      `c3f1a7d90b42` was applied to the live database on 2026-08-20 —
+      27 columns, all additive, and it changed no grade, average or report
+      (verified: every summary row still reads `UNWEIGHTED`, no units
+      written). What remains is data, and it is two commands:
+      `scripts/apply_do17_units.py --confirm` writes the units and
+      activates the policy, then `--recompute` rebuilds the caches and
+      **is the step that moves the numbers teachers see** — for both grade
+      levels, since the school is a pilot. Do the recompute outside
+      encoding hours, warn advisers first (averages shift a mark or two in
+      both directions, and the term card's language pair changes shape),
+      and back up before. Runbook: `docs/operations.md` §3a.
+      The dry run is accurate — it stages the writes and rolls back — and
+      currently reports 5 category defaults, 6 TechPro subject overrides,
+      the combined area at 2 units, one new policy version, and **no
+      unresolved subjects**.
+- [ ] **`docs/master-spec.md` §68 has no required test for the unit
+      system.** `tests/test_do17_unit_system.py` reproduces all seven
+      Annex E tables, but §68's list of required tests predates it. A
+      "Test G" entry would close the gap. Not done — §68 wasn't in the
+      approved amendment scope.
+- [ ] Grade 12's T2/T3 offerings are still the blocker for a Grade 12
+      General Average, and units make it sharper: a G12 TechPro elective
+      is 12 units per term, so a section offering one subject in T1 and
+      nothing after has an annual average built from a single 12-unit
+      entry.
 
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the

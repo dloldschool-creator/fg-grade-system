@@ -32,6 +32,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from app.curriculum_policy import DEFAULT_RULES, resolve_averaging_rules
 from app.models.grades import (
     CombinedLearningAreaResult,
     SubjectFinalGrade,
@@ -69,6 +70,13 @@ class LearningAreaRow:
     remark: str | None
     offered_terms: set[int] = field(default_factory=lambda: {1, 2, 3})
     is_component: bool = False
+    # What the row contributed to the General Average (DO 017 s. 2026). All
+    # three are None on a component row for the same reason `final_grade` is:
+    # the parent carries the pair's single weight, so a component contributes
+    # nothing of its own and showing it a weight would imply otherwise.
+    units_per_term: Decimal | None = None
+    units: Decimal | None = None
+    unrounded_final_grade: Decimal | None = None
 
     @property
     def display_name(self) -> str:
@@ -92,6 +100,11 @@ class ReportCardContext:
     term_grades: dict       # (enrollment_id, offering_id) -> Decimal | None
     finals: dict            # (enrollment_id, subject_id) -> SubjectFinalGrade
     combined: dict          # (enrollment_id, area_id) -> CombinedLearningAreaResult
+    # The averaging rules in force for this section's year and grade level,
+    # resolved once here rather than per learner. `build_term_subject_rows`
+    # needs them so the printed subject list matches the Term Average that
+    # `app/grading_service.py` actually computed.
+    rules: object = None
 
 
 def load_report_context(session: Session, enrollments: list[Enrollment]) -> ReportCardContext:
@@ -102,7 +115,7 @@ def load_report_context(session: Session, enrollments: list[Enrollment]) -> Repo
     makes the batching sound.
     """
     if not enrollments:
-        return ReportCardContext({}, {}, {}, [], {}, {}, {})
+        return ReportCardContext({}, {}, {}, [], {}, {}, {}, DEFAULT_RULES)
 
     first = enrollments[0]
     enrollment_ids = [e.id for e in enrollments]
@@ -180,8 +193,9 @@ def load_report_context(session: Session, enrollments: list[Enrollment]) -> Repo
         .filter(CombinedLearningAreaResult.enrollment_id.in_(enrollment_ids))
         .all()
     }
+    rules = resolve_averaging_rules(session, first.school_year_id, first.grade_level_id)
     return ReportCardContext(
-        offerings_by_subject, subject_order, subjects, areas, term_grades, finals, combined
+        offerings_by_subject, subject_order, subjects, areas, term_grades, finals, combined, rules
     )
 
 
@@ -231,6 +245,9 @@ def build_learning_area_rows(
                 remark=result.remark.value if result.remark else None,
                 # The pair runs whenever either component does.
                 offered_terms=component_terms or {1, 2, 3},
+                units_per_term=result.units_per_term,
+                units=result.units,
+                unrounded_final_grade=result.unrounded_final_grade,
             )
         )
         for subject_id in component_ids:
@@ -280,6 +297,9 @@ def build_learning_area_rows(
                 final_grade=final.final_grade,
                 remark=final.remark.value if final.remark else None,
                 offered_terms=set(context.offerings_by_subject.get(subject_id, {})),
+                units_per_term=final.units_per_term,
+                units=final.units,
+                unrounded_final_grade=final.unrounded_final_grade,
             )
         )
     return rows
@@ -295,29 +315,88 @@ def build_term_subject_rows(
     in the section's print order — what a temporary term card lists (§39:
     "show only subjects active during the selected term").
 
-    Note this deliberately does **not** use the combined-language parent
-    row. §17 keeps Effective Communication and Mabisang Komunikasyon as
-    two separate subjects when computing the Term Average, so a card that
-    prints the Term Average has to itemise the same two subjects that
-    average is made of. Collapsing them into the parent here would show a
-    subject list that doesn't add up to the figure beneath it.
+    **The list must agree with the average printed beneath it**, so how it
+    treats the Grade 11 language pair follows the same policy switch the
+    Term Average does (`combine_language_pair_in_term_average`):
 
-    That's the opposite of the annual report card, where §16 does collapse
-    the pair — see `build_learning_area_rows`.
+      - **False** (master-spec §17): the pair is two ordinary subjects and
+        both are listed flat, because the Term Average counts both.
+      - **True** (DO 017 s. 2026, and what the school runs): the pair is
+        one learning area counted once, and it prints the way §16 already
+        prints it on the report card — the **parent row carrying the
+        combined grade that counts, with its two components indented
+        underneath for information**. The reader sees where the number
+        came from without the components being added in twice.
+
+    Getting this out of step with `app/grading_service.py` would print a
+    subject list that doesn't add up to the figure below it, which is
+    exactly the class of bug §17 was written to prevent. The annual report
+    card always collapses the pair (§16) — see `build_learning_area_rows`.
+
+    Component names come back already carrying `COMPONENT_INDENT`, the same
+    marker `LearningAreaRow.display_name` uses, so the term card and the
+    report card indent identically without either renderer knowing the rule.
     """
     if context is None:
         context = load_report_context(session, [enrollment])
 
-    ordered: list[tuple[int, str, Decimal | None]] = []
+    rules = context.rules or DEFAULT_RULES
+    combine_pair = bool(getattr(rules, "combine_language_pair_in_term_average", False))
+    # component subject_id -> (area, [component ids]), only when collapsing.
+    component_areas: dict = {}
+    if combine_pair:
+        for area, component_ids in context.areas:
+            for subject_id in component_ids:
+                component_areas[subject_id] = (area, component_ids)
+
+    # (print order, position within a combined block, name, grade). The
+    # second element keeps a parent immediately above its own components
+    # while they all share the parent's place in the section's order.
+    ordered: list[tuple[int, int, str, Decimal | None]] = []
+    seen_areas: set = set()
     for subject_id, by_term in context.offerings_by_subject.items():
         if term_number not in by_term:
             continue  # subject doesn't run this term
         subject = context.subjects.get(subject_id)
         if subject is None:
             continue
+
+        if subject_id in component_areas:
+            area, component_ids = component_areas[subject_id]
+            if area.id in seen_areas:
+                continue  # the parent block is emitted once, from the first component
+            seen_areas.add(area.id)
+            result = context.combined.get((enrollment.id, area.id))
+            combined_grade = (
+                getattr(result, f"term{term_number}_combined", None) if result else None
+            )
+            # The pair sits where its earliest component sits, so it keeps the
+            # section's print order rather than jumping to the top.
+            anchor = min(context.subject_order.get(cid, 9999) for cid in component_ids)
+            ordered.append((anchor, 0, area.name, combined_grade))
+            # Components underneath, in their configured order, indented and
+            # informational — the parent above is the row that counts.
+            for position, component_id in enumerate(component_ids, start=1):
+                component = context.subjects.get(component_id)
+                component_offerings = context.offerings_by_subject.get(component_id, {})
+                if component is None or term_number not in component_offerings:
+                    continue
+                ordered.append(
+                    (
+                        anchor,
+                        position,
+                        f"{COMPONENT_INDENT}{component.official_name}",
+                        context.term_grades.get(
+                            (enrollment.id, component_offerings[term_number])
+                        ),
+                    )
+                )
+            continue
+
         ordered.append(
             (
                 context.subject_order.get(subject_id, 9999),
+                0,
                 subject.official_name,
                 context.term_grades.get((enrollment.id, by_term[term_number])),
             )
@@ -331,5 +410,5 @@ def build_term_subject_rows(
     # `subject_order`; the two now agree, so a subject sits in the same
     # place on both cards. The name only breaks a tie between two subjects
     # sharing an order.
-    ordered.sort(key=lambda row: (row[0], row[1]))
-    return [(name, grade) for _, name, grade in ordered]
+    ordered.sort(key=lambda row: (row[0], row[1], row[2]))
+    return [(name, grade) for _, _, name, grade in ordered]

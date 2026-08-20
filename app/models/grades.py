@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPKMixin, VersionMixin
 from app.models.enums import (
+    AveragingMethod,
     CompletionStatus,
     FinalizationRecordStatus,
     FinalizationScopeType,
@@ -79,6 +80,13 @@ class SubjectFinalGrade(UUIDPKMixin, Base):
         UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False
     )
     final_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    # What this subject contributed to the General Average (DO 017 s. 2026,
+    # Annex E): its per-term units, the annual units those became once
+    # multiplied by the terms it actually ran, and the unrounded final that
+    # the weighting used. `final_grade` stays the reported whole number.
+    units_per_term: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    units: Mapped[float | None] = mapped_column(Numeric(7, 2))
+    unrounded_final_grade: Mapped[float | None] = mapped_column(Numeric(9, 4))
     remark: Mapped[SubjectRemark | None]
     computed_at: Mapped[datetime | None]
     version: Mapped[int] = mapped_column(default=1, server_default="1")
@@ -108,6 +116,11 @@ class CombinedLearningAreaResult(UUIDPKMixin, Base):
     term2_combined: Mapped[float | None] = mapped_column(Numeric(5, 2))
     term3_combined: Mapped[float | None] = mapped_column(Numeric(5, 2))
     final_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    # The pair's weight as ONE learning area — deliberately not the sum of
+    # its two components, which would double-count the languages (§19).
+    units_per_term: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    units: Mapped[float | None] = mapped_column(Numeric(7, 2))
+    unrounded_final_grade: Mapped[float | None] = mapped_column(Numeric(9, 4))
     remark: Mapped[SubjectRemark | None]
     computed_at: Mapped[datetime | None]
     version: Mapped[int] = mapped_column(default=1, server_default="1")
@@ -118,12 +131,18 @@ class TermGradeSummary(UUIDPKMixin, Base):
     the term-level counterpart of `AnnualGradeSummary`, and what a
     TERM-scoped award policy is judged against.
 
-    `term_average` deliberately counts the Grade 11 combined-language
-    components as **two separate subjects** (§17 is explicit: "Do not
-    substitute the combined language grade when calculating the Term
-    Average"). That's the opposite of the General Average rule, where the
-    pair collapses into one virtual learning area — the single most
-    common way to get this wrong.
+    `term_average` counts the Grade 11 combined-language components as **two
+    separate subjects** (§17 is explicit: "Do not substitute the combined
+    language grade when calculating the Term Average"). That's the opposite
+    of the General Average rule, where the pair collapses into one virtual
+    learning area — the single most common way to get this wrong. DO 017
+    s. 2026 reads it the other way, so which applies is now a policy switch
+    (`grading_policy_versions.combine_language_pair_in_term_average`), and
+    §17 remains the default.
+
+    `averaging_method` and `total_units` record how the stored average was
+    actually reached. Without them a 2 that should have been a 12 is
+    invisible — the average is simply a slightly different plausible number.
     """
 
     __tablename__ = "term_grade_summaries"
@@ -139,6 +158,12 @@ class TermGradeSummary(UUIDPKMixin, Base):
         UUID(as_uuid=True), ForeignKey("terms.id", ondelete="RESTRICT"), nullable=False
     )
     term_average: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    # How the average above was reached, so the number can be explained and
+    # a mis-set unit is visible rather than silent (DO 017 s. 2026, Annex E).
+    averaging_method: Mapped[AveragingMethod] = mapped_column(
+        default=AveragingMethod.UNWEIGHTED, server_default=AveragingMethod.UNWEIGHTED.value
+    )
+    total_units: Mapped[float | None] = mapped_column(Numeric(7, 2))
     lowest_term_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
     failed_subject_count: Mapped[int | None] = mapped_column(SmallInteger)
     completion_status: Mapped[CompletionStatus] = mapped_column(
@@ -161,6 +186,10 @@ class AnnualGradeSummary(UUIDPKMixin, Base):
         UUID(as_uuid=True), ForeignKey("school_years.id", ondelete="RESTRICT"), nullable=False
     )
     general_average: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    averaging_method: Mapped[AveragingMethod] = mapped_column(
+        default=AveragingMethod.UNWEIGHTED, server_default=AveragingMethod.UNWEIGHTED.value
+    )
+    total_units: Mapped[float | None] = mapped_column(Numeric(7, 2))
     lowest_final_grade: Mapped[float | None] = mapped_column(Numeric(5, 2))
     failed_subject_count: Mapped[int | None] = mapped_column(SmallInteger)
     completion_status: Mapped[CompletionStatus] = mapped_column(

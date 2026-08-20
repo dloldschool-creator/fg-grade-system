@@ -111,6 +111,15 @@ def capture_academic_record(session: Session, enrollment_id, user_id=None) -> Le
     record.track_name = track.name if track else None
     record.strand_name = strand.name if strand else None
     record.general_average = summary.general_average if summary else None
+    # How that average was reached, frozen as text and a number (§38). A
+    # later revision of DO 017's Table 19 must not re-explain — or worse,
+    # re-derive — a General Average that has already been issued.
+    record.averaging_method = (
+        summary.averaging_method.value
+        if summary and summary.averaging_method is not None
+        else None
+    )
+    record.total_units = summary.total_units if summary else None
     record.completion_status = (
         summary.completion_status if summary else CompletionStatus.INCOMPLETE
     )
@@ -182,6 +191,9 @@ def _capture_subjects(session: Session, record: LearnerAcademicRecord, enrollmen
                 term2_grade=row.term_grades.get(2),
                 term3_grade=row.term_grades.get(3),
                 final_grade=row.final_grade,
+                units_per_term=row.units_per_term,
+                units=row.units,
+                unrounded_final_grade=row.unrounded_final_grade,
                 remark=row.remark,
                 is_combined_parent=not row.is_component and "/" in row.name,
                 is_component=row.is_component,
@@ -238,6 +250,12 @@ def _capture_terms(session: Session, record: LearnerAcademicRecord, enrollment: 
                 term_number=term.term_number,
                 term_name=term.name,
                 term_average=summary.term_average if summary else None,
+                averaging_method=(
+                    summary.averaging_method.value
+                    if summary and summary.averaging_method is not None
+                    else None
+                ),
+                total_units=summary.total_units if summary else None,
                 completion_status=(
                     summary.completion_status if summary else CompletionStatus.INCOMPLETE
                 ),
