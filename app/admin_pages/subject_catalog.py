@@ -1,7 +1,9 @@
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import (
     clear_text_fields,
+    flash,
     generation_key,
     get_session,
     keep_panel_open,
@@ -15,7 +17,7 @@ from app.admin_pages._helpers import (
 )
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Track
-from app.models.subjects import Subject, SubjectCategory
+from app.models.subjects import SectionSubjectOffering, Subject, SubjectCategory
 
 # Names the uploader's generation, so a successful import can drop the
 # file rather than re-validating it against the rows it just wrote.
@@ -139,6 +141,62 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
                 st.rerun()
 
 
+def _offerings_by_subject(session) -> dict:
+    """`{subject_id: [offering, ...]}` for the whole catalog, in one query.
+
+    The rows themselves rather than a count, because the Save branch needs
+    to re-point them and must not go back to the database to do it: Streamlit
+    runs an `st.expander()` body whether or not it is open, so anything
+    reachable from the per-subject loop is paid once per subject on every
+    rerun — see `tests/test_expander_cost.py`, which fails on exactly that
+    shape. The count the tick box quotes is `len()` of the slice, so this one
+    query serves both.
+    """
+    grouped: dict = {}
+    for offering in session.query(SectionSubjectOffering).all():
+        grouped.setdefault(offering.subject_id, []).append(offering)
+    return grouped
+
+
+def _recategorise_offerings(session, subject, offerings, previous_category, new_category) -> int:
+    """Re-point a subject's existing offerings at its new category.
+
+    **Why this needs doing at all.** `section_subject_offerings` carries its
+    own `subject_category_id`, snapshotted when the offering was created,
+    and `curriculum_policy.load_offering_units` reads *that* one — while
+    Setup -> Subject Units reads the subject's. Change the subject's
+    category and the two disagree silently: the page shows the new units and
+    the grading engine keeps applying the old ones. That shipped on
+    2026-08-20 and weighted the Grade 11 TechPro electives at 12 units while
+    every screen said 4.
+
+    Audited per offering as SUBJECT_OFFERING_CHANGED, the same action the
+    Section Subject Offerings page records for a hand edit.
+
+    `offerings` is handed in already loaded, never queried here — see
+    `_offerings_by_subject`.
+    """
+    changed = 0
+    for offering in offerings:
+        if offering.subject_category_id == new_category.id:
+            continue
+        audit_service.record(
+            session,
+            action=audit_service.SUBJECT_OFFERING_CHANGED,
+            object_type="section_subject_offerings",
+            object_id=offering.id,
+            previous={
+                "subject": subject.official_name,
+                "subject_category": previous_category.name if previous_category else None,
+            },
+            new={"subject_category": new_category.name},
+        )
+        offering.subject_category_id = new_category.id
+        offering.version += 1
+        changed += 1
+    return changed
+
+
 def _subjects_tab(session):
     grade_levels = session.query(GradeLevel).order_by(GradeLevel.display_order).all()
     gl_by_id = {gl.id: gl for gl in grade_levels}
@@ -146,6 +204,7 @@ def _subjects_tab(session):
     track_by_id = {t.id: t for t in tracks}
     categories = session.query(SubjectCategory).order_by(SubjectCategory.name).all()
     cat_by_id = {c.id: c for c in categories}
+    offerings_by_subject = _offerings_by_subject(session)
 
     gl_filter = st.selectbox(
         "Filter by grade level",
@@ -182,6 +241,26 @@ def _subjects_tab(session):
                     format_func=lambda v: cat_by_id[v].name,
                     key=f"subj_cat_{subject.id}",
                 )
+                # Changing the category here does NOT re-weight offerings
+                # that already exist — they snapshot the category — so say
+                # so at the point of the change rather than letting the
+                # grading engine and Subject Units quietly disagree.
+                held = offerings_by_subject.get(subject.id, [])
+                offerings_held = len(held)
+                recategorise = False
+                if offerings_held:
+                    recategorise = st.checkbox(
+                        f"Also move this subject's {offerings_held} existing "
+                        "offering(s) to the new category",
+                        value=True,
+                        key=f"subj_recat_{subject.id}",
+                        help=(
+                            "Offerings carry their own category, so the grading "
+                            "engine keeps using the old one until they are moved. "
+                            "Untick only if a section deliberately teaches this "
+                            "subject under a different category."
+                        ),
+                    )
                 track_options = [None] + [t.id for t in tracks]
                 track_choice = st.selectbox(
                     "Track restriction (None = offered under any track)",
@@ -196,6 +275,8 @@ def _subjects_tab(session):
 
                 col1, col2 = st.columns(2)
                 if col1.form_submit_button("Save"):
+                    category_changed = cat_choice != subject.subject_category_id
+                    previous_category = cat_by_id.get(subject.subject_category_id)
                     subject.code = code
                     subject.official_name = official_name
                     subject.short_name = short_name
@@ -203,7 +284,34 @@ def _subjects_tab(session):
                     subject.subject_category_id = cat_choice
                     subject.track_restriction_id = track_choice
                     subject.is_active = is_active
-                    try_commit(session, "Saved.")
+
+                    moved = 0
+                    if category_changed and offerings_held and recategorise:
+                        moved = _recategorise_offerings(
+                            session, subject, held, previous_category,
+                            cat_by_id[cat_choice],
+                        )
+                    if try_commit(session, "Saved."):
+                        if moved:
+                            flash(
+                                "success",
+                                f"Moved {moved} offering(s) to "
+                                f"{cat_by_id[cat_choice].name}.",
+                            )
+                        elif category_changed and offerings_held:
+                            # Never silently: a left-behind offering is still
+                            # weighted by its old category, and Subject Units
+                            # will show the new one.
+                            flash(
+                                "warning",
+                                f"{subject.official_name} is now "
+                                f"{cat_by_id[cat_choice].name}, but its "
+                                f"{offerings_held} existing offering(s) still "
+                                f"carry {previous_category.name if previous_category else 'the old category'}"
+                                " — so grades are still weighted by the old "
+                                "units. Re-save with the tick box on, or fix "
+                                "them per section in Section Subject Offerings.",
+                            )
                     st.rerun()
                 if col2.form_submit_button("Delete", type="secondary"):
                     try_delete(session, subject, subject.official_name)

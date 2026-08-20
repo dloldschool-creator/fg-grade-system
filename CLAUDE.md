@@ -334,6 +334,50 @@ of each is in `docs/build-log.md`.
   is what enforces this; don't loosen it.
 - **`VersionMixin` is not universal.** Don't copy `.version += 1` onto a
   model without checking `docs/schema.md` that it has the column.
+- **Re-categorising a subject does not re-weight its existing offerings.**
+  `section_subject_offerings.subject_category_id` is a *snapshot* taken when
+  the offering is created — deliberately, because §48 makes the offering the
+  source of truth and a section may confirm a category the catalog no longer
+  has. So `curriculum_policy.load_offering_units` reads the **offering's**
+  category, while Setup → Subject Units reads the **subject's**. Change a
+  subject's category in Subject Catalog and the two disagree silently: the
+  page shows the new units, the grading engine keeps using the old ones.
+  Hit on 2026-08-20 splitting the Grade 11 TechPro electives into their own
+  4-unit category — all 30 offerings stayed on `TECHPRO_ELECTIVE`, which had
+  just been set to 12, so Grade 11 was weighted at 12 while the screen said
+  4. On a 6-core Grade 11 TechPro section that made the TechPro grade 55% of
+  the term average instead of 29%. **Units themselves are never snapshotted**
+  — editing a category's or a subject's `units_per_term` takes effect
+  immediately, with nothing to resync. Only the category assignment is.
+  **Subject Catalog now closes the hole at the source**: a subject holding
+  offerings shows a ticked-by-default "also move its N existing offering(s)"
+  box, and saving a category change with it *un*ticked flashes a warning
+  naming the count rather than going quietly. Untick it only for a genuine
+  per-section override. `_recategorise_offerings` does the move, audited per
+  offering as `SUBJECT_OFFERING_CHANGED` and bumping each `version`.
+  `scripts/resync_offering_categories.py` is the same repair from the
+  command line, for offerings stranded before that existed (targeted, never
+  a blanket resync — a mismatch can be a legitimate per-section override).
+  `tests/test_subject_recategorisation.py` asserts the trap itself, so the
+  engine reading the offering's category can't be "tidied" away.
+  The CSV importer is not affected: it only INSERTs subjects whose code is
+  new, so it can never strand an existing offering.
+- **Prefer a subject-level unit override to a split category** when DO 017
+  gives one category two values. Table 19 gives a TechPro elective 4 units
+  in Grade 11 and 12 in Grade 12, and both are `TECHPRO_ELECTIVE`; that is
+  what `subjects.units_per_term` is for and what `apply_do17_units.py`
+  writes. A split category is the tempting alternative and is worse three
+  ways: it hits the snapshot trap above, it permanently diverges the
+  frozen academic record (`academic_record_service` freezes the category
+  *name* as text, §38), and it fails **silently**. The override fails
+  loudly — forget it on a new Grade 11 TechPro subject and Subject Units
+  shows the inherited 12 in that row, because the page reads the same
+  resolution chain the engine does. Reverted on 2026-08-20 by
+  `scripts/fix_g11_techpro_units.py`, and the `TECHPRO_ELECTIVE_3_TERMS`
+  category deleted once empty. Also note the name's premise was wrong —
+  Table 19 splits by **grade level**, not term count, and the engine
+  already multiplies units-per-term by the terms a subject actually ran, so
+  folding term count into a unit label double-counts it.
 - **`AuthUser.id` is a `str`; every `*_user_id` column is a `uuid.UUID`.**
   Postgres coerces between them, so `filter_by(adviser_user_id=current_user.id)`
   works and hides the mismatch — but the same two values compared **in
