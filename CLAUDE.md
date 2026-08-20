@@ -334,6 +334,29 @@ of each is in `docs/build-log.md`.
   is what enforces this; don't loosen it.
 - **`VersionMixin` is not universal.** Don't copy `.version += 1` onto a
   model without checking `docs/schema.md` that it has the column.
+- **`subject_profiles` has no section column**, so every section in a
+  strand matches the same set of profiles — the four Kitchen Operations
+  sections each list all four. The only thing telling them apart is the
+  naming convention `G12-TECHPRO-KO-<SECTION>`, a string rather than a
+  foreign key. Section Subject Offerings listed them unordered with no
+  `index=`, so the picker defaulted to whatever row Postgres returned
+  first: selecting MUSK showed `G12-TECHPRO-CSS-JOBS` while the offerings
+  list underneath, queried by `section_id`, was correct. Reported from the
+  live app on 2026-08-20 — nine sections exposed, six of them defaulting to
+  another section's profile, and **nothing had been mis-seeded yet**.
+  Not cosmetic: profiles in one strand differ by subject *and by term*. The
+  two CSS profiles run the same three subjects in swapped terms, and the
+  Kitchen Operations ones differ in the subject itself (Kitchen Operations
+  vs a 12-unit Work Immersion). Seeding from the wrong profile is silent,
+  and rule 4 builds the General Average from each subject's real term
+  pattern. `profile_for_section` now resolves it — strict exact-suffix,
+  exactly one hit — and when the convention can't answer, the picker
+  preselects **nothing** and both buttons refuse, rather than defaulting to
+  a stranger's profile. `tests/test_section_profile_default.py` covers the
+  matching and asserts that no live section is left unresolvable, so
+  renaming a section into ambiguity fails a test instead of a report card.
+  The durable fix is a real `section_id` on `subject_profiles`; that is a
+  mid-year migration and the convention currently holds for every section.
 - **Re-categorising a subject does not re-weight its existing offerings.**
   `section_subject_offerings.subject_category_id` is a *snapshot* taken when
   the offering is created — deliberately, because §48 makes the offering the

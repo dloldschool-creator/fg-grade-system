@@ -22,6 +22,11 @@ from app.models.subjects import (
 )
 
 
+# Shown when no profile can be matched to the section by name. A sentinel
+# rather than a silent default: see profile_for_section.
+PICK_ONE = "- choose a profile -"
+
+
 def order_changes(offerings, order_by_subject: dict) -> tuple[list, int]:
     """Which offerings a re-apply would actually move, and how many it leaves alone.
 
@@ -104,6 +109,28 @@ def _reapply_profile_order(session, section: Section, profile: SubjectProfile, c
     try_commit(session, note)
 
 
+def profile_for_section(section: Section, profiles: list[SubjectProfile]):
+    """The profile that belongs to this section, or None if it cannot be told.
+
+    `subject_profiles` is keyed by (grade level, track, strand) and carries
+    **no section column**, so every section in a strand matches the same set
+    -- the four Kitchen Operations sections each list all four profiles. The
+    only thing telling them apart is the naming convention
+    `G12-TECHPRO-KO-<SECTION>`, which is a string, not a foreign key.
+
+    Matching on it is what lets the picker default to the right one without a
+    migration mid-year. It is deliberately strict -- an exact suffix, exactly
+    one hit -- because a *wrong* default is worse than none. Profiles in one
+    strand differ by subject and by term: the two CSS profiles run the same
+    three subjects in swapped terms, and the Kitchen Operations ones differ
+    in the subject itself. Seeding from the wrong profile is silent, and
+    rule 4 then builds a General Average out of the wrong term pattern.
+    """
+    suffix = "-" + section.name.strip().upper()
+    hits = [p for p in profiles if p.name.strip().upper().endswith(suffix)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _seed_from_profile(session, section: Section, terms: list[Term], current_user):
     matching_profiles = (
         session.query(SubjectProfile)
@@ -112,6 +139,9 @@ def _seed_from_profile(session, section: Section, terms: list[Term], current_use
             track_id=section.track_id,
             strand_id=section.strand_id,
         )
+        # Ordered so the list, and the default that lands on its first item,
+        # cannot shift with whatever order Postgres returns rows in.
+        .order_by(SubjectProfile.name)
         .all()
     )
     if not matching_profiles:
@@ -123,11 +153,35 @@ def _seed_from_profile(session, section: Section, terms: list[Term], current_use
     profile_by_id = {p.id: p for p in matching_profiles}
     term_by_number = {t.term_number: t for t in terms}
 
+    mine = profile_for_section(section, matching_profiles)
+    options = [p.id for p in matching_profiles]
+    if mine is not None:
+        index = options.index(mine.id)
+    else:
+        # No preselection, rather than a stranger's profile: seeding the
+        # wrong one is silent, and the offerings list further down the page
+        # looks correct either way, so nothing on screen contradicts it.
+        options = [None] + options
+        index = 0
+
     with st.form("seed_from_profile"):
         profile_choice = st.selectbox(
-            "Subject profile", options=[p.id for p in matching_profiles], format_func=lambda v: profile_by_id[v].name
+            "Subject profile",
+            options=options,
+            index=index,
+            format_func=lambda v: PICK_ONE if v is None else profile_by_id[v].name,
         )
+        if mine is None and len(matching_profiles) > 1:
+            st.warning(
+                f"{len(matching_profiles)} profiles match this section's grade "
+                f"level, track and strand, and none is named for "
+                f"**{section.name}**, so there is nothing to default to. "
+                "Profiles in the same strand can differ by subject and by "
+                "term, so check which one you want before seeding."
+            )
         st.caption(
+            f"Both buttons act on **{section.name}**, using the profile "
+            "picked above.\n\n"
             "**Seed offerings from profile** adds every subject and term listed in "
             "the profile above. Anything already added is left alone, so it is safe "
             "to press twice.\n\n"
@@ -139,6 +193,10 @@ def _seed_from_profile(session, section: Section, terms: list[Term], current_use
         seed_col, order_col = st.columns(2)
         seed = seed_col.form_submit_button("Seed offerings from profile")
         reapply = order_col.form_submit_button("Re-apply profile order")
+
+        if (seed or reapply) and profile_choice is None:
+            st.error("Pick a subject profile first.")
+            return
 
         if reapply:
             _reapply_profile_order(
