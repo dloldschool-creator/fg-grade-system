@@ -505,9 +505,18 @@ the components' sum, or the languages are weighted twice.
 2026-08-12 to Streamlit Community Cloud from GitHub (branch `master`,
 entrypoint `streamlit_app.py`, secrets in the app's Settings panel).
 
-**Treat every change as a live change.** `git push` redeploys; a restart
-signs everyone out and loses unsaved grade entry; migrations must follow
-the ordering in `docs/operations.md`. Deploy outside encoding hours.
+**Treat every change as a live change.** Migrations must follow the
+ordering in `docs/operations.md`, and a restart signs everyone out and
+loses unsaved grade entry, so deploy outside encoding hours.
+
+**But `git push` does not deploy by itself** — it syncs files, and the
+running process keeps the old modules because `fileWatcherType` is off.
+Someone has to hit **Reboot** in the Streamlit Cloud dashboard. The page
+footer is the check: `c19e19c · up 34m · ⚠ 41faa98 is on disk — restart to
+load it` means the push landed and the deploy has not. **`_stcore/health`
+returns `ok` regardless**, so a green health check after a push says
+nothing about whether the new code is running — read the footer instead
+(`app/version.py` builds it for exactly this reason).
 
 Full phase-by-phase build history, including the reasoning behind every
 decision above: see `docs/build-log.md` (not auto-loaded — read it when you

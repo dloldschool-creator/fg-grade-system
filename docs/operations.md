@@ -38,10 +38,26 @@ makes updating cheap.
 The routine case — a fix, a wording change, a new page:
 
 ```bash
-git push origin main
+git push origin master
 ```
 
-The host rebuilds and restarts, usually inside two minutes.
+**A push does NOT deploy on its own.** It syncs the files to the host, and
+the running app keeps serving the old code until the process is restarted —
+because `fileWatcherType` is off (see `.streamlit/config.toml`; the watcher
+crashes the app by re-importing model modules). Nothing in the app changes
+until you **Reboot** it from the Streamlit Cloud dashboard.
+
+The footer of every page tells you which of the two you are looking at:
+
+```
+c19e19c · up 34m · ⚠ 41faa98 is on disk — restart to load it
+```
+
+Left of the warning is what is *running*; the warning names what is *on
+disk* and waiting. No warning means the two agree and the deploy is live.
+That line is the only reliable check — the health endpoint answers `ok`
+just as happily while the old code is serving, so a green health check
+after a push proves nothing about the push.
 
 **What a restart does to people using it:** everyone is signed out, and
 anything typed but not saved is lost. `st.session_state` does not
