@@ -6,6 +6,7 @@ from app.admin_pages._helpers import (
     clear_text_fields,
     flash,
     flush_or_rollback,
+    generation_key,
     get_session,
     keep_panel_open,
     panel_is_open,
@@ -196,6 +197,9 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
     # this panel, so a collapse on upload hid all of it and read as
     # nothing having happened.
     _panel = "learner_bulk_add"
+    # The uploader's key hangs off this so a successful import can drop the
+    # file; see generation_key.
+    _UPLOAD_FORM = "learner_bulk_upload"
     with st.expander("Bulk-add from a spreadsheet", expanded=panel_is_open(_panel)):
         st.info(
             "**Adding a whole year group? Use Import from Excel instead.** "
@@ -233,7 +237,12 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
             # CSV is still accepted so an older file already saved that way
             # still uploads, but it is never offered — see the caption above.
             type=["csv", "xlsx"],
-            key="learner_csv",
+            # A generation-carrying key so a successful import can drop the
+            # file. Without that the uploader keeps it across the rerun, the
+            # panel re-validates it against the rows it just wrote, and every
+            # LRN comes back as "already exists in the system" — the import
+            # reporting its own success as 26 failures.
+            key=generation_key(_UPLOAD_FORM, "learner_csv"),
             on_change=keep_panel_open, args=(_panel,),
         )
         if uploaded is None:
@@ -323,7 +332,12 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
 
         if st.button(f"Add {len(result.parsed)} learner(s)", key="bulk_learner_commit"):
             written = spec.commit(session, result.parsed, current_user.id)
-            try_commit(session, f"Added {written} learner(s).")
+            # Drop the file on success, so the rerun shows an empty uploader
+            # and the "Added N" flash rather than re-validating the same rows
+            # against the database they were just written to. On failure the
+            # file stays, because the fix is usually to re-read the errors.
+            if try_commit(session, f"Added {written} learner(s)."):
+                clear_text_fields(_UPLOAD_FORM)
             st.rerun()
 
 

@@ -26,6 +26,10 @@ requirements.txt pins streamlit>=1.38,<2.0, so a minor upgrade reaching
 the host could change this. Then these fail, which is the point.
 """
 
+import ast
+import pathlib
+
+import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
@@ -182,3 +186,134 @@ def test_every_flash_kind_has_a_toast_icon():
     for kind in _TOAST_ICONS:
         assert hasattr(st, kind), f"flash kind {kind} is not a Streamlit message function"
     assert set(_TOAST_ICONS) >= {"success", "error"}
+
+
+# --- The same mechanism, for an uploaded file ----------------------------
+#
+# `st.file_uploader` keeps its file across reruns like any keyed widget.
+# That is fine until a panel imports the file and then reruns: it re-reads
+# the *same* file and validates it again, now against the rows it has just
+# written. Every LRN exists, so a first-time import of 26 learners reported
+# "26 row(s) need fixing — duplicate LRN" while all 26 had in fact been
+# created. Reported from the Learner Masterlist on 2026-08-20.
+#
+# The fix is the clearing mechanism above, applied to the uploader's key.
+
+
+UPLOAD_SCRIPT = """
+import streamlit as st
+from app.admin_pages._helpers import clear_text_fields, generation_key, render_flashes, flash
+
+render_flashes()
+FORM = "learner_bulk_upload"
+key = generation_key(FORM, "learner_csv")
+st.session_state.setdefault("keys_used", [])
+if not st.session_state["keys_used"] or st.session_state["keys_used"][-1] != key:
+    st.session_state["keys_used"].append(key)
+
+st.file_uploader("Excel file", type=["csv", "xlsx"], key=key)
+if st.button("Import"):
+    if st.session_state.get("succeeds", True):
+        flash("success", "Added 26 learner(s).")
+        clear_text_fields(FORM)
+    else:
+        flash("error", "Couldn't save.")
+    st.rerun()
+"""
+
+
+def _upload_app(succeeds=True):
+    at = AppTest.from_string(UPLOAD_SCRIPT, default_timeout=30)
+    at.session_state["succeeds"] = succeeds
+    at.run()
+    return at
+
+
+def test_a_successful_import_gives_the_uploader_a_key_it_has_never_seen():
+    """Which is what drops the file. A key Streamlit has not issued before
+    has nothing to restore — frontend included, which is the whole reason
+    this mechanism exists rather than deleting the session_state key."""
+    at = _upload_app()
+    before = at.session_state["keys_used"][-1]
+
+    at.button[0].click().run()
+
+    after = at.session_state["keys_used"][-1]
+    assert after != before, "the uploader kept its key, so it keeps the file"
+    assert at.session_state["keys_used"] == [before, after]
+
+
+def test_a_failed_import_keeps_the_file():
+    """The fix for a failed import is usually to read the errors against the
+    file that produced them, so clearing on failure would be actively
+    unhelpful — and would look identical to the success path."""
+    at = _upload_app(succeeds=False)
+    before = at.session_state["keys_used"][-1]
+
+    at.button[0].click().run()
+
+    assert at.session_state["keys_used"][-1] == before
+    assert [e.value for e in at.error] == ["Couldn't save."]
+
+
+def test_the_success_message_survives_the_clearing_rerun():
+    """The panel sits far down the page, so the flash is often only seen as
+    a toast. If clearing ate the message too, a successful import would look
+    like nothing happened at all — which is the failure it was fixing."""
+    at = _upload_app()
+    at.button[0].click().run()
+
+    assert [s.value for s in at.success] == ["Added 26 learner(s)."]
+    assert [t.value for t in at.toast] == ["Added 26 learner(s)."]
+
+
+ADMIN_PAGES = pathlib.Path(__file__).resolve().parent.parent / "app" / "admin_pages"
+
+
+def _uploader_keys(path: pathlib.Path):
+    """Every `st.file_uploader(...)` call's `key=` argument, as an AST node."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "file_uploader":
+            yield next((k.value for k in node.keywords if k.arg == "key"), None)
+
+
+def _pages_with_uploaders():
+    return sorted(p for p in ADMIN_PAGES.glob("*.py") if list(_uploader_keys(p)))
+
+
+@pytest.mark.parametrize("page", _pages_with_uploaders(), ids=lambda p: p.name)
+def test_every_upload_panel_can_drop_its_file(page):
+    """Structural, because nothing about this bug looks wrong in the source:
+    a plain `key="learner_csv"` reads perfectly and silently keeps the file.
+
+    Four pages upload a spreadsheet, write rows from it and rerun. Every one
+    of them had the same defect — the rerun re-reads the retained file and
+    validates it against the rows just written, so a wholly successful
+    import reports itself as failed. On the Learner Masterlist that was 26
+    learners created and "26 row(s) need fixing — duplicate LRN" on screen.
+
+    The two halves have to agree: the uploader's key comes from
+    `generation_key`, and the success branch clears the same form name.
+    """
+    keys = list(_uploader_keys(page))
+    assert keys, f"no file_uploader in {page.name}"
+    for key in keys:
+        assert isinstance(key, ast.Call) and getattr(key.func, "id", "") == "generation_key", (
+            f"{page.name}: the uploader's key must come from generation_key, or a "
+            "successful import re-validates the file it just imported"
+        )
+
+    source = page.read_text(encoding="utf-8")
+    assert "clear_text_fields(" in source, (
+        f"{page.name}: nothing clears the uploader after a successful import"
+    )
+
+
+def test_the_check_above_covers_every_page_that_uploads():
+    """A guard on the guard: if the glob silently matched nothing, the
+    parametrised test would pass by having no cases at all."""
+    names = {p.name for p in _pages_with_uploaders()}
+    assert names >= {
+        "learners.py", "subject_catalog.py", "users.py", "data_import.py"
+    }, names

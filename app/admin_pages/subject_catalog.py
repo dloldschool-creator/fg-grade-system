@@ -2,6 +2,7 @@ import streamlit as st
 
 from app.admin_pages._helpers import (
     clear_text_fields,
+    generation_key,
     get_session,
     keep_panel_open,
     panel_is_open,
@@ -15,6 +16,10 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Track
 from app.models.subjects import Subject, SubjectCategory
+
+# Names the uploader's generation, so a successful import can drop the
+# file rather than re-validating it against the rows it just wrote.
+_UPLOAD_FORM = "subject_catalog_upload"
 
 SUBJECT_CSV_COLUMNS = "code, official_name, short_name, grade_level_code, category_code, track_restriction_code"
 
@@ -95,8 +100,12 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
             f"Category codes: {', '.join(cat_by_code) or 'none yet'}. "
             f"Track codes: {', '.join(track_by_code) or 'none yet'}."
         )
+        # Generation-carrying key so a successful import drops the file;
+        # otherwise the rerun re-validates it against the codes just written
+        # and every row reads as an already-taken code (see generation_key).
         uploaded = st.file_uploader(
-            "CSV file", type="csv", key="subject_csv",
+            "CSV file", type="csv",
+            key=generation_key(_UPLOAD_FORM, "subject_csv"),
             on_change=keep_panel_open, args=(_panel,),
         )
         if uploaded is None:
@@ -125,7 +134,8 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
             if st.button(f"Import {len(valid_rows)} valid subject(s)"):
                 for parsed in valid_rows:
                     session.add(Subject(**parsed))
-                try_commit(session, f"Imported {len(valid_rows)} subject(s).")
+                if try_commit(session, f"Imported {len(valid_rows)} subject(s)."):
+                    clear_text_fields(_UPLOAD_FORM)
                 st.rerun()
 
 

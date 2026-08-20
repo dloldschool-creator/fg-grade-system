@@ -5,6 +5,7 @@ from app import audit_service
 from app.admin_pages._helpers import (
     clear_text_fields,
     flash,
+    generation_key,
     get_session,
     keep_panel_open,
     panel_is_open,
@@ -31,6 +32,10 @@ from app.user_provisioning import (
 )
 
 MAX_ERRORS_SHOWN = 50
+
+# Names the uploader's generation, so creating the accounts drops the file
+# rather than re-reading it and reporting every address as already taken.
+_UPLOAD_FORM = "users_bulk_upload"
 
 
 def _show_temporary_password() -> None:
@@ -184,7 +189,12 @@ def _bulk_add(current_user, roles, existing_emails) -> None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    uploaded = st.file_uploader("Excel file (.xlsx)", type=["xlsx"], key="upload_users")
+    # Cleared on success, or the rerun re-reads the same file and reports
+    # every address as already having an account (see generation_key).
+    uploaded = st.file_uploader(
+        "Excel file (.xlsx)", type=["xlsx"],
+        key=generation_key(_UPLOAD_FORM, "upload_users"),
+    )
     if uploaded is None:
         return
 
@@ -274,6 +284,7 @@ def _bulk_add(current_user, roles, existing_emails) -> None:
             flash("error", str(exc))
         else:
             st.session_state["_last_bulk_provisioned"] = outcome
+            clear_text_fields(_UPLOAD_FORM)
             flash(
                 "success",
                 f"Created {len(outcome.provisioned)} account(s) — the temporary "

@@ -2,7 +2,14 @@ import pandas as pd
 import streamlit as st
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    clear_text_fields,
+    flash,
+    generation_key,
+    get_session,
+    render_flashes,
+    try_commit,
+)
 from app.auth import require_role
 from app.display_time import format_time
 from app.import_pipeline import (
@@ -17,6 +24,15 @@ from app.import_pipeline import (
 from app.import_specs import SPECS
 from app.models.admin import ImportJob
 from app.models.organization import SchoolYear
+
+def _upload_form(spec) -> str:
+    """Names the uploader's generation, per job type.
+
+    Per job type rather than page-wide so confirming a learner import does
+    not also drop a half-filled term-grades file sitting in another tab.
+    """
+    return f"import_upload_{spec.job_type}"
+
 
 PREVIEW_ROWS = 15
 MAX_ERRORS_SHOWN = 50
@@ -95,7 +111,12 @@ def render() -> None:
         # CSV is still accepted so an older file already saved that way still
         # uploads, but it is never offered: Excel destroys a 12-digit LRN on
         # CSV export, and offering the format is what invites the mistake.
-        "Excel file (.xlsx)", type=["xlsx", "xlsm", "csv"], key=f"upload_{spec.job_type}"
+        "Excel file (.xlsx)", type=["xlsx", "xlsm", "csv"],
+        # Per job type, and generation-carrying: a confirmed import must drop
+        # its file, or the rerun validates the same rows against the ones it
+        # just wrote — for learners that reads as "duplicate LRN" on every
+        # row of a successful import (see generation_key).
+        key=generation_key(_upload_form(spec), f"upload_{spec.job_type}"),
     )
     if uploaded is None:
         st.divider()
@@ -228,4 +249,5 @@ def render() -> None:
                     if note:
                         flash("info", note)
                 st.session_state[f"validated_{spec.job_type}"] = False
+                clear_text_fields(_upload_form(spec))
                 st.rerun()

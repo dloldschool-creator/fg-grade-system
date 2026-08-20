@@ -251,10 +251,29 @@ def text_field(label: str, *, key: str, area: bool = False, container=None, **kw
     since `col1.text_input(...)` cannot go through this function.
     """
     form = key.split(".", 1)[0]
-    generation = st.session_state.get(_TEXT_GENERATION + form, 0)
     target = container if container is not None else st
     widget = target.text_area if area else target.text_input
-    return widget(label, key=f"{key}#{generation}", **kwargs)
+    return widget(label, key=generation_key(form, key), **kwargs)
+
+
+def generation_key(form: str, name: str) -> str:
+    """The key to hand Streamlit for any widget `clear_text_fields(form)`
+    should be able to reset — not only text boxes.
+
+    A file uploader is the other case that needs it. `st.file_uploader`
+    keeps its file across reruns like any keyed widget, so a panel that
+    imports the file and then reruns re-reads the *same* file and validates
+    it again — against the rows it has just written. Every LRN now exists,
+    and the panel reports its own success back as "duplicate LRN". Giving
+    the uploader a generation-carrying key lets the import clear it the same
+    way an add form clears its boxes.
+
+    (The clearing function is still called `clear_text_fields`; it only ever
+    bumped a counter, and renaming it would touch every add form in the app
+    for no behavioural gain.)
+    """
+    generation = st.session_state.get(_TEXT_GENERATION + form, 0)
+    return f"{name}#{generation}"
 
 
 def clear_text_fields(form: str) -> None:
@@ -278,6 +297,9 @@ def clear_text_fields(form: str) -> None:
     brand-new widget has nothing to restore. Nothing is deleted, so no
     other widget can be caught by it — a tick box keeps its own key and its
     own value.
+
+    It resets **any** widget whose key came from `generation_key`, not just
+    text boxes — the learner upload panel uses it to drop the imported file.
     """
     st.session_state[_TEXT_GENERATION + form] = (
         st.session_state.get(_TEXT_GENERATION + form, 0) + 1

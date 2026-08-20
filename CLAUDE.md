@@ -435,6 +435,18 @@ the components' sum, or the languages are weighted twice.
   also toasts each message: every add form sits *below* the list it adds to,
   so the top of the page — where the inline message renders — is scrolled
   off by the time the button is pressed.
+- **`st.file_uploader` keeps its file across reruns, so an import that
+  reruns re-imports its own output.** The panel re-reads the retained file
+  and validates it against the rows it has just written — every LRN now
+  exists, so a wholly successful import of 26 learners reported "26 row(s)
+  need fixing — duplicate LRN" while all 26 sat in the database. Reported
+  from the live app on 2026-08-20; **all four upload panels had it**
+  (Learner Masterlist, Import from Excel, Subject Catalog, Users). The fix
+  is `_helpers.generation_key()` for the uploader's key plus
+  `clear_text_fields(form)` on the **success branch only** — a failed
+  import must keep the file, because the fix is to re-read the errors
+  against it. `tests/test_add_form_reset.py` enforces it across every page
+  that has an uploader, because `key="learner_csv"` reads perfectly.
 - **Clearing a widget inside `st.form` needs a new key, not an empty
   value** — and the wrong version passes its tests. A form widget keeps a
   copy of its value in the *frontend*, which survives the rerun and is

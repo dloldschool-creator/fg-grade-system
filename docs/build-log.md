@@ -1670,3 +1670,35 @@ current number.
       cell arrives as None *or* NaN, and NaN is the dangerous one — it is a
       float, so a naive check treats it as a real value and writes it to a
       NUMERIC column.
+- [x] **A successful import reported itself as failed** (2026-08-20,
+      reported from the live app as "this appears even if it is the first
+      time they're uploading then upon checking, the learners were uploaded
+      with that first attempt").
+      **`st.file_uploader` keeps its file across reruns**, like any keyed
+      widget. So the Learner Masterlist panel imported 26 learners,
+      committed, reran — and re-read the same file, validating it against
+      the rows it had just written. Every LRN now existed, so the panel
+      rendered a red "26 row(s) need fixing — duplicate LRN" over a wholly
+      successful import. Nothing was wrong with the data; the screen said
+      the opposite of the truth, which is worse than an error, because the
+      obvious response is to try again.
+      The success flash did fire, but the panel sits far down a long page
+      and the message renders at the top, so in practice it was the toast
+      or nothing — the same reason `render_flashes` toasts at all.
+      Fixed with the mechanism that already existed for add forms:
+      `_helpers.generation_key()` builds the uploader's key with the form's
+      generation number, and `clear_text_fields(form)` bumps it, so the
+      uploader becomes a widget Streamlit has never issued and has no file
+      to restore. Only on the **success** branch — a failed import must keep
+      the file, since the fix is to read the errors against it.
+      **All four upload panels had it**: Learner Masterlist, Import from
+      Excel (the one the Masterlist recommends for a whole year group),
+      Subject Catalog and Users. Only the first was reported; the other
+      three were found by looking for the same shape, which is the useful
+      half of a bug report like this one.
+      `tests/test_add_form_reset.py` now walks every page with a
+      `file_uploader` and asserts its key comes from `generation_key` and
+      that something clears it — plus a guard on the guard, since a glob
+      that silently matched nothing would leave the parametrised test
+      passing with no cases. Structural for the usual reason: nothing about
+      `key="learner_csv"` looks wrong.
