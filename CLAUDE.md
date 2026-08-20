@@ -583,22 +583,16 @@ trust this over the paragraph above:
 
 ### Still open
 
-- [ ] **DO 017's unit system is migrated but not switched on.** Migration
-      `c3f1a7d90b42` was applied to the live database on 2026-08-20 —
-      27 columns, all additive, and it changed no grade, average or report
-      (verified: every summary row still reads `UNWEIGHTED`, no units
-      written). What remains is data, and it is two commands:
-      `scripts/apply_do17_units.py --confirm` writes the units and
-      activates the policy, then `--recompute` rebuilds the caches and
-      **is the step that moves the numbers teachers see** — for both grade
-      levels, since the school is a pilot. Do the recompute outside
-      encoding hours, warn advisers first (averages shift a mark or two in
-      both directions, and the term card's language pair changes shape),
-      and back up before. Runbook: `docs/operations.md` §3a.
-      The dry run is accurate — it stages the writes and rolls back — and
-      currently reports 5 category defaults, 6 TechPro subject overrides,
-      the combined area at 2 units, one new policy version, and **no
-      unresolved subjects**.
+- [x] **DO 017's unit system is live** (2026-08-20). Migration
+      `c3f1a7d90b42` applied, code deployed at `184a658`, and
+      `scripts/apply_do17_units.py --confirm` run: 5 category unit
+      defaults, 6 TechPro subject overrides, the language pair at 2 units,
+      and an ACTIVE policy version v2 (all grade levels, SY 2026-2027,
+      UNIT_WEIGHTED, unrounded finals, pair combined). Every one of the
+      369 offerings resolves to a real unit value — none falls back to 1.
+      **No recompute was needed**: `term_grades` was empty when it was
+      switched on, so there is no split between learners graded under the
+      old rule and the new one. Everything encoded from here is weighted.
 - [ ] **`docs/master-spec.md` §68 has no required test for the unit
       system.** `tests/test_do17_unit_system.py` reproduces all seven
       Annex E tables, but §68's list of required tests predates it. A

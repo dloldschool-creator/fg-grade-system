@@ -1618,3 +1618,18 @@ current number.
       ones are all **within** a subject — §14 and §15 combining the language
       components, §18 averaging a subject's own terms — where units never
       apply. §68 still has no required test for the unit system.
+      **Switched on 2026-08-20**, and the timing turned out to be the best
+      available: `term_grades` was still empty — the rehearsal data had
+      been purged and real encoding had not started — so there is no
+      cohort graded under the old rule and no recompute was needed. Every
+      grade the school ever encodes is weighted. Had it gone in a month
+      later, `--confirm` without `--recompute` would have left a silent
+      split between learners whose caches happened to be rebuilt after the
+      switch and everyone else.
+      One thing worth remembering from switching it on: the term card kept
+      showing the pair as two flat rows after the deploy, which looked like
+      the change hadn't shipped. It had — the *display* is gated on the
+      same policy switch as the arithmetic, and the policy version didn't
+      exist until `--confirm` ran. Code deploy and rule activation are two
+      separate events here, by design, and the gap between them is
+      confusing precisely because nothing looks different in between.
