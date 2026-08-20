@@ -41,6 +41,11 @@ ATTENDANCE_MONTH_REOPENED = "ATTENDANCE_MONTH_REOPENED"
 
 LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
+# Changing a subject's units silently changes every Term Average and
+# General Average computed from that point on, and a wrong unit produces a
+# plausible wrong number rather than an error (DO 017 s. 2026, Annex E).
+# That makes it exactly the kind of change §50 exists to make attributable.
+SUBJECT_UNITS_CHANGED = "SUBJECT_UNITS_CHANGED"
 CALENDAR_DAY_CHANGED = "CALENDAR_DAY_CHANGED"
 AWARD_OVERRIDDEN = "AWARD_OVERRIDDEN"
 AWARD_OVERRIDE_CLEARED = "AWARD_OVERRIDE_CLEARED"

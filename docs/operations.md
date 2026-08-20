@@ -113,9 +113,10 @@ own it changes nothing:
 Read the tail of the output. It lists any subject that would still count as
 **1 unit** because DO 017 doesn't settle its weight from its category —
 mostly the Field Exposure / Arts cluster, which mixes 80-hour and 160-hour
-subjects. Set `subjects.units_per_term` for each of those before going on:
-80 hours a term is 3, 160 is 6, 320 is 12, and 160 spread over three terms
-is 2. A wrong unit does not error; it produces a slightly wrong average.
+subjects. Set those on the **Subject Units** page (Setup → Subject Units)
+before going on: 80 hours a term is 3, 160 is 6, 320 is 12, and 160 spread
+over three terms is 2, and the page has a calculator for anything else. A
+wrong unit does not error; it produces a slightly wrong average.
 
 **Step 3 — write, then recompute.** The first command writes the units and
 activates the policy. The second rebuilds every learner's cached averages,
@@ -148,7 +149,24 @@ counts; the components are shown so the number can be checked. Worth
 mentioning to advisers at the same time.
 
 To check afterwards: the Grade Summary screen shows "Unit-weighted over N
-units" beneath a General Average.
+units" beneath a General Average, and the Subject Units page reports
+whether every offering resolves to a configured value.
+
+### Changing units later
+
+Use **Setup → Subject Units**. It shows the whole resolution chain —
+category defaults, per-subject overrides, combined areas — and what each
+subject effectively weighs. Every change is audit-logged.
+
+Two things it will tell you but which are worth knowing in advance:
+
+- **Blank means inherit, and 0 is refused.** There is no way to say
+  "don't count this subject"; a 0 would drop it out of the denominator of
+  every average without a trace.
+- **Editing units does not rebuild existing averages.** They are caches.
+  If grades are already encoded, follow an edit with
+  `--recompute --confirm` or you get a split: learners recomputed since
+  the edit use the new units, everyone else keeps the old ones.
 
 ---
 

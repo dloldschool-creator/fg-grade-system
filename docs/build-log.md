@@ -1633,3 +1633,40 @@ current number.
       exist until `--confirm` ran. Code deploy and rule activation are two
       separate events here, by design, and the gap between them is
       confusing precisely because nothing looks different in between.
+- [x] **Subject Units page** (2026-08-20, asked as "are the units hard
+      coded? can I see a summary, can i change them in the future?").
+      They were never hardcoded — four levels of data with a constant `1`
+      as the floor — but until this page the only way to change them was
+      SQL, which makes "can I change them" effectively *no* for the person
+      who actually owns the decision. Setup → Subject Units shows the whole
+      chain and each subject's **effective** weight, so a blank override
+      reads as "inheriting" rather than "missing".
+      Three things it refuses or warns about, each because the failure is
+      silent rather than loud:
+      1. **0 is rejected.** It is the number someone types meaning "don't
+         count this", and it would instead drop the subject out of every
+         denominator with no trace. Blank is inherit; there is no way to
+         say weightless.
+      2. **Re-saving an untouched table writes nothing**, so the audit log
+         stays a record of decisions rather than of page visits. `2` and
+         `2.00` do not read as an edit.
+      3. **It says when editing won't be enough.** Units feed caches, so
+         with grades already encoded an edit without `--recompute` leaves
+         some learners on the old weights. The page shows the encoded-grade
+         count and the command.
+      Also surfaces whether unit weighting is switched on at all, per grade
+      level — a page full of unit values is actively misleading if the
+      policy in force still averages flat.
+      Two conventions caught it in review rather than in production, which
+      is the point of having them: `tests/test_expander_state.py` failed
+      because the hours calculator's two number boxes sat in a bare
+      `st.expander` and each would have slammed the panel shut on itself,
+      and the editor tables were written with `use_container_width`, which
+      Streamlit says it removed after 2025-12-31. The page now uses
+      `width="stretch"`; the 19 older call sites elsewhere are flagged, and
+      are a real deployment risk given `streamlit<2.0` lets a minor upgrade
+      through.
+      `_cell` normalises what the editor hands back: an emptied numeric
+      cell arrives as None *or* NaN, and NaN is the dangerous one — it is a
+      float, so a naive check treats it as a real value and writes it to a
+      NUMERIC column.

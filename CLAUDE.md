@@ -169,7 +169,13 @@ unweighted baseline without the baseline being deleted.
   behaviour, scoped by `effective_school_year_id` and the new
   `effective_grade_level_id`. Most specific version wins.
 - `scripts/apply_do17_units.py` — writes the units and activates the
-  Grade 11 policy. Dry-run by default.
+  policy. Dry-run by default; stages its changes and rolls back, so the
+  dry run predicts rather than describes the state it replaces.
+- `app/admin_pages/subject_units.py` — **Setup → Subject Units**, where
+  the values are read and edited without SQL. Shows the whole chain and
+  each subject's effective weight, refuses 0 (blank is how you inherit),
+  audit-logs every change as `SUBJECT_UNITS_CHANGED`, and says plainly
+  that editing does not rebuild existing averages.
 
 **Two things DO 017 does not settle on its own**, both stored as switches
 rather than decided in code, and both now answered by the school:
