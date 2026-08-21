@@ -1,10 +1,26 @@
+"""The Learner Masterlist.
+
+**Who may edit what (§3C, §54).** A Registrar or Super Admin works
+school-wide. An adviser edits the learners in the sections they advise,
+plus any they created that are not enrolled anywhere yet, and can *look
+up* anyone else read-only — name, LRN, and which section they are in, so
+a transferee can be found before a duplicate is typed. `lrn` is uniquely
+indexed and an LRN retyped from a form is how duplicates get made, so
+taking the lookup away would trade a privacy gain for a data-integrity
+loss. The rule itself lives in `app.learner_access`; this page draws it.
+
+Every write here is audit-logged. A learner's name, sex, birthdate and
+LRN are the identity every report the school issues is printed under, and
+until 2026-08-21 all four could be overwritten with no record at all.
+"""
+
 from datetime import date
 
 import streamlit as st
 
+from app import audit_service
 from app.admin_pages._helpers import (
     clear_text_fields,
-    flash,
     flush_or_rollback,
     generation_key,
     get_session,
@@ -18,16 +34,34 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.import_specs import LEARNER_IMPORT
+from app.learner_access import editable_learner_ids, may_edit
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
-from app.naming import normalize_name
 from app.models.organization import SchoolYear
+from app.models.rbac import User
+from app.naming import normalize_name
+from app.roster_order import learner_order_by, learner_sort_key
 
 RESULT_LIMIT = 50
 
 
-def _identity_form(session, learner: Learner) -> None:
+def _identity_values(learner: Learner) -> dict:
+    """What the identity form writes, and therefore what an audit entry
+    compares. One function so a field added to the form but not here
+    shows up as a column the log never mentions."""
+    return {
+        "last_name": learner.last_name,
+        "first_name": learner.first_name,
+        "middle_name": learner.middle_name,
+        "extension_name": learner.extension_name,
+        "sex": learner.sex,
+        "birthdate": learner.birthdate,
+        "lrn": learner.lrn,
+    }
+
+
+def _identity_form(session, learner: Learner, current_user, *, may_delete: bool) -> None:
     with st.form(f"edit_learner_{learner.id}"):
         col1, col2, col3 = st.columns(3)
         last_name = col1.text_input("Last name", value=learner.last_name, key=f"ln_{learner.id}")
@@ -50,8 +84,11 @@ def _identity_form(session, learner: Learner) -> None:
             "LRN (12 digits, blank if not yet assigned)", value=learner.lrn or "", key=f"lrn_{learner.id}"
         )
 
-        col1, col2 = st.columns(2)
-        if col1.form_submit_button("Save"):
+        # Delete is drawn only where it can be used: a disabled button
+        # beside Save invites a question the page can't answer well.
+        columns = st.columns(2) if may_delete else [st]
+        if columns[0].form_submit_button("Save"):
+            previous = _identity_values(learner)
             learner.last_name = normalize_name(last_name)
             learner.first_name = normalize_name(first_name)
             learner.middle_name = normalize_name(middle_name)
@@ -59,14 +96,37 @@ def _identity_form(session, learner: Learner) -> None:
             learner.sex = Sex(sex)
             learner.birthdate = birthdate
             learner.lrn = lrn.strip() or None
+            was, now = audit_service.changes(previous, _identity_values(learner))
+            if was:
+                audit_service.record(
+                    session,
+                    action=audit_service.LEARNER_CHANGED,
+                    object_type="learners",
+                    object_id=learner.id,
+                    user_id=current_user.id,
+                    previous=was,
+                    new=now,
+                )
             try_commit(session, "Saved.")
             st.rerun()
-        if col2.form_submit_button("Delete"):
-            try_delete(session, learner, f"{learner.last_name}, {learner.first_name}")
+        if may_delete and columns[1].form_submit_button("Delete"):
+            label = f"{learner.last_name}, {learner.first_name}"
+            # Recorded before the row goes, and rolled back with it if the
+            # delete is refused — the entry belongs to the same
+            # transaction as the change it describes.
+            audit_service.record(
+                session,
+                action=audit_service.LEARNER_DELETED,
+                object_type="learners",
+                object_id=learner.id,
+                user_id=current_user.id,
+                previous=_identity_values(learner),
+            )
+            try_delete(session, learner, label)
             st.rerun()
 
 
-def _admission_record_form(session, learner: Learner, record=None) -> None:
+def _admission_record_form(session, learner: Learner, current_user, record=None) -> None:
     # `record` comes preloaded from the caller's batched lookup. Fetching
     # it here was one round trip per learner on the list, paid whether or
     # not the panel was open — Streamlit runs an expander's body either way.
@@ -150,6 +210,7 @@ def _admission_record_form(session, learner: Learner, record=None) -> None:
         )
 
         if st.form_submit_button("Save admission record"):
+            created = record is None
             if record is None:
                 record = LearnerAdmissionRecord(learner_id=learner.id)
                 session.add(record)
@@ -169,8 +230,144 @@ def _admission_record_form(session, learner: Learner, record=None) -> None:
             record.clc_name = clc_name or None
             record.clc_address = clc_address or None
             record.other_eligibility_notes = other_notes or None
+            # Logged against the learner, not the admission row: that is
+            # the object anyone investigating already has an id for, and a
+            # record created in this same submit has no id worth citing.
+            audit_service.record(
+                session,
+                action=audit_service.LEARNER_ADMISSION_CHANGED,
+                object_type="learners",
+                object_id=learner.id,
+                user_id=current_user.id,
+                new={
+                    "created": created,
+                    "date_of_shs_admission": date_of_shs_admission,
+                    "previous_school_name": previous_school_name or None,
+                    "pept_passer": pept_passer,
+                    "als_ae_passer": als_passer,
+                },
+            )
             try_commit(session, "Admission record saved.")
             st.rerun()
+
+
+def _placements(session, learner_ids) -> dict:
+    """Where each of `learner_ids` currently is, as one line of text.
+
+    Only ever called for learners the viewer may *not* edit, and only for
+    the ones actually on screen. It is what turns "you can't change this
+    one" into something usable, by naming who can.
+
+    Four queries, all batched, none inside the render loop.
+    """
+    if not learner_ids:
+        return {}
+
+    enrollments = (
+        session.query(Enrollment).filter(Enrollment.learner_id.in_(list(learner_ids))).all()
+    )
+    if not enrollments:
+        return {}
+
+    years = {
+        row.id: row
+        for row in session.query(SchoolYear)
+        .filter(SchoolYear.id.in_({e.school_year_id for e in enrollments}))
+        .all()
+    }
+    sections = {
+        row.id: row
+        for row in session.query(Section)
+        .filter(Section.id.in_({e.section_id for e in enrollments}))
+        .all()
+    }
+    adviser_ids = {s.adviser_user_id for s in sections.values() if s.adviser_user_id}
+    advisers = (
+        {row.id: row for row in session.query(User).filter(User.id.in_(adviser_ids)).all()}
+        if adviser_ids
+        else {}
+    )
+
+    # A learner has at most one enrollment per school year, and school
+    # year names sort chronologically, so the newest is the one to name.
+    newest: dict = {}
+    for enrollment in enrollments:
+        year = years.get(enrollment.school_year_id)
+        key = year.name if year else ""
+        if enrollment.learner_id not in newest or key > newest[enrollment.learner_id][0]:
+            newest[enrollment.learner_id] = (key, enrollment)
+
+    lines = {}
+    for learner_id, (year_name, enrollment) in newest.items():
+        section = sections.get(enrollment.section_id)
+        adviser = advisers.get(section.adviser_user_id) if section else None
+        where = section.name if section else "an unnamed section"
+        who = adviser.full_name if adviser else "no adviser on record"
+        lines[learner_id] = f"{where} ({year_name}) — adviser: {who}"
+    return lines
+
+
+def _read_only_card(learner: Learner, placement: str | None) -> None:
+    """What an adviser sees for someone else's learner.
+
+    Enough to recognise the person and know who to ask, and nothing that
+    can be typed into. Searching before adding has to stay possible: an
+    LRN is unique, and a learner who cannot be found is a learner who
+    gets entered a second time.
+    """
+    st.write(
+        f"**{learner.last_name}, {learner.first_name}** — "
+        f"LRN: {learner.lrn or 'not yet assigned'}"
+    )
+    if placement:
+        st.caption(f"Enrolled in {placement}.")
+    else:
+        st.caption("Not enrolled in any section yet — the registrar can make changes.")
+
+
+def _listed_learners(session, search: str, adviser_user_id, editable: set) -> list:
+    """The learners to draw, and in what order.
+
+    Search is school-wide for everyone; that is what makes the read-only
+    lookup a lookup. With the box empty an adviser gets their own people
+    rather than the first fifty names in the school, which is both the
+    more useful default and the one that matches what they can act on.
+    """
+    if search:
+        like = f"%{search}%"
+        return (
+            session.query(Learner)
+            .filter(
+                (Learner.last_name.ilike(like))
+                | (Learner.first_name.ilike(like))
+                | (Learner.lrn.ilike(like))
+            )
+            .order_by(Learner.last_name, Learner.first_name)
+            .limit(RESULT_LIMIT)
+            .all()
+        )
+
+    if adviser_user_id is not None:
+        if not editable:
+            return []
+        # No limit: this set is bounded by the sections one person
+        # advises, and truncating it would quietly hide learners from the
+        # only page their adviser can fix them on. Male first, then
+        # female, alphabetical within each — the order every roster and
+        # every DepEd form uses.
+        return (
+            session.query(Learner)
+            .filter(Learner.id.in_(list(editable)))
+            .order_by(*learner_order_by(Learner))
+            .all()
+        )
+
+    return (
+        session.query(Learner)
+        .order_by(Learner.last_name, Learner.first_name)
+        .limit(RESULT_LIMIT)
+        .all()
+    )
 
 
 def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
@@ -190,6 +387,12 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
     class straight from the file while keeping them out of everyone
     else's sections (§3C). Import from Excel is Registrar-only, so this
     panel is the only way an adviser can enrol in bulk.
+
+    The rows it writes are stamped with `current_user.id` as their creator
+    (see `commit_learners`). That matters most on the path below where the
+    Section column is *refused* and the learners are created anyway:
+    without the stamp they would belong to no section and no creator, and
+    the person who had just typed them could not correct a single one.
     """
     spec = LEARNER_IMPORT
 
@@ -346,48 +549,79 @@ def render() -> None:
     st.title("Learner Masterlist")
     render_flashes()
 
-    # Registrar/Super Admin can enroll a new learner into any section; an
-    # Adviser-only account is scoped to sections they actually advise
-    # (§3C) — same rule already applied on the Enrollment page, and this
-    # page's "Add learner" form can also enroll, so it needs the same
-    # scoping or an adviser could enroll a learner into someone else's
-    # section by mistake.
+    # Registrar/Super Admin work school-wide; an Adviser-only account is
+    # scoped to the learners in the sections they actually advise (§3C,
+    # §54), plus any they created who are not enrolled anywhere yet. The
+    # same rule was already applied on the Enrollment page to *sections*;
+    # this page never applied it to learners, so every adviser could edit
+    # every learner in the school.
     adviser_user_id = None if current_user.has_role("SUPER_ADMIN", "REGISTRAR") else current_user.id
+    # Deleting a learner is a registrar action. The database already
+    # refuses to delete an enrolled one (every foreign key here is ON
+    # DELETE RESTRICT), so the button only ever bit on learners with no
+    # enrollment — which is exactly the fragile set: just imported, not
+    # yet enrolled, quite possibly somebody else's afternoon of typing.
+    may_delete = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
 
     with get_session() as session:
+        editable = editable_learner_ids(session, adviser_user_id)
+
         search = st.text_input("Search by name or LRN")
+        learners = _listed_learners(session, search, adviser_user_id, editable)
 
-        query = session.query(Learner).order_by(Learner.last_name, Learner.first_name)
-        if search:
-            like = f"%{search}%"
-            query = query.filter(
-                (Learner.last_name.ilike(like))
-                | (Learner.first_name.ilike(like))
-                | (Learner.lrn.ilike(like))
+        if adviser_user_id is not None:
+            st.caption(
+                "You can edit the learners in the section(s) you advise, and any "
+                "you added who aren't enrolled yet. Searching finds anyone in the "
+                "school, so you can check whether someone is already here before "
+                "adding them — those results are read-only."
             )
-        learners = query.limit(RESULT_LIMIT).all()
-
-        if not search:
+        elif not search:
             st.caption(f"Showing the first {RESULT_LIMIT} learners — search to narrow down.")
 
+        mine = [learner for learner in learners if may_edit(learner.id, editable, adviser_user_id)]
+        mine_ids = {learner.id for learner in mine}
+        others = [learner for learner in learners if learner.id not in mine_ids]
+
+        if not search and adviser_user_id is not None and not mine:
+            st.info(
+                "No learners yet in the section(s) you advise. Add them below, or "
+                "ask the registrar to enroll them."
+            )
+
+        # Both lookups batched above the render loop: Streamlit runs an
+        # expander's body whether or not it is open, so anything left in
+        # there is a round trip per learner on every single interaction.
         admission_records = {
             row.learner_id: row
             for row in session.query(LearnerAdmissionRecord)
-            .filter(LearnerAdmissionRecord.learner_id.in_([l.id for l in learners]))
+            .filter(LearnerAdmissionRecord.learner_id.in_(list(mine_ids)))
             .all()
-        } if learners else {}
+        } if mine else {}
+        placements = _placements(session, [learner.id for learner in others])
 
-        for learner in learners:
+        for learner in mine:
             label = f"{learner.last_name}, {learner.first_name}"
             if learner.middle_name:
                 label += f" {learner.middle_name[0]}."
             label += f"  —  LRN: {learner.lrn or 'not yet assigned'}"
             with st.expander(label):
-                _identity_form(session, learner)
+                _identity_form(session, learner, current_user, may_delete=may_delete)
                 st.divider()
                 _admission_record_form(
-                    session, learner, admission_records.get(learner.id)
+                    session, learner, current_user, admission_records.get(learner.id)
                 )
+
+        if others:
+            st.divider()
+            st.subheader("Elsewhere in the school")
+            st.caption(
+                "Found by your search but not in a section you advise, so these "
+                "are read-only. Ask the section's adviser or the registrar to "
+                "make a change."
+            )
+            for learner in sorted(others, key=learner_sort_key):
+                _read_only_card(learner, placements.get(learner.id))
 
         st.divider()
         st.subheader("Add learner")
@@ -447,6 +681,10 @@ def render() -> None:
                         sex=Sex(sex),
                         birthdate=birthdate,
                         lrn=lrn.strip() or None,
+                        # What keeps this learner editable by the person
+                        # adding them when no section is chosen — nobody
+                        # advises a learner who isn't enrolled anywhere.
+                        created_by_user_id=current_user.id,
                     )
                     session.add(learner)
                     # Flush now (inside flush_or_rollback's error handling)
@@ -471,6 +709,20 @@ def render() -> None:
                                 )
                             )
                             message += f" Enrolled in {section.name}."
+                        # One entry per learner here, unlike the bulk
+                        # panel: a single add is a deliberate act on a
+                        # named person, and the LRN typed in it is what
+                        # every later record hangs off. See
+                        # `commit_learners` for why a bulk import is
+                        # attributed by column instead.
+                        audit_service.record(
+                            session,
+                            action=audit_service.LEARNER_CREATED,
+                            object_type="learners",
+                            object_id=learner.id,
+                            user_id=current_user.id,
+                            new=_identity_values(learner),
+                        )
                         # Sex and Birthdate keep their setting: a roster is
                         # typed in one sitting and the next learner is
                         # usually the same year group.

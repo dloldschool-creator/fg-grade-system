@@ -131,11 +131,20 @@ def test_the_audit_service_exposes_no_way_to_delete_history():
     """§50: normal teachers must not be able to delete audit history. The
     guarantee is structural — the capability doesn't exist in the app —
     so this test asserts the shape of the module, not a permission check
-    that could be bypassed by reaching the function another way."""
+    that could be bypassed by reaching the function another way.
+
+    **Callables only.** A capability is a function; a string constant
+    cannot delete anything. Scanning every public name caught
+    `LEARNER_DELETED` on 2026-08-21 — an action *recorded in* the log,
+    which is the opposite of a way to erase it — and would catch every
+    `*_DELETED` action added after it. Narrowing to callables keeps what
+    the test is actually for: `def purge_old_entries(...)` still trips it.
+    """
     forbidden = [
         name
         for name in dir(audit_service)
         if not name.startswith("_")
+        and callable(getattr(audit_service, name))
         and any(word in name.lower() for word in ("delete", "purge", "clear_log", "truncate"))
     ]
     assert forbidden == []

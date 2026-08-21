@@ -40,6 +40,23 @@ ATTENDANCE_MONTH_FINALIZED = "ATTENDANCE_MONTH_FINALIZED"
 ATTENDANCE_MONTH_REOPENED = "ATTENDANCE_MONTH_REOPENED"
 
 LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
+# A learner's name, sex, birthdate and LRN are the identity every report
+# the school issues is printed under, and §54 treats them as protected
+# information. Until 2026-08-21 the Learner Masterlist wrote all four with
+# no entry at all: an LRN could be overwritten with no record of the old
+# value or of who typed the new one, which is rule 8 and §50 both. Scoping
+# the page to advisers' own sections stops the wrong person editing; this
+# is what catches the right person editing wrongly, which is the commoner
+# failure of the two.
+LEARNER_CREATED = "LEARNER_CREATED"
+LEARNER_CHANGED = "LEARNER_CHANGED"
+LEARNER_DELETED = "LEARNER_DELETED"
+# Separate from LEARNER_CHANGED because it answers a different question.
+# The admission record is the SHS-entry evidence — PEPT, ALS A&E, the
+# previous school — read when a record is verified rather than when a
+# name looks wrong, and filing both under one action would mean scrolling
+# through spelling corrections to find it.
+LEARNER_ADMISSION_CHANGED = "LEARNER_ADMISSION_CHANGED"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
 # Changing a subject's units silently changes every Term Average and
 # General Average computed from that point on, and a wrong unit produces a

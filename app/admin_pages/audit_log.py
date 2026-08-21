@@ -34,7 +34,13 @@ ACTION_GROUPS = {
         audit_service.ATTENDANCE_MONTH_FINALIZED,
         audit_service.ATTENDANCE_MONTH_REOPENED,
     ],
-    "Learners": [audit_service.LEARNER_MOVEMENT_RECORDED],
+    "Learners": [
+        audit_service.LEARNER_CREATED,
+        audit_service.LEARNER_CHANGED,
+        audit_service.LEARNER_DELETED,
+        audit_service.LEARNER_ADMISSION_CHANGED,
+        audit_service.LEARNER_MOVEMENT_RECORDED,
+    ],
     "Configuration": [
         audit_service.SUBJECT_OFFERING_CHANGED,
         audit_service.CALENDAR_DAY_CHANGED,

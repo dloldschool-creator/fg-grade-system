@@ -1702,3 +1702,64 @@ current number.
       that silently matched nothing would leave the parametrised test
       passing with no cases. Structural for the usual reason: nothing about
       `key="learner_csv"` looks wrong.
+- [x] **Every adviser could edit every learner in the school** (2026-08-21,
+      raised as "all teachers can edit the learners info in the learner
+      masterlist — i'm thinking that only advisers can edit their
+      learners").
+      Subject teachers never could: the nav entry and `require_role` both
+      list only `SUPER_ADMIN`, `REGISTRAR`, `ADVISER`. The exposure was
+      adviser-wide, which is worse than it sounds — 16 sections, and the
+      search box reached all ~1,200 learners. Every hit opened a full
+      identity form (name, sex, birthdate, **LRN**), a Delete button and
+      the whole admission record.
+      What made it invisible is that the page *did* carry adviser
+      scoping — `adviser_user_id` constrained which section the add form
+      and the bulk panel could enrol into. It just never touched the list
+      of people. Scoping that is there reads as scoping that is enough.
+      §3C ("manage learners in assigned section") and §54 ("Adviser sees
+      learners only in assigned sections unless additionally authorized")
+      both already said so, so nothing in the spec needed amending. Every
+      other adviser-facing page — SF9, SF2, Attendance, Grade Summary,
+      Awards, Term Cards, Enrollment — reaches its learners through
+      `section_picker(adviser_user_id=...)`. The Masterlist was the
+      outlier because it is the one page not organised around a section.
+      **The rule has two halves, and the second is the one that matters.**
+      An adviser owns the learners enrolled in a section they advise, *and*
+      the ones they created who are enrolled nowhere. Without the second,
+      the bulk-add panel becomes a trap: it deliberately refuses a Section
+      the uploader doesn't advise and **creates the learners anyway**
+      (refusing them outright is worse), so those rows land in no section
+      — and rule 1 alone would hand them to nobody, including the person
+      who had just typed forty of them. `learners.created_by_user_id`
+      (`a7d2e91c4b60`, additive/nullable) is what answers it;
+      `commit_learners` had been accepting a `user_id` and discarding it
+      since it was written. NULL is registrar-only, not everyone.
+      **The school-wide lookup stays, read-only.** Strict §54 would have
+      hidden other sections entirely, and that trades a privacy gain for a
+      data-integrity loss: `lrn` is uniquely indexed, an LRN is copied off
+      a paper form by hand, and an adviser who can't find a transferee
+      enters them twice. A stranger now renders as a card — name, LRN,
+      section, adviser to ask — with nothing to type into.
+      **Delete became registrar-only.** The database already refused to
+      delete an *enrolled* learner (ON DELETE RESTRICT everywhere), so the
+      button only ever bit on learners with no enrollment: the
+      just-imported, not-yet-enrolled set, which is exactly what somebody
+      is most likely to be halfway through.
+      **Second finding, fixed in the same pass: none of this page was
+      audit-logged.** No `audit_service.record` call anywhere in it, and
+      the only learner action in the vocabulary was
+      `LEARNER_MOVEMENT_RECORDED` — so an LRN could be overwritten with no
+      record of the old value or of who typed the new one, which is rule 8
+      and §50 both. `LEARNER_CREATED` / `LEARNER_CHANGED` /
+      `LEARNER_DELETED` / `LEARNER_ADMISSION_CHANGED` now cover it, and are
+      in the audit viewer's filter. Scoping stops the wrong person editing;
+      the log catches the right person editing wrongly, which is the
+      commoner failure of the two. A bulk import is attributed by the
+      column instead of one entry per row — 1,200 identical entries would
+      bury every other kind of change in a viewer that shows 200.
+      `tests/test_learner_access.py` checks the pure rule, the page's shape
+      (no input widget on a read-only card, no Delete for an adviser, every
+      write path logged, the access query outside the render loop), and the
+      rule itself against the live sections — the last of which is what
+      would notice an adviser's scope quietly becoming the whole school
+      again.

@@ -220,6 +220,17 @@ def validate_learners(
 
 
 def commit_learners(session, parsed: list[dict], user_id=None) -> int:
+    """`user_id` is stamped on each learner rather than written to the
+    audit log. Attribution for a bulk add is the column, not an entry per
+    row: a 1,200-learner migration would put 1,200 identical
+    LEARNER_CREATED rows into a viewer that shows the most recent 200,
+    burying every other kind of change behind one afternoon's import. The
+    import itself is already recorded once, as DATA_IMPORTED.
+
+    It is also what decides who may fix a typo afterwards — see
+    `app.learner_access`. This parameter was accepted and discarded until
+    2026-08-21.
+    """
     for row in parsed:
         learner = Learner(
             last_name=row["last_name"],
@@ -229,6 +240,7 @@ def commit_learners(session, parsed: list[dict], user_id=None) -> int:
             sex=row["sex"],
             birthdate=row["birthdate"],
             lrn=row["lrn"],
+            created_by_user_id=user_id,
         )
         session.add(learner)
 

@@ -458,7 +458,17 @@ Stable identity, independent of any single year's enrollment.
 | middle_name, extension_name | TEXT NULL | |
 | sex | ENUM(`MALE`,`FEMALE`) NOT NULL | |
 | birthdate | DATE NOT NULL | |
+| created_by_user_id | UUID FK → users NULL ON DELETE SET NULL | who typed this learner in (`a7d2e91c4b60`) |
 | created_at, updated_at | TIMESTAMPTZ | |
+
+`created_by_user_id` is what decides who may edit a learner who is
+enrolled nowhere. An adviser's edit rights come from the sections they
+advise (§3C, §54), and a learner with no enrollment is in nobody's
+section — including the ones the bulk-add panel creates when it refuses
+the Section named in the file. NULL means "created before this column
+existed", which resolves to Registrar/Super Admin only; an unowned row is
+not everyone's row. Read by `app/learner_access.py`. Partial index on the
+non-NULL values, since that is the half the scope query reads.
 
 `CHECK (lrn IS NULL OR lrn ~ '^[0-9]{12}$')`
 Unique partial index: `UNIQUE (lrn) WHERE lrn IS NOT NULL` (unique among

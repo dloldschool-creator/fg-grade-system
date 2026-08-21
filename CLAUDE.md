@@ -447,6 +447,31 @@ of each is in `docs/build-log.md`.
   Table 19 splits by **grade level**, not term count, and the engine
   already multiplies units-per-term by the terms a subject actually ran, so
   folding term count into a unit label double-counts it.
+- **Scoping that is present is not the same as scoping that is enough.**
+  The Learner Masterlist carried `adviser_user_id` from the day it was
+  written — and used it only to decide which *section* the add form and
+  the bulk panel could enrol into. The list of people was never scoped, so
+  every adviser could search all ~1,200 learners and retype any name,
+  birthdate or LRN, with Delete alongside. §3C and §54 had said otherwise
+  the whole time. Found by inspection on 2026-08-21, not by a report,
+  because nothing on the page looks wrong. **When a page takes
+  `adviser_user_id`, check what it actually filters** — every other
+  adviser page reaches its learners through `section_picker`, and this one
+  was the outlier because it is not organised around a section.
+  The rule now lives in `app/learner_access.py` and has **two halves**:
+  learners enrolled in a section you advise, *plus* learners you created
+  who are enrolled nowhere. Dropping the second breaks the bulk panel,
+  which deliberately refuses a Section the uploader doesn't advise and
+  creates the learners anyway — they land in no section, and would belong
+  to nobody. `learners.created_by_user_id` answers that; NULL means
+  registrar-only, never everyone. A stranger's learner still renders, as a
+  read-only card: `lrn` is uniquely indexed, so an adviser who cannot find
+  a transferee enters them twice, and hiding the school would trade a
+  privacy gain for a duplicate-LRN loss. Delete is registrar-only —
+  ON DELETE RESTRICT already blocked deleting an *enrolled* learner, so
+  the button only ever bit the just-imported, not-yet-enrolled set.
+  `tests/test_learner_access.py` covers it, including against the live
+  sections.
 - **`AuthUser.id` is a `str`; every `*_user_id` column is a `uuid.UUID`.**
   Postgres coerces between them, so `filter_by(adviser_user_id=current_user.id)`
   works and hides the mismatch — but the same two values compared **in

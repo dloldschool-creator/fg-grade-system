@@ -36,6 +36,17 @@ class Learner(UUIDPKMixin, TimestampMixin, Base):
     extension_name: Mapped[str | None] = mapped_column(String)
     sex: Mapped[Sex] = mapped_column(nullable=False)
     birthdate: Mapped[date] = mapped_column(Date, nullable=False)
+    # Who typed this learner in. Not decoration: an adviser's edit rights
+    # come from the sections they advise (§3C), and a learner created
+    # without a section belongs to none of them — so without this the
+    # adviser who has just bulk-added a roster cannot fix a typo in it.
+    # NULL means "created before this was tracked", which resolves to
+    # registrar-only rather than to everyone. SET NULL on the user, like
+    # every other attribution column here: removing a staff account must
+    # not be blocked by, or destroy, the learner rows they created.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class LearnerAdmissionRecord(UUIDPKMixin, TimestampMixin, Base):
