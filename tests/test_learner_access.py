@@ -457,3 +457,28 @@ def test_a_learner_in_another_advisers_section_is_out_of_scope(session):
         pytest.skip("the second adviser's sections are empty")
 
     assert not (editable_learner_ids(session, first) & theirs)
+
+
+def test_the_read_only_group_still_says_what_it_is():
+    """It has no heading — the matches above it are search results too and
+    carry none, so labelling only this half would read as though the
+    editable half were something else. That makes the caption the only
+    thing telling an adviser why these rows can't be typed into, and the
+    only thing naming who can change them. Easy to tidy away; not easy to
+    notice missing."""
+    render = inspect.getsource(page.render)
+    branch = render[render.index("if others:"):render.index("for learner in sorted(others")]
+    assert "st.caption(" in branch
+    assert "read-only" in branch
+    assert "registrar" in branch
+
+
+def test_the_read_only_group_draws_no_rule_when_it_is_the_only_group():
+    """The case the feature exists for: an adviser searches an LRN to see
+    whether a transferee is already in the school, and matches none of
+    their own. An unconditional divider then puts a horizontal line
+    directly under the search box, which reads as a rendering fault
+    rather than as a separator between two things."""
+    render = inspect.getsource(page.render)
+    branch = render[render.index("if others:"):render.index("for learner in sorted(others")]
+    assert "if mine:\n                st.divider()" in branch

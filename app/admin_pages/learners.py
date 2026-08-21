@@ -613,8 +613,18 @@ def render() -> None:
                 )
 
         if others:
-            st.divider()
-            st.subheader("Elsewhere in the school")
+            # No heading, and the caption carries the whole label. The
+            # matches above are search results too and have no heading of
+            # their own, so naming only this group would read as though
+            # the editable half were something else — and any wording
+            # about where these learners *are* has nothing to contrast
+            # with in the case this exists for: an adviser checking
+            # whether a transferee is already in the school matches none
+            # of their own, so this is the only group on the page.
+            #
+            # The rule needs something above it for the same reason.
+            if mine:
+                st.divider()
             st.caption(
                 "Found by your search but not in a section you advise, so these "
                 "are read-only. Ask the section's adviser or the registrar to "
