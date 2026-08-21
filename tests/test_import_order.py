@@ -34,16 +34,16 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 
-# app.auth is imported by all 29 pages and the entrypoint, and does
-# `from app.models.rbac
-# import ...` at module level — the same shape as the change that broke
-# the app. It is exempt because it is the one case with production
-# evidence behind it: it held that import through the whole 3.14 period,
-# including on 2026-08-12, when _helpers (which sorts earlier, so it went
-# first) was what crashed. Treat this as unexplained rather than safe —
-# see the note in CLAUDE.md. Nothing may be added to this list without
-# the same kind of evidence.
-KNOWN_EXCEPTIONS = {"app.auth"}
+# Empty, and worth keeping that way. `app.auth` sat here until
+# 2026-08-21: imported by every page and the entrypoint, doing
+# `from app.models.rbac import ...` at module level, exempted on the
+# evidence that it had come through the whole 3.14 period without
+# crashing. Surviving is not the same as being safe — it never explained
+# why `app.models.rbac` was survivable where `app.models.academic_structure`
+# was not — and the fix was three lines, so it was closed instead of
+# carried. Anything added back needs better grounds than "it hasn't
+# crashed yet".
+KNOWN_EXCEPTIONS = set()
 
 
 def _page_files():

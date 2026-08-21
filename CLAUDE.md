@@ -249,21 +249,33 @@ Two rules that came out of it:
    module's load-time closure — `_helpers` importing something that
    imports `app.models` is the same outage.
 
-   **One unexplained exception, `app/auth.py`.** It is imported at module
-   load by all 29 pages and the entrypoint — one more than `_helpers`,
-   which the entrypoint does not import — and does
-   `from app.models.rbac import ...` at module level, the same shape as
-   the change that killed the app. It escaped being *first* only because
-   isort sorts `app.admin_pages._helpers` above `app.auth`, putting
-   `_helpers` at line 5 of every page and `auth` at line 18. So `app.auth`
-   carried that import through the whole 3.14 period, including on
-   2026-08-12, and never crashed. That is evidence, not an explanation —
-   it doesn't say why `app.models.rbac` was survivable where
-   `app.models.academic_structure` was not. It is exempted by name in the
-   test with the reasoning attached. **Decided 2026-08-21 to leave it**:
-   the app is live, Term 1 closes 15 September, and the version pin is
-   the real mitigation. Revisit if the host ever moves off 3.13, and add
-   nothing else to that exemption list without the same kind of evidence.
+   **`app/auth.py` was the second instance, and it is closed** (2026-08-21).
+   It is imported at module load by all 29 pages and the entrypoint — one
+   more than `_helpers`, which the entrypoint does not import — and it did
+   `from app.models.rbac import ...` at module level, the same shape as the
+   change that killed the app. It escaped being *first* only because isort
+   sorts `app.admin_pages._helpers` above `app.auth`, putting `_helpers` at
+   line 5 of every page and `auth` at line 18. It carried that import
+   through the whole 3.14 period without crashing, which is evidence but
+   not an explanation — it never said why `app.models.rbac` was survivable
+   where `app.models.academic_structure` was not. So rather than exempt it
+   on "hasn't crashed yet", the three names moved into the two functions
+   that use them: `_load_or_provision_user` and `_record_password_change`,
+   both once per sign-in, neither on a rerun path. `KNOWN_EXCEPTIONS` in
+   the test is empty now and should stay that way.
+
+   **Verifying a change to `app/auth.py` needs more than the suite.**
+   `tests/test_password_gate.py` covers both functions by
+   `inspect.getsource()` substring assertions — it reads them, it never
+   runs them, so the suite goes green whether or not sign-in still works.
+   The move was checked three ways instead: importing `app.auth` first in
+   a fresh interpreter and asserting `app.models` is *not* in
+   `sys.modules` afterwards (the property the whole rule is about);
+   calling both functions with `auth.SessionLocal` stubbed to raise, which
+   proves the function-level import resolves at call time without touching
+   the database; and booting the app to confirm the login page renders.
+   An end-to-end sign-in is still a human step.
+
 2. **`server.fileWatcherType = "none"`** in `.streamlit/config.toml`. The
    watcher re-imports local modules it believes have changed, and
    re-executing a model module produces the same error. Deployed files

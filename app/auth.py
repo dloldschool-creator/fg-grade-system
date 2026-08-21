@@ -16,7 +16,6 @@ import streamlit as st
 
 from app.database import SessionLocal
 from app.naming import normalize_name
-from app.models.rbac import Role, User, UserRole
 from app.supabase_clients import get_anon_client
 
 SESSION_KEY = "auth_user"
@@ -99,7 +98,14 @@ def _load_or_provision_user(
     statement and every page afterwards costs nothing — which is the whole
     reason the must-change flag is resolved here rather than where it is
     enforced.
+
+    The models are imported here rather than at module load: every page
+    imports `app.auth`, so a load-time `app.models` import would make this
+    file decide when `app.models` first initialises — the shape that took
+    the app down on 2026-08-12. See `tests/test_import_order.py`.
     """
+    from app.models.rbac import Role, User, UserRole
+
     session = SessionLocal()
     try:
         user = (
@@ -331,7 +337,12 @@ def _record_password_change(user: AuthUser) -> None:
     change their password again at the next login; without clearing the
     flag on the live session object they stay on the forced page until
     they sign out, having just done the thing that was asked of them.
+
+    Imported inside the function for the reason in
+    `_load_or_provision_user`.
     """
+    from app.models.rbac import User
+
     session = SessionLocal()
     try:
         row = session.query(User).filter_by(id=user.id).one_or_none()
