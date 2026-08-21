@@ -233,11 +233,37 @@ MetaData instance`. Nothing rendered; the app was dead on every request.
 
 Two rules that came out of it:
 
-1. **`_helpers.py` must not import `app.models` at module load.** It is
-   imported by every page, so anything it imports at load time dictates
-   the whole app's import order. `section_picker` imports its models
-   *inside the function* for exactly this reason — don't "tidy" that back
-   to the top.
+1. **If you add a module-level import to a module most pages import, it
+   must not reach `app.models`** — directly or through what it imports.
+   The rule is about the class of file, not the filename: `_helpers.py`
+   is the one that broke, but anything universally imported decides when
+   `app.models` first initialises, and the next such helper won't be
+   called `_helpers`. Import it *inside* the function instead;
+   `section_picker` in `_helpers.py` is the worked example, so don't
+   "tidy" that back to the top. Otherwise a module-level `app.models`
+   import is perfectly fine — most service modules have one, and 48
+   modules do it today.
+   **`tests/test_import_order.py` enforces this.** It derives the
+   governed set from the pages rather than carrying a list, so a new
+   shared helper is covered the day it becomes one, and it walks each
+   module's load-time closure — `_helpers` importing something that
+   imports `app.models` is the same outage.
+
+   **One unexplained exception, `app/auth.py`.** It is imported at module
+   load by all 29 pages and the entrypoint — one more than `_helpers`,
+   which the entrypoint does not import — and does
+   `from app.models.rbac import ...` at module level, the same shape as
+   the change that killed the app. It escaped being *first* only because
+   isort sorts `app.admin_pages._helpers` above `app.auth`, putting
+   `_helpers` at line 5 of every page and `auth` at line 18. So `app.auth`
+   carried that import through the whole 3.14 period, including on
+   2026-08-12, and never crashed. That is evidence, not an explanation —
+   it doesn't say why `app.models.rbac` was survivable where
+   `app.models.academic_structure` was not. It is exempted by name in the
+   test with the reasoning attached. **Decided 2026-08-21 to leave it**:
+   the app is live, Term 1 closes 15 September, and the version pin is
+   the real mitigation. Revisit if the host ever moves off 3.13, and add
+   nothing else to that exemption list without the same kind of evidence.
 2. **`server.fileWatcherType = "none"`** in `.streamlit/config.toml`. The
    watcher re-imports local modules it believes have changed, and
    re-executing a model module produces the same error. Deployed files
@@ -245,10 +271,18 @@ Two rules that came out of it:
    cost is local only: restart Streamlit after editing a module instead
    of relying on hot reload.
 
-The lasting fix is to **pin the host to the same Python version as
-local** (Streamlit Cloud takes a Python version in its advanced deploy
-settings). Until that is done, an import-order change is a deployment
-risk that local tests cannot catch.
+The lasting fix is still to **pin the host to the same Python version as
+local**. Streamlit Cloud does not read `.python-version` or the
+devcontainer — it has its own setting (Manage app → Settings → Python
+version), it has to be changed by hand, and it cannot be asserted from
+this repo; `docs/deployment.md` carries the procedure and the way to
+check what the host is actually running.
+
+What changed on 2026-08-21 is that this particular bug is no longer one
+only the host can find: `tests/test_import_order.py` fails on the
+offending import shape whatever interpreter runs it. A version gap is
+still a deployment risk for everything else, so "it imports fine here"
+remains weak evidence about the host — but not for this.
 
 ## If DepEd reverts to four quarters
 
@@ -540,9 +574,11 @@ the components' sum, or the languages are weighted twice.
   `_helpers.stateful_tabs()`.
 - A `SelectboxColumn` cell whose value isn't in `options` renders *empty*,
   which reads as un-encoded. Sentinels must be valid options.
-- **`_helpers.py` must not import `app.models` at module load** — every page
-  imports it, so it dictates the whole app's import order. See the Python
-  version section above.
+- **A module every page imports must not reach `app.models` at load** —
+  it dictates the whole app's import order, and `_helpers.py` is only the
+  instance that broke. Import inside the function instead.
+  `tests/test_import_order.py` enforces it; see the Python version
+  section above for the outage and the one exception.
 
 **Performance — the database is ~85ms away, so query *count* is the cost**
 
@@ -584,9 +620,15 @@ the components' sum, or the languages are weighted twice.
 2026-08-12 to Streamlit Community Cloud from GitHub (branch `master`,
 entrypoint `streamlit_app.py`, secrets in the app's Settings panel).
 
-**Treat every change as a live change.** Migrations must follow the
-ordering in `docs/operations.md`, and a restart signs everyone out and
-loses unsaved grade entry, so deploy outside encoding hours.
+**If a change reaches the running app, treat it as a live change** —
+schema, anything on an import path, or the shape of what's held in
+session state. Migrations follow the ordering in `docs/operations.md`,
+and a restart signs everyone out and loses unsaved grade entry, so deploy
+those outside encoding hours.
+
+Docs, tests, and scripts nothing imports carry none of that — push them
+freely. They can't reach a running process anyway; only a reboot loads
+new code, and the point of the rule is the reboot, not the push.
 
 **But `git push` does not deploy by itself** — it syncs files, and the
 running process keeps the old modules because `fileWatcherType` is off.
