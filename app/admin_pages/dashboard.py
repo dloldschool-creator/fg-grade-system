@@ -16,22 +16,20 @@ import streamlit as st
 from sqlalchemy import func
 
 from app.admin_pages._helpers import get_session, render_flashes
+from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceMonthStatus
-from app.models.enums import CompletionStatus, EnrollmentStatus, FinalizationState
+from app.models.enums import CompletionStatus, FinalizationState
 from app.models.grades import AnnualGradeSummary, TermGrade
 from app.models.learners import Enrollment
 from app.models.organization import SchoolYear, Term
 
 # The statuses that mean a learner is still on the roll — same set the
-# gradebook and SF2 use, so headcounts agree across the app.
-ACTIVE_STATUSES = {
-    EnrollmentStatus.ENROLLED,
-    EnrollmentStatus.LATE_ENROLLMENT,
-    EnrollmentStatus.TRANSFERRED_IN,
-    EnrollmentStatus.SHIFTED_IN,
-}
+# gradebook and SF2 use, so headcounts agree across the app. Kept as an
+# alias rather than a fourth copy: Insights reports this page's headcount
+# as a percentage, so the two disagreeing is not a cosmetic difference.
+ACTIVE_STATUSES = ACTIVE_ENROLLMENT_STATUSES
 
 DASH = "—"
 

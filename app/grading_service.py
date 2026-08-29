@@ -83,6 +83,19 @@ def _resolve_passing_grade(session: Session, school_year_id, offering: SectionSu
     return Decimal(version.passing_grade) if version else DEFAULT_PASSING_GRADE
 
 
+def resolve_passing_grade(session: Session, school_year_id, offering=None) -> Decimal:
+    """The passing threshold in force, for callers outside this module.
+
+    A thin public name over the resolution above, added so that anything
+    that needs to know where the pass/fail line sits — the Insights
+    page's grade bands, for one — reads the same policy row the report
+    card does. A second implementation would look right until the day
+    someone edits the threshold on the Grading Policy page and only half
+    the app moves.
+    """
+    return _resolve_passing_grade(session, school_year_id, offering)
+
+
 def _remark(final_grade, passing_grade) -> SubjectRemark:
     return SubjectRemark(determine_pass_fail(final_grade, passing_grade))
 

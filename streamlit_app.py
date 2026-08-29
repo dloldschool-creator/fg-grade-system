@@ -16,6 +16,7 @@ from app.admin_pages import (
     gradebook,
     grading_policy,
     help as help_page,
+    insights,
     learners,
     school_info,
     school_years,
@@ -70,6 +71,8 @@ GROUPS = [
         "Overview",
         [
             (dashboard, "Dashboard", "📈", "dashboard",
+             ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
+            (insights, "Insights", "🔎", "insights",
              ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
         ],
     ),

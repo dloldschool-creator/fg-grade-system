@@ -358,11 +358,24 @@ of each is in `docs/build-log.md`.
   shared one identical creation time. Always `server_default=func.now()`.
   `tests/test_model_defaults.py` fails on any `server_default` string
   containing `(`.
-- **No ORM `relationship()` exists anywhere in this codebase**, by design.
-  SQLAlchemy therefore can't order a new parent row before a new dependent
-  row that references it by a bare FK column. Any page creating two related
-  rows in one action must call `_helpers.flush_or_rollback(session)` on the
-  parent first.
+- **Almost no ORM `relationship()` exists, and the few that do are not
+  used for inserts** — so SQLAlchemy can't order a new parent row before
+  a new dependent row that references it by a bare FK column. Any page
+  creating two related rows in one action must call
+  `_helpers.flush_or_rollback(session)` on the parent first.
+  **The tempting wrong inference:** this used to be written as "no
+  `relationship()` exists anywhere, by design", which was never true —
+  six have existed since the initial commit (`School.school_years`,
+  `SchoolYear.school`/`.terms`, `Term.school_year`, `User.user_roles`,
+  `UserRole.user`). A reader who spots `SchoolYear.terms` and concludes
+  the ordering is handled for school years is wrong twice over: the
+  School Years page builds its terms as `Term(school_year_id=new_sy.id,
+  ...)`, a bare FK column the relationship never sees, and it is one of
+  the two places the bug was actually hit. A `relationship()` only helps
+  the unit-of-work when you assign *through* it (`sy.terms.append(...)`),
+  which nothing here does. So the rule is about how the row is written,
+  not about which models happen to declare a relationship — check the
+  insert, never the model.
 - **Never a bare `session.commit()`** where a unique/FK constraint could
   fire — use `_helpers.try_commit()` / `try_delete()`, or an
   `IntegrityError` crashes the whole page instead of showing a message.
@@ -616,6 +629,15 @@ the components' sum, or the languages are weighted twice.
   instance that broke. Import inside the function instead.
   `tests/test_import_order.py` enforces it; see the Python version
   section above for the outage and the one exception.
+- **`st.cache_data` is shared across every signed-in user**, so its
+  argument list has to carry whatever scopes the viewer. Only Insights
+  uses it so far; the rules are in the Analytics section below, and one
+  of its caches holds learner names.
+- **A keyed widget raises when its stored value is not among its
+  options**, which is what `_helpers._forget_stale()` exists for. Any
+  new filter whose options depend on another filter — or on the school
+  year — needs it called *before* the widget is built, not just the two
+  boxes `section_filters` already draws.
 
 **Performance — the database is ~85ms away, so query *count* is the cost**
 
@@ -650,6 +672,130 @@ the components' sum, or the languages are weighted twice.
   per-learner panel anywhere, load its data above the loop.
 - `tests/test_query_cost.py` asserts this shape and stays meaningful on a
   fast local database, where the bug is otherwise invisible.
+- **Analytics has a second cost axis: row volume.** Everything above is
+  about round trips. `app/analytics_service.py` also has to not move
+  ~32,000 `term_grades` into Python, so it aggregates in Postgres and
+  returns tens of rows. See the Analytics section below.
+
+## Analytics — Overview → Insights
+
+Added 2026-08-29. `app/analytics_service.py` (queries, no Streamlit) and
+`app/admin_pages/insights.py` (the page), covering four metrics behind
+one shared filter set: **grade encoding progress**, **grade
+distribution**, **subject difficulty**, and **learners at risk**.
+
+It sits beside the Dashboard rather than inside it. The split is by
+question: the Dashboard answers *what is outstanding right now* and is
+deliberately filter-free, Insights answers *how are we doing* and is
+nothing but filters. Merging them would make a strand change re-pay for
+the attendance-month table nobody moved. Spec §42 asks for role-specific
+dashboards and only the administrator one existed, so this fills a gap
+rather than adding scope.
+
+**The shape: aggregate in SQL, cache once per school year, slice in
+Python.** Each metric issues a fixed 8 queries for a whole year and
+returns one row per section × term (90 today), or per section × term ×
+subject (~810 once grades exist). The page caches that and filters the
+cached rows, so **no dropdown costs a round trip**. Pushing the
+grade-level/strand/section filters into SQL would put 85ms behind every
+widget for no gain. `tests/test_analytics_service.py` asserts the query
+count stays flat.
+
+**This is the app's first use of `st.cache_data`, and it has rules:**
+
+- Open the session **inside** the cached function. A `Session` is not
+  cacheable and ORM instances handed across the boundary come back
+  detached — which is why the service returns frozen dataclasses of
+  primitives, and why `str(uuid)` goes in rather than the UUID.
+- **The argument list is the cache key, and the cache is shared across
+  every signed-in user.** It is safe today only because the three roles
+  that can open the page (SUPER_ADMIN, REGISTRAR, SCHOOL_HEAD) already
+  see the whole school. The day an adviser or subject teacher reaches
+  it, whatever scopes their view has to become an argument, or one
+  adviser is served another's cached sections. **This is not
+  theoretical: `_at_risk` caches learner names.** Same failure as the
+  Learner Masterlist entry above, with a cache in front of it.
+- Keep cached objects aggregate-sized. The process has ~1GB; caching a
+  roster is how you evict everything else.
+
+**Never recompute an official figure here.** Rule 1 and §65 give one
+implementation of every formula, and a second one in an analytics page
+would drift from the report card with nothing looking wrong. At-risk
+reads `failed_subject_count` and `lowest_term_grade` straight out of
+`term_grade_summaries`, where `grading_service` wrote them against the
+policy in force at the time — re-deriving "who is failing" from raw
+grades and today's threshold would restate a finalized term under a mark
+it was never graded on, which is rule 6.
+
+**The five judgement calls, and why they went that way:**
+
+1. **A percentage is never averaged or summed.** `roll_up()` and
+   `subject_difficulty()` recompute from the totals, because a 5-learner
+   SNED section and a 45-learner one do not each contribute half. Same
+   mistake that shipped twice already, in SF2 and again SF4.
+2. **`percent` is `None`, never `0.0`, when nothing is expected.** A
+   section with no offerings yet is not 0% encoded, it is not yet
+   askable — and 0% sorts it above sections where teachers are genuinely
+   late. Same reasoning as rule 2.
+3. **PLACEHOLDER offerings count toward `expected`.** §48 says a
+   placeholder is not a usable offering, but the Gradebook does not
+   filter on offering status, so a teacher can and does encode against
+   one. Excluding them from the denominator while their grades land in
+   the numerator is how a section reports 104%. They are surfaced as a
+   separate warning instead.
+4. **Grade bands are numeric and unnamed, and anchored to the resolved
+   passing mark.** The Outstanding / Very Satisfactory descriptors are
+   DO 8 s. 2015, and DO 017 defers the whole assessment, grading and
+   awards policy to a forthcoming order — the same reason not to move
+   `passing_grade` or the award tiers. `grade_bands(passing)` builds
+   them from `grading_service.resolve_passing_grade()` (added as a
+   public name over the existing private resolver, so analytics reads the
+   same policy row the report card does).
+5. **Difficulty ranks by share below passing, not by the mean.** A
+   subject can sit at a comfortable average and still have six learners
+   failing, which is precisely the case a department head needs. A test
+   asserts the top-ranked subject has the *higher* average so this cannot
+   be "fixed" back.
+
+**Two counting traps specific to this page:**
+
+- **Means are only ever taken within one subject**, where every learner
+  carries the same units so unit weighting has nothing to change. A mean
+  *across* subjects is the unit-weighted General Average and belongs on
+  the report card; the page says so rather than silently omitting it.
+- **Learners and flags are different numbers.** A learner failing all
+  three terms is three rows and one person. `at_risk_headline()` returns
+  both; adding the rows up overstates the problem by exactly the amount
+  the school most wants right.
+
+**The at-risk list is deliberately not ordered through
+`app/roster_order.py`**, which governs every other list of learners in
+the app. That module puts males first because the DepEd forms do; this
+is a work list, not a roster, and ordering it by anything but severity
+buries the learner most at risk in the middle. The reason is written at
+the sort so it does not read as an oversight. It also shows the least
+that still identifies someone — name, section, term, no LRN and no
+birthdate.
+
+**Testing: `term_grades` is empty, so the SQL had never run against a
+row.** Both the band-bucketing and every at-risk branch are covered by
+tests that **write rows, flush, assert, and roll back** — the fixture
+never commits, so nothing reaches the school's data. That is the
+technique to reuse for any future metric, because the alternative is
+shipping a `GROUP BY` that has never seen a grade.
+
+**`recompute_enrollment_grades` calls `session.commit()`**
+(`app/grading_service.py`), so it cannot appear in a rolled-back test —
+running it against the live database writes permanently. The at-risk
+test therefore builds `TermGradeSummary` rows directly. Worth knowing
+before someone tries to drive the grading pipeline end to end from a
+test.
+
+**Still open on this page:** nobody has viewed it signed-in — every
+function is verified against real and constructed data, but the layout
+itself is unseen. Annual (General Average) risk is not covered, only
+term-level. Attendance-based risk (§31's consecutive-absence warning) is
+a separate metric and is not built.
 
 ## Where things stand
 
@@ -689,6 +835,12 @@ carries a teacher** as of 2026-08-17 — 315 assignments written by
 `scripts/import_teacher_assignments.py`, all 16 sections, 362 active
 assignments in total. Grade 12's are still partial. Advisers can also
 bulk-enrol their own class from the Learner Masterlist upload.
+**Overview → Insights** exists as of 2026-08-29 — encoding progress,
+grade distribution, subject difficulty and learners at risk, filtered
+and cached; see the Analytics section above. Encoding progress is the
+one to watch before the deadline: it reads 0 of 7,260 expected today,
+and shows the Grade 12 term gap as a number (708 expected against Grade
+11's 6,552).
 **Term 1 closes 15 September 2026.**
 
 ## Dress rehearsal, 2026-08-13 — what it found

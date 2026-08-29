@@ -57,12 +57,21 @@ def test_school_head_is_not_an_editing_role():
 # --- The pages it can reach ------------------------------------------------
 
 # Everything wired for SCHOOL_HEAD in streamlit_app.py.
-GRANTED = ["dashboard", "grade_summary", "sf9", "sf2", "sf4", "term_cards", "data_export"]
+GRANTED = [
+    "dashboard",
+    "insights",
+    "grade_summary",
+    "sf9",
+    "sf2",
+    "sf4",
+    "term_cards",
+    "data_export",
+]
 
 # Report pages generate documents and never write school data. Grade
 # Summary does have write paths, so it must gate them explicitly — it is
 # checked separately below.
-PURELY_READ_ONLY = ["dashboard", "sf9", "sf2", "sf4", "term_cards"]
+PURELY_READ_ONLY = ["dashboard", "insights", "sf9", "sf2", "sf4", "term_cards"]
 
 # Calls that change official data. `record_export` is excluded on purpose:
 # it appends an export-job audit row, which is a record *of* the read, not

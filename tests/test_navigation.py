@@ -115,5 +115,6 @@ def test_a_read_only_account_gets_no_page_that_edits():
     assert not head_only & EDITING_ROLES
     visible = [t for _h, _m, t, _u, roles in ENTRIES if roles and "SCHOOL_HEAD" in roles]
     assert set(visible) == {
-        "Dashboard", "Grade Summary", "SF9", "SF2", "SF4", "Term Cards", "Export",
+        "Dashboard", "Insights", "Grade Summary", "SF9", "SF2", "SF4", "Term Cards",
+        "Export",
     }, "adding a page for a School Head is a deliberate act — confirm it cannot write"

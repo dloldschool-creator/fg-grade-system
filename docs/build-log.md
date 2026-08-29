@@ -190,9 +190,10 @@ current number.
       Sections/Academic Structure/School Info/School Years/Subject
       Catalog/Grading Policy — always use `try_commit`/`try_delete` for
       any commit that could plausibly violate a unique/FK constraint, never
-      a bare `session.commit()`. (2) This codebase declares **no ORM
-      `relationship()`** between models anywhere (explicit queries only,
-      by design) — which means SQLAlchemy's unit-of-work can't infer that
+      a bare `session.commit()`. (2) This codebase **almost never declares an
+      ORM `relationship()`**, and never assigns through the few it has
+      (explicit queries only, by design) — which means SQLAlchemy's
+      unit-of-work can't infer that
       a new parent row (e.g. `Learner`) must be inserted before a new
       dependent row (`Enrollment`) that references it via a bare FK
       column, and can attempt them in the wrong order, failing a foreign
