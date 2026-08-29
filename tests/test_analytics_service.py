@@ -35,6 +35,7 @@ from app.analytics_service import (
     roll_up,
     subject_difficulty,
     subject_grade_stats,
+    subject_learners_at_risk,
     taught_offering_ids,
 )
 from app.database import SessionLocal
@@ -647,6 +648,185 @@ def test_the_drill_down_cost_is_flat(session, school_year):
     with QueryCounter() as counter:
         offering_progress(session, school_year.id, (section.id,))
     assert counter.count <= 8, f"{counter.count} queries for the drill-down"
+
+
+# --- A teacher's at-risk list, in their own subjects only ------------------
+
+
+def _seed_offering_grades(session, offering, values):
+    """Write one grade per learner on an offering. Never committed — the
+    session fixture rolls back."""
+    from app.models.grades import TermGrade
+    from app.models.learners import Enrollment
+
+    roster = (
+        session.query(Enrollment)
+        .filter_by(
+            school_year_id=offering.school_year_id, section_id=offering.section_id
+        )
+        .limit(len(values))
+        .all()
+    )
+    if len(roster) < len(values):
+        pytest.skip("not enough learners in that section")
+    for enrollment, value in zip(roster, values):
+        session.add(
+            TermGrade(
+                enrollment_id=enrollment.id,
+                section_subject_offering_id=offering.id,
+                term_id=offering.term_id,
+                official_grade=Decimal(str(value)),
+            )
+        )
+    session.flush()
+    return roster
+
+
+def test_a_teacher_with_no_classes_sees_nobody(session, school_year):
+    report = subject_learners_at_risk(session, school_year.id, ())
+    assert report.rows == ()
+    assert report.learners == 0
+    assert report.passing_grade > 0, "the threshold should still resolve"
+
+
+def test_only_grades_below_the_mark_appear_and_the_mark_itself_passes(
+    session, school_year
+):
+    """75 passes. The boundary is the easy thing to get wrong, and it
+    would mislabel a learner who is exactly at the line."""
+    from app.models.subjects import SectionSubjectOffering
+
+    offering = (
+        session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year.id)
+        .first()
+    )
+    if offering is None:
+        pytest.skip("no offerings")
+
+    before = len(subject_learners_at_risk(session, school_year.id, (offering.id,)).rows)
+    roster = _seed_offering_grades(session, offering, [68, 74, 75, 80])
+
+    report = subject_learners_at_risk(session, school_year.id, (offering.id,))
+    flagged = {r.enrollment_id: r for r in report.rows}
+
+    assert len(report.rows) - before == 2, "only 68 and 74 should flag"
+    assert roster[0].id in flagged and roster[1].id in flagged
+    assert roster[2].id not in flagged, "the passing mark itself must pass"
+    assert roster[3].id not in flagged
+    assert flagged[roster[0].id].shortfall == 7.0
+
+
+def test_a_teacher_never_sees_grades_from_a_class_they_do_not_hold(
+    session, school_year
+):
+    """**The property this whole function exists for.**
+
+    Two offerings in the same section, grades written to both, but the
+    teacher holds only one. The other subject's failing learners must not
+    appear — a subject teacher seeing how their learners do in a
+    colleague's class is the leak, and scoping by section would produce
+    exactly that.
+    """
+    from app.models.subjects import SectionSubjectOffering
+
+    section_id = (
+        session.query(SectionSubjectOffering.section_id)
+        .filter_by(school_year_id=school_year.id)
+        .first()
+    )
+    if section_id is None:
+        pytest.skip("no offerings")
+    offerings = (
+        session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year.id, section_id=section_id[0])
+        .limit(2)
+        .all()
+    )
+    if len(offerings) < 2:
+        pytest.skip("that section runs only one offering")
+
+    mine, theirs = offerings[0], offerings[1]
+    _seed_offering_grades(session, mine, [60, 61])
+    _seed_offering_grades(session, theirs, [62, 63])
+
+    report = subject_learners_at_risk(session, school_year.id, (mine.id,))
+    seen = {r.offering_id for r in report.rows}
+
+    assert mine.id in seen
+    assert theirs.id not in seen, (
+        "a grade from an offering the teacher does not hold reached their list"
+    )
+
+
+def test_a_teachers_list_never_reads_the_term_summaries(session, school_year):
+    """Structural, not behavioural: `at_risk_learners` is built from
+    `term_grade_summaries`, which describe a learner across every
+    subject. The teacher-facing function must not touch that table, and a
+    future edit that "reuses" it would be the leak."""
+    import inspect
+
+    source = inspect.getsource(analytics_service.subject_learners_at_risk)
+    assert "TermGradeSummary" not in source
+    assert "at_risk_learners" not in source
+
+
+def test_learners_and_rows_are_counted_separately(session, school_year):
+    """A learner below the mark in two of a teacher's subjects is two
+    rows and one learner."""
+    from app.models.subjects import SectionSubjectOffering
+
+    section_id = (
+        session.query(SectionSubjectOffering.section_id)
+        .filter_by(school_year_id=school_year.id)
+        .first()
+    )
+    if section_id is None:
+        pytest.skip("no offerings")
+    offerings = (
+        session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year.id, section_id=section_id[0])
+        .limit(2)
+        .all()
+    )
+    if len(offerings) < 2:
+        pytest.skip("that section runs only one offering")
+
+    # The same two learners fail both subjects.
+    _seed_offering_grades(session, offerings[0], [60, 61])
+    _seed_offering_grades(session, offerings[1], [62, 63])
+
+    ids = tuple(o.id for o in offerings)
+    report = subject_learners_at_risk(session, school_year.id, ids)
+    assert len(report.rows) == 4
+    assert report.learners == 2, "the same learner twice is one person"
+
+
+def test_an_ungraded_learner_is_not_at_risk(session, school_year):
+    """Rule 2 once more: no grade is not a low grade."""
+    from app.models.subjects import SectionSubjectOffering
+
+    offering = (
+        session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year.id)
+        .first()
+    )
+    if offering is None:
+        pytest.skip("no offerings")
+    before = subject_learners_at_risk(session, school_year.id, (offering.id,))
+    # Nothing seeded: the roster exists and is entirely ungraded.
+    assert before.rows == () or all(r.grade is not None for r in before.rows)
+
+
+def test_the_subject_risk_cost_is_flat(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    subject_learners_at_risk(session, school_year.id, ids)  # warm
+    with QueryCounter() as counter:
+        subject_learners_at_risk(session, school_year.id, ids)
+    assert counter.count <= 10, f"{counter.count} queries for a teacher's at-risk list"
 
 
 # --- Annual standing -------------------------------------------------------

@@ -1117,6 +1117,208 @@ def at_risk_learners(session, school_year_id, section_ids=None) -> AtRiskReport:
 
 
 # --------------------------------------------------------------------------
+# Learners at risk in one teacher's own subjects
+# --------------------------------------------------------------------------
+#
+# **This exists because `at_risk_learners` must never be shown to a
+# subject teacher.** That function reads `term_grade_summaries`, whose
+# `term_average` and `failed_subject_count` describe a learner across
+# *every* subject — a teacher seeing it would learn how their learners
+# are doing in colleagues' classes. So a subject teacher's at-risk list
+# is built from the only grades that are theirs: `term_grades` on
+# offerings they actively hold.
+#
+# It is a different question, not a narrower view of the same one. "Who
+# is failing my subject" and "who is failing the term" have different
+# answers, and only the first is a subject teacher's to ask.
+
+
+@dataclass(frozen=True)
+class SubjectRiskRow:
+    """One learner below the passing mark in one of a teacher's classes."""
+
+    enrollment_id: uuid.UUID
+    learner_name: str
+    section_id: uuid.UUID
+    section_name: str
+    offering_id: uuid.UUID
+    subject_id: uuid.UUID
+    subject_name: str
+    subject_code: str
+    term_id: uuid.UUID
+    term_name: str
+    term_number: int
+    grade: float
+    passing_grade: float
+    # Whether this grade has been handed in yet — a failing DRAFT is
+    # still the teacher's to change, a submitted one is a conversation.
+    status: str
+
+    @property
+    def shortfall(self) -> float:
+        return self.passing_grade - self.grade
+
+
+@dataclass(frozen=True)
+class SubjectRiskReport:
+    passing_grade: float
+    rows: tuple[SubjectRiskRow, ...]
+
+    @property
+    def learners(self) -> int:
+        """Distinct people, not rows — a learner failing two of this
+        teacher's subjects is two rows and one learner."""
+        return len({row.enrollment_id for row in self.rows})
+
+
+def subject_learners_at_risk(
+    session, school_year_id, offering_ids
+) -> SubjectRiskReport:
+    """Learners below the passing mark in the given classes.
+
+    `offering_ids` is required and empty means empty: this is only ever
+    called with a subject teacher's own classes, and a teacher who holds
+    none must see nothing rather than everything.
+
+    **The threshold is resolved per offering.** `section_subject_offerings`
+    may carry its own `grading_policy_version_id`, and `grading_service`
+    honours it, so assuming one school-wide passing mark would quietly
+    mis-flag a class graded on a different one. No offering uses that
+    today; the column exists, so this reads it.
+    """
+    if not offering_ids:
+        from app.grading_service import resolve_passing_grade as _fallback
+
+        return SubjectRiskReport(
+            passing_grade=float(_fallback(session, school_year_id)), rows=()
+        )
+
+    from app.grading_service import resolve_passing_grade
+    from app.models.subjects import GradingPolicyVersion
+
+    default_passing = float(resolve_passing_grade(session, school_year_id))
+
+    offerings = (
+        session.query(SectionSubjectOffering)
+        .filter(
+            SectionSubjectOffering.school_year_id == school_year_id,
+            SectionSubjectOffering.id.in_(offering_ids),
+        )
+        .all()
+    )
+    if not offerings:
+        return SubjectRiskReport(passing_grade=default_passing, rows=())
+
+    # One query for every override in play, rather than a `session.get`
+    # per offering.
+    override_ids = {
+        o.grading_policy_version_id
+        for o in offerings
+        if o.grading_policy_version_id is not None
+    }
+    overrides = {}
+    if override_ids:
+        overrides = {
+            v.id: float(v.passing_grade)
+            for v in session.query(GradingPolicyVersion)
+            .filter(GradingPolicyVersion.id.in_(override_ids))
+            .all()
+        }
+    passing_by_offering = {
+        o.id: overrides.get(o.grading_policy_version_id, default_passing)
+        for o in offerings
+    }
+
+    # Filtered in SQL to the highest threshold in play so only low grades
+    # cross the wire, then each offering's own threshold applied exactly.
+    ceiling = max(passing_by_offering.values())
+    grades = (
+        session.query(TermGrade)
+        .join(Enrollment, TermGrade.enrollment_id == Enrollment.id)
+        .filter(
+            TermGrade.section_subject_offering_id.in_([o.id for o in offerings]),
+            TermGrade.official_grade.isnot(None),
+            TermGrade.official_grade < ceiling,
+            Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+        )
+        .all()
+    )
+    if not grades:
+        return SubjectRiskReport(passing_grade=default_passing, rows=())
+
+    offering_by_id = {o.id: o for o in offerings}
+    enrollments = {
+        e.id: e
+        for e in session.query(Enrollment)
+        .filter(Enrollment.id.in_({g.enrollment_id for g in grades}))
+        .all()
+    }
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner)
+        .filter(Learner.id.in_({e.learner_id for e in enrollments.values()}))
+        .all()
+    }
+    sections = {
+        s.id: s
+        for s in session.query(Section)
+        .filter(Section.id.in_({o.section_id for o in offerings}))
+        .all()
+    }
+    subjects = {
+        s.id: s
+        for s in session.query(Subject)
+        .filter(Subject.id.in_({o.subject_id for o in offerings}))
+        .all()
+    }
+    terms = {
+        t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
+    }
+
+    rows = []
+    for grade in grades:
+        offering = offering_by_id.get(grade.section_subject_offering_id)
+        if offering is None:
+            continue
+        threshold = passing_by_offering[offering.id]
+        value = float(grade.official_grade)
+        if value >= threshold:
+            continue  # below the ceiling but passing under its own rule
+        enrollment = enrollments.get(grade.enrollment_id)
+        learner = learners.get(enrollment.learner_id) if enrollment else None
+        section = sections.get(offering.section_id)
+        term = terms.get(offering.term_id)
+        if learner is None or section is None or term is None:
+            continue
+        subject = subjects.get(offering.subject_id)
+        rows.append(
+            SubjectRiskRow(
+                enrollment_id=enrollment.id,
+                learner_name=f"{learner.last_name}, {learner.first_name}",
+                section_id=section.id,
+                section_name=section.name,
+                offering_id=offering.id,
+                subject_id=offering.subject_id,
+                subject_name=subject.official_name if subject else "",
+                subject_code=subject.code if subject else "",
+                term_id=term.id,
+                term_name=term.name,
+                term_number=term.term_number,
+                grade=value,
+                passing_grade=threshold,
+                status=grade.status.value if grade.status else "",
+            )
+        )
+
+    # Furthest below the line first — the learner needing most attention,
+    # not the alphabetically unlucky one.
+    rows.sort(
+        key=lambda r: (-r.shortfall, r.section_name, r.term_number, r.learner_name)
+    )
+    return SubjectRiskReport(passing_grade=default_passing, rows=tuple(rows))
+
+
+# --------------------------------------------------------------------------
 # Annual standing (§19-20)
 # --------------------------------------------------------------------------
 #

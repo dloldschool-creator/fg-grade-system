@@ -680,10 +680,11 @@ the components' sum, or the languages are weighted twice.
 ## Analytics — Overview → Insights
 
 Added 2026-08-29. `app/analytics_service.py` (queries, no Streamlit) and
-`app/admin_pages/insights.py` (the page), covering six metrics behind
+`app/admin_pages/insights.py` (the page), covering seven metrics behind
 one shared filter set: **grade encoding progress**, **grade
 distribution**, **subject difficulty**, **learners at risk** (per term),
-**annual standing**, and **attendance risk (§31)**.
+**annual standing**, **attendance risk (§31)**, and — for subject
+teachers only — **learners at risk in their own subjects**.
 
 It sits beside the Dashboard rather than inside it. The split is by
 question: the Dashboard answers *what is outstanding right now* and is
@@ -850,7 +851,18 @@ boundary rather than a convenience, so it is worth stating plainly:
   in subjects they do not teach.
 - `taught_offering_ids()` is the scope, from **active** assignments —
   the same rule the Gradebook uses, so a reassigned teacher loses the
-  class as it moves. `subject_grade_stats` and `offering_progress` both
+  class as it moves.
+- **`subject_learners_at_risk()` is why the at-risk list could not just
+  be scoped.** `at_risk_learners` reads `term_grade_summaries`, whose
+  `term_average` and `failed_subject_count` describe a learner across
+  *every* subject. A teacher's version is built from `term_grades` on
+  their own offerings instead — "who is failing my subject" and "who is
+  failing the term" are different questions with different answers, and
+  only the first is theirs. A test asserts the function never mentions
+  `TermGradeSummary`, because the tempting future edit is to reuse the
+  existing one. The passing mark is resolved **per offering**, since
+  `section_subject_offerings.grading_policy_version_id` can override it
+  and `grading_service` honours that; none do today. `subject_grade_stats` and `offering_progress` both
   take `offering_ids` alongside `section_ids`; **`offering_progress`
   refuses to run with neither** rather than falling back school-wide.
 - A teacher who also advises is shown the **adviser** view, the broader

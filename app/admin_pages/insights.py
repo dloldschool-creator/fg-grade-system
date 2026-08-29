@@ -101,6 +101,19 @@ def _offering_progress(school_year_id: str, section_ids=None, offering_ids=None)
         )
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading learners at risk…")
+def _subject_risk(school_year_id: str, offering_ids):
+    """Cached at-risk list for one teacher's own classes.
+
+    Keyed by `offering_ids`, which is what keeps one teacher from being
+    served another's learners — and this cache holds names.
+    """
+    with get_session() as session:
+        return analytics_service.subject_learners_at_risk(
+            session, school_year_id, offering_ids
+        )
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading annual standing…")
 def _annual_risk(school_year_id: str, section_ids):
     """Cached year-end standing. Holds learner names, so `section_ids` is
@@ -645,6 +658,63 @@ def _render_attendance_section(school_year_id: str, scope_ids) -> None:
     _render_attendance(_attendance_risk(school_year_id, year, month, scope_ids))
 
 
+def _render_subject_risk(report) -> None:
+    """Learners below the passing mark **in this teacher's own classes**.
+
+    Not the same list a school head or adviser sees. Theirs is built from
+    the term summaries, which describe a learner across every subject;
+    this is built only from grades on offerings this teacher holds. A
+    subject teacher learning how their learners are doing in colleagues'
+    classes is not a smaller version of the same feature — it is a
+    different one, and not theirs.
+    """
+    if not report.rows:
+        st.success(
+            f"No learner is below {report.passing_grade:g} in the grades you "
+            "have encoded."
+        )
+        return
+
+    col1, col2 = st.columns(2)
+    col1.metric("Learners", f"{report.learners:,}")
+    col2.metric("Failing grades", f"{len(report.rows):,}")
+    if report.learners != len(report.rows):
+        st.caption(
+            "A learner below the mark in more than one of your subjects "
+            "counts once as a learner and once per subject as a grade."
+        )
+
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Learner": row.learner_name,
+                    "Section": row.section_name,
+                    "Subject": row.subject_name or row.subject_code,
+                    "Term": row.term_name,
+                    "Grade": _fmt_grade(row.grade),
+                    "Below by": _fmt_grade(row.shortfall),
+                    "State": row.status.title() if row.status else DASH,
+                }
+                for row in report.rows
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    drafts = [r for r in report.rows if r.status == "DRAFT"]
+    if drafts:
+        st.caption(
+            f"{len(drafts)} of these are still drafts — yours to change on the "
+            "Gradebook until you submit them."
+        )
+    st.caption(
+        "Counted from the grades you have encoded, in your subjects only. "
+        "A learner with no grade yet does not appear here — a blank is not "
+        "a low mark."
+    )
+
+
 def _render_teacher_view(school_year_id: str, current_user) -> None:
     """The whole page, for a subject teacher.
 
@@ -662,6 +732,10 @@ def _render_teacher_view(school_year_id: str, current_user) -> None:
     _render_my_classes(rows)
     if not rows:
         return
+
+    st.divider()
+    st.subheader("Learners at risk in your subjects")
+    _render_subject_risk(_subject_risk(school_year_id, offering_ids))
 
     stats = _grade_stats(school_year_id, None, offering_ids)
     st.divider()
