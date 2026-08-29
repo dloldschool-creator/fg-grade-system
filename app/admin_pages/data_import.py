@@ -168,7 +168,7 @@ def render() -> None:
     st.dataframe(
         pd.DataFrame([{k: v for k, v in r.items() if k != "__row__"} for r in mapped_rows[:PREVIEW_ROWS]]),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
     if len(mapped_rows) > PREVIEW_ROWS:
         st.caption(f"Showing the first {PREVIEW_ROWS} of {len(mapped_rows)} rows.")
@@ -203,7 +203,7 @@ def render() -> None:
                     ]
                 ),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             if len(result.errors) > MAX_ERRORS_SHOWN:
                 st.caption(f"…and {len(result.errors) - MAX_ERRORS_SHOWN} more.")

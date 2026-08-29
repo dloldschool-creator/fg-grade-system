@@ -129,5 +129,5 @@ without restoring anything.
         st.dataframe(
             [{"Table": name, "Rows": count} for name, count in counts.items()],
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )

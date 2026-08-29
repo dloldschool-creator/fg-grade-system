@@ -352,13 +352,13 @@ def render() -> None:
                     },
                 },
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
             if st.button("Save attendance", type="primary"):
                 _save_grid(session, roster, class_days, edited, current_user.id)
                 st.rerun()
         else:
-            st.dataframe(dataframe, hide_index=True, use_container_width=True)
+            st.dataframe(dataframe, hide_index=True, width="stretch")
             st.caption("This month is finalized — reopen it below to make changes.")
 
         st.divider()

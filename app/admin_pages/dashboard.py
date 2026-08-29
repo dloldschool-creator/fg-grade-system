@@ -112,7 +112,7 @@ def _render_sections(rows: list[dict]) -> None:
         st.dataframe(
             pd.DataFrame([{k: row[k] for k in DISPLAY_COLUMNS} for row in block]),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -226,7 +226,7 @@ def render() -> None:
         st.subheader("Grade encoding")
         progress = _encoding_progress(session, sy_choice)
         if progress:
-            st.dataframe(pd.DataFrame(progress), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(progress), hide_index=True, width="stretch")
             st.caption(
                 "A term shows CLOSED when teachers cannot currently encode grades "
                 "for it. That is the normal state between encoding periods."
@@ -241,7 +241,7 @@ def render() -> None:
             outstanding = [r for r in attendance if r["Status"] != FinalizationState.FINALIZED.value]
             if outstanding:
                 st.caption(f"{len(outstanding)} section-month(s) not yet finalized.")
-            st.dataframe(pd.DataFrame(attendance), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(attendance), hide_index=True, width="stretch")
         else:
             st.caption("No attendance months have been started yet.")
 

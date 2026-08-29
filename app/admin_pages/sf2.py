@@ -136,7 +136,7 @@ def render() -> None:
             "**X** absent, **T-L** late, **T-C** cutting, **·** (dot) before the "
             "learner joined or after they left."
         )
-        st.dataframe(_preview_frame(session, roster, class_days), hide_index=True, use_container_width=True)
+        st.dataframe(_preview_frame(session, roster, class_days), hide_index=True, width="stretch")
 
         st.divider()
         st.subheader("Download")

@@ -239,7 +239,7 @@ def _bulk_add(current_user, roles, existing_emails) -> None:
                 ]
             ),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
         if len(result.errors) > MAX_ERRORS_SHOWN:
             st.caption(f"…and {len(result.errors) - MAX_ERRORS_SHOWN} more.")
@@ -267,7 +267,7 @@ def _bulk_add(current_user, roles, existing_emails) -> None:
             ]
         ),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     without_roles = sum(1 for r in to_create if not r["role_codes"])

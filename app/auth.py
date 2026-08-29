@@ -278,7 +278,7 @@ def login_form() -> None:
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="name@deped.gov.ph")
             password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Sign in", use_container_width=True)
+            submitted = st.form_submit_button("Sign in", width="stretch")
 
         st.caption(
             "Use the account issued to you by the school. If you were given a "

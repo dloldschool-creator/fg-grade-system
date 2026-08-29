@@ -127,7 +127,7 @@ def render() -> None:
                 }
             )
         if preview:
-            st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
             st.caption(
                 "Movement columns show this month's figures; the form itself also "
                 "carries the running totals before and after the month."

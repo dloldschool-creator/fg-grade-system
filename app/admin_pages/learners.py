@@ -522,7 +522,7 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
         st.write(f"**{len(result.parsed)} of {len(rows)} row(s) ready to add.**")
         if result.errors:
             st.error(f"{len(result.errors)} row(s) need fixing before they can be added:")
-            st.dataframe(result.error_dicts(), hide_index=True, use_container_width=True)
+            st.dataframe(result.error_dicts(), hide_index=True, width="stretch")
 
         if not result.parsed:
             return
@@ -531,7 +531,7 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
             {k: v for k, v in row.items() if not k.startswith("__") and not k.endswith("_id")}
             for row in result.parsed
         ]
-        st.dataframe(preview, hide_index=True, use_container_width=True)
+        st.dataframe(preview, hide_index=True, width="stretch")
 
         if st.button(f"Add {len(result.parsed)} learner(s)", key="bulk_learner_commit"):
             written = spec.commit(session, result.parsed, current_user.id)

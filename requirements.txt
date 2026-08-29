@@ -2,7 +2,15 @@ sqlalchemy>=2.0,<3.0
 alembic>=1.13,<2.0
 psycopg[binary]>=3.1,<4.0
 python-dotenv>=1.0,<2.0
-streamlit>=1.38,<2.0
+# Floor raised from 1.38 on 2026-08-29, when `use_container_width=True`
+# was swept to `width="stretch"` — the old name is deprecated and past
+# its stated removal date. The floor is not cosmetic: `width=` arrived at
+# a different version for each widget, and the app would raise TypeError
+# on anything older. Verified against the published wheels rather than
+# assumed — st.form_submit_button had it by 1.48, st.dataframe and
+# st.data_editor from 1.49, and st.altair_chart only from **1.51**, which
+# is what sets the floor. Do not lower it without re-checking the charts.
+streamlit>=1.51,<2.0
 # Streamlit pulls pandas in anyway, but the Attendance page's month grid
 # imports it directly (st.data_editor round-trips a DataFrame), so it's a
 # direct dependency here rather than an implicit transitive one.

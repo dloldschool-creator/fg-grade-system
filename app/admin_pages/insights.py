@@ -249,7 +249,7 @@ def _render_at_risk(report, rows) -> None:
             for row in rows
         ]
     )
-    st.dataframe(frame, hide_index=True, use_container_width=True)
+    st.dataframe(frame, hide_index=True, width="stretch")
 
     if provisional:
         st.warning(
@@ -317,10 +317,10 @@ def _render_distribution(stats, rows) -> None:
             tooltip=["Band", "Grades"],
         )
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     frame["Share"] = frame["Share"].map(lambda v: f"{v:.1f}%")
-    st.dataframe(frame, hide_index=True, use_container_width=True)
+    st.dataframe(frame, hide_index=True, width="stretch")
     st.caption(
         "Counts are encoded term grades, one per learner per subject per "
         "term. This page does not average across subjects — a learner's "
@@ -350,7 +350,7 @@ def _render_difficulty(stats, rows) -> None:
             for entry in ranked
         ]
     )
-    st.dataframe(frame, hide_index=True, use_container_width=True)
+    st.dataframe(frame, hide_index=True, width="stretch")
 
     # The table above lists every subject; this only trims the chart, so
     # a small subject is never hidden from the reader, just kept out of a
@@ -398,7 +398,7 @@ def _render_difficulty(stats, rows) -> None:
                 tooltip=["Subject", "Share below passing", "Graded"],
             )
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
     elif minimum > 1:
         st.caption(
             "No subject with that many grades encoded has anyone below the "
@@ -518,7 +518,7 @@ def render() -> None:
     if chart is not None and len(chart) > 1:
         st.bar_chart(chart, y="% encoded", horizontal=True)
 
-    st.dataframe(_table(shown), hide_index=True, use_container_width=True)
+    st.dataframe(_table(shown), hide_index=True, width="stretch")
 
     placeholders = sum(row.placeholder_offerings for row in shown)
     if placeholders:

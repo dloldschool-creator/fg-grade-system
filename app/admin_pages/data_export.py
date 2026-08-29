@@ -120,7 +120,7 @@ def render() -> None:
         if not table.rows:
             st.info("Nothing to export for this selection.")
             return
-        st.dataframe(pd.DataFrame(table.rows, columns=table.columns), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(table.rows, columns=table.columns), hide_index=True, width="stretch")
         st.caption(f"{len(table.rows)} row(s).")
 
         st.divider()
