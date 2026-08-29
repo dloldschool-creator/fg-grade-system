@@ -30,7 +30,12 @@ from datetime import date
 from sqlalchemy import and_, case, func, or_
 
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.enums import CompletionStatus, EnrollmentStatus, OfferingStatus
+from app.models.enums import (
+    CompletionStatus,
+    EnrollmentStatus,
+    GradeWorkflowStatus,
+    OfferingStatus,
+)
 from app.models.grades import TermGrade, TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import Term
@@ -46,6 +51,19 @@ ACTIVE_ENROLLMENT_STATUSES = frozenset(
         EnrollmentStatus.LATE_ENROLLMENT,
         EnrollmentStatus.TRANSFERRED_IN,
         EnrollmentStatus.SHIFTED_IN,
+    }
+)
+
+# A grade that has left the teacher's hands. Rule 7 runs
+# DRAFT → SUBMITTED → VERIFIED → FINALIZED, so everything past DRAFT
+# counts as handed in — a finalized grade was submitted once, and a
+# teacher reading "12 encoded, 0 submitted" on a finalized class would
+# be told to do something already done.
+SUBMITTED_OR_BEYOND = frozenset(
+    {
+        GradeWorkflowStatus.SUBMITTED,
+        GradeWorkflowStatus.VERIFIED,
+        GradeWorkflowStatus.FINALIZED,
     }
 )
 
@@ -78,6 +96,44 @@ def advised_section_ids(session, school_year_id, adviser_user_id) -> tuple:
             Section.adviser_user_id == adviser_user_id,
         )
         .order_by(Section.name)
+        .all()
+    )
+    return tuple(row[0] for row in rows)
+
+
+def taught_offering_ids(session, school_year_id, teacher_user_id) -> tuple:
+    """The offerings one subject teacher actively holds.
+
+    **A subject teacher is scoped by offering, not by section, and the
+    difference is a privacy boundary rather than a convenience.** An
+    adviser owns whole sections; a subject teacher owns one subject
+    inside sections whose other subjects are none of their business.
+    Handing them their sections' ids instead would show them, through
+    the distribution and the difficulty ranking, every other teacher's
+    grades for that class — and through `at_risk_learners`, which reads
+    whole-term averages, a learner's standing in subjects they do not
+    teach. Anything a subject teacher sees has to come from
+    `term_grades` rows on offerings in this tuple.
+
+    Active assignments only, the same rule the Gradebook uses, so a
+    reassigned teacher stops seeing the class as soon as it moves.
+    """
+    if teacher_user_id is None:
+        return ()
+
+    from app.models.subjects import TeacherAssignment
+
+    rows = (
+        session.query(SectionSubjectOffering.id)
+        .join(
+            TeacherAssignment,
+            TeacherAssignment.section_subject_offering_id == SectionSubjectOffering.id,
+        )
+        .filter(
+            SectionSubjectOffering.school_year_id == school_year_id,
+            TeacherAssignment.teacher_user_id == teacher_user_id,
+            TeacherAssignment.is_active.is_(True),
+        )
         .all()
     )
     return tuple(row[0] for row in rows)
@@ -264,6 +320,12 @@ class OfferingProgressRow:
     display_order: int
     active_learners: int
     encoded: int
+    # Grades the teacher has actually handed in. Encoding and submitting
+    # are separate steps (rule 7), so a class can be fully typed up and
+    # still not submitted — the state a teacher most needs to be told.
+    submitted: int
+    term_encoding_status: str
+    submission_deadline: date | None
 
     @property
     def expected(self) -> int:
@@ -280,37 +342,50 @@ class OfferingProgressRow:
         return 100.0 * self.encoded / self.expected
 
 
-def offering_progress(session, school_year_id, section_ids) -> list[OfferingProgressRow]:
-    """Encoding progress per subject per term, for a few named sections.
+def offering_progress(
+    session, school_year_id, section_ids=None, offering_ids=None
+) -> list[OfferingProgressRow]:
+    """Encoding progress per subject per term, for a named set of classes.
 
-    `section_ids` is required and not optional here: this is the
-    drill-down, and running it school-wide would be ~810 rows of detail
-    nobody asked for. The page calls it only once the view is down to a
-    single section.
+    Takes **either** scope and never neither: `section_ids` for an
+    adviser or an admin looking at one section, `offering_ids` for a
+    subject teacher, who owns particular classes rather than whole
+    sections. Passing nothing returns nothing — running this school-wide
+    would be ~810 rows of detail no page asks for, and a scoped caller
+    who resolved to an empty set must get an empty answer rather than
+    everything.
 
     Teacher names come from the **active** assignment on each offering
     (`teacher_assignments.is_active`), the same source Teacher
     Assignments writes, so a reassignment shows here immediately rather
     than through a copied column that would need syncing.
     """
-    if not section_ids:
+    if not section_ids and not offering_ids:
         return []
 
     from app.models.rbac import User
     from app.models.subjects import TeacherAssignment
 
-    offerings = (
-        session.query(SectionSubjectOffering)
-        .filter(
-            SectionSubjectOffering.school_year_id == school_year_id,
-            SectionSubjectOffering.section_id.in_(section_ids),
-        )
-        .all()
+    query = session.query(SectionSubjectOffering).filter(
+        SectionSubjectOffering.school_year_id == school_year_id
     )
+    if offering_ids:
+        query = query.filter(SectionSubjectOffering.id.in_(offering_ids))
+    if section_ids:
+        query = query.filter(SectionSubjectOffering.section_id.in_(section_ids))
+    offerings = query.all()
     if not offerings:
         return []
 
-    sections = _sections_in_scope(session, school_year_id, section_ids)
+    # Scoped by the offerings that survived, so a teacher gets the
+    # sections their classes are in without being handed the section
+    # scope itself.
+    sections = {
+        s.id: s
+        for s in session.query(Section)
+        .filter(Section.id.in_({o.section_id for o in offerings}))
+        .all()
+    }
     terms = {
         t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
     }
@@ -322,24 +397,36 @@ def offering_progress(session, school_year_id, section_ids) -> list[OfferingProg
     }
     active_learners = _active_learners_by_section(session, school_year_id)
 
-    offering_ids = [o.id for o in offerings]
-    encoded = dict(
-        session.query(TermGrade.section_subject_offering_id, func.count(TermGrade.id))
+    # Named apart from the `offering_ids` parameter on purpose: these are
+    # the offerings that actually survived both scopes, which is not the
+    # same list, and shadowing the parameter here would silently widen
+    # the scope for anything added below.
+    ids_for_counts = [o.id for o in offerings]
+    counted = (
+        session.query(
+            TermGrade.section_subject_offering_id,
+            func.count(TermGrade.id),
+            func.count(TermGrade.id).filter(
+                TermGrade.status.in_(SUBMITTED_OR_BEYOND)
+            ),
+        )
         .select_from(TermGrade)
         .join(Enrollment, TermGrade.enrollment_id == Enrollment.id)
         .filter(
-            TermGrade.section_subject_offering_id.in_(offering_ids),
+            TermGrade.section_subject_offering_id.in_(ids_for_counts),
             TermGrade.official_grade.isnot(None),
             Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
         )
         .group_by(TermGrade.section_subject_offering_id)
         .all()
     )
+    encoded = {row[0]: row[1] for row in counted}
+    submitted = {row[0]: row[2] for row in counted}
     assignments = {
         a.section_subject_offering_id: a
         for a in session.query(TeacherAssignment)
         .filter(
-            TeacherAssignment.section_subject_offering_id.in_(offering_ids),
+            TeacherAssignment.section_subject_offering_id.in_(ids_for_counts),
             TeacherAssignment.is_active.is_(True),
         )
         .all()
@@ -376,6 +463,11 @@ def offering_progress(session, school_year_id, section_ids) -> list[OfferingProg
                 display_order=offering.display_order or 0,
                 active_learners=active_learners.get(section.id, 0),
                 encoded=encoded.get(offering.id, 0),
+                submitted=submitted.get(offering.id, 0),
+                term_encoding_status=(
+                    term.grade_encoding_status.value if term.grade_encoding_status else ""
+                ),
+                submission_deadline=term.submission_deadline,
             )
         )
 
@@ -600,7 +692,9 @@ class GradeStats:
         return any(row.graded for row in self.rows)
 
 
-def subject_grade_stats(session, school_year_id, section_ids=None) -> GradeStats:
+def subject_grade_stats(
+    session, school_year_id, section_ids=None, offering_ids=None
+) -> GradeStats:
     """Encoded term grades for a school year, per section × term × subject.
 
     Returns **only combinations that have at least one encoded grade** —
@@ -618,6 +712,12 @@ def subject_grade_stats(session, school_year_id, section_ids=None) -> GradeStats
     passing_grade = float(resolve_passing_grade(session, school_year_id))
     bands = grade_bands(passing_grade)
 
+    # A subject teacher passes `offering_ids` and no `section_ids`: they
+    # are entitled to the classes they teach, inside sections whose other
+    # subjects are not theirs to see. The section lookup is then derived
+    # from the offerings that survive, never used as the scope itself.
+    if offering_ids is not None and not offering_ids:
+        return GradeStats(passing_grade=passing_grade, bands=bands, rows=())
     sections = _sections_in_scope(session, school_year_id, section_ids)
     terms = {
         t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
@@ -630,7 +730,9 @@ def subject_grade_stats(session, school_year_id, section_ids=None) -> GradeStats
     strands = {s.id: s for s in session.query(Strand).all()}
     subjects = {s.id: s for s in session.query(Subject).all()}
 
-    aggregated = _grades_by_section_term_subject(session, school_year_id, bands)
+    aggregated = _grades_by_section_term_subject(
+        session, school_year_id, bands, offering_ids
+    )
 
     rows = []
     for (section_id, term_id, subject_id), stats in aggregated.items():
@@ -693,7 +795,9 @@ def _band_expression(bands: tuple[Band, ...]):
     return case(*whens, else_=len(bands) - 1)
 
 
-def _grades_by_section_term_subject(session, school_year_id, bands) -> dict:
+def _grades_by_section_term_subject(
+    session, school_year_id, bands, offering_ids=None
+) -> dict:
     """One query. `{(section, term, subject): counts and totals}`.
 
     Filtered to the same four enrollment statuses as everything else on
@@ -701,7 +805,7 @@ def _grades_by_section_term_subject(session, school_year_id, bands) -> dict:
     encoding percentage described.
     """
     band_expr = _band_expression(bands)
-    results = (
+    query = (
         session.query(
             SectionSubjectOffering.section_id,
             SectionSubjectOffering.term_id,
@@ -729,8 +833,10 @@ def _grades_by_section_term_subject(session, school_year_id, bands) -> dict:
             SectionSubjectOffering.subject_id,
             band_expr,
         )
-        .all()
     )
+    if offering_ids is not None:
+        query = query.filter(SectionSubjectOffering.id.in_(offering_ids))
+    results = query.all()
 
     folded: dict = {}
     for section_id, term_id, subject_id, band_index, count, total, lowest, highest in results:

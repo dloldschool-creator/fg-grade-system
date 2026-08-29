@@ -58,11 +58,13 @@ def _at_risk(school_year_id: str, section_ids):
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading grade statistics…")
-def _grade_stats(school_year_id: str, section_ids):
+def _grade_stats(school_year_id: str, section_ids, offering_ids=None):
     """Cached distribution and difficulty source, same contract as
     `_encoding_progress` below."""
     with get_session() as session:
-        return analytics_service.subject_grade_stats(session, school_year_id, section_ids)
+        return analytics_service.subject_grade_stats(
+            session, school_year_id, section_ids, offering_ids
+        )
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading encoding progress…")
@@ -88,10 +90,24 @@ def _encoding_progress(school_year_id: str, section_ids):
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading subject progress…")
-def _offering_progress(school_year_id: str, section_ids):
-    """Cached per-subject drill-down. Same key contract as above."""
+def _offering_progress(school_year_id: str, section_ids=None, offering_ids=None):
+    """Cached per-subject view. Same key contract as above — both scopes
+    are arguments, so a teacher and an adviser can never share an entry."""
     with get_session() as session:
-        return analytics_service.offering_progress(session, school_year_id, section_ids)
+        return analytics_service.offering_progress(
+            session, school_year_id, section_ids, offering_ids
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _taught_offerings(school_year_id: str, user_id: str):
+    """Which classes this subject teacher holds, cached per user.
+
+    The teacher counterpart of `_advised_sections`, and the reason every
+    teacher-facing cache key below is safe.
+    """
+    with get_session() as session:
+        return analytics_service.taught_offering_ids(session, school_year_id, user_id)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -320,6 +336,105 @@ def _render_by_subject(rows) -> None:
         )
 
 
+def _render_my_classes(rows) -> None:
+    """The subject teacher's own view: one row per class they hold.
+
+    Covers §42's list for them — assigned subjects, assigned sections,
+    term, grades entered, submission status and deadline — from a single
+    scoped query.
+
+    **It does not name the learners still missing a grade.** The count is
+    here, and the Gradebook is where you act on it: that page already
+    shows the whole class with the blanks visible, and reprinting the
+    names here would be a second roster to keep in step with it.
+    """
+    if not rows:
+        st.info(
+            "You have no active teaching assignments in this school year. "
+            "A Super Admin or your adviser assigns classes on the Teacher "
+            "Assignments page."
+        )
+        return
+
+    encoded = sum(r.encoded for r in rows)
+    expected = sum(r.expected for r in rows)
+    submitted = sum(r.submitted for r in rows)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Classes", len({(r.section_id, r.subject_id, r.term_id) for r in rows}))
+    col2.metric(
+        "Grades encoded",
+        _fmt_percent(100.0 * encoded / expected if expected else None),
+        help=f"{encoded:,} of {expected:,} expected",
+    )
+    col3.metric(
+        "Submitted",
+        _fmt_percent(100.0 * submitted / encoded if encoded else None),
+        help=f"{submitted:,} of the {encoded:,} you have encoded",
+    )
+
+    frame = pd.DataFrame(
+        [
+            {
+                "Section": row.section_name,
+                "Subject": row.subject_name or row.subject_code,
+                "Term": row.term_name,
+                "Encoded": f"{row.encoded} / {row.expected}",
+                "Still to encode": row.missing,
+                "Submitted": row.submitted,
+                "Encoding": row.term_encoding_status or DASH,
+                "Deadline": (
+                    f"{row.submission_deadline:%d %b %Y}"
+                    if row.submission_deadline
+                    else DASH
+                ),
+            }
+            for row in rows
+        ]
+    )
+    st.dataframe(frame, hide_index=True, width="stretch")
+
+    # Encoding and submitting are separate steps (rule 7), so a class can
+    # be fully typed up and still not handed in. That is the state most
+    # worth saying out loud near a deadline.
+    unsubmitted = [r for r in rows if r.encoded and r.submitted < r.encoded]
+    if unsubmitted:
+        st.warning(
+            f"{len(unsubmitted)} of your classes have grades encoded but not "
+            "yet submitted. Encoding saves your work; submitting is what "
+            "hands it in. Both are on the Gradebook."
+        )
+    st.caption(
+        "Grades still to encode are counted against the learners currently "
+        "on each class roll. A blank is not a zero — it means nobody has "
+        "been graded there yet."
+    )
+
+
+def _render_teacher_view(school_year_id: str, current_user) -> None:
+    """The whole page, for a subject teacher.
+
+    A separate branch rather than the school-wide layout with a filter
+    on it, because a subject teacher's entitlement is a different shape:
+    they own classes, not sections. The section-level encoding table,
+    the school-wide difficulty ranking and the at-risk list — which
+    reads whole-term averages across every subject — all describe
+    things outside what they teach, so none of them appears here.
+    """
+    offering_ids = _taught_offerings(school_year_id, str(current_user.id))
+    rows = _offering_progress(school_year_id, None, offering_ids)
+
+    st.subheader("My classes")
+    _render_my_classes(rows)
+    if not rows:
+        return
+
+    stats = _grade_stats(school_year_id, None, offering_ids)
+    st.divider()
+    st.subheader("Grade distribution")
+    st.caption("Across the classes you teach.")
+    _render_distribution(stats, list(stats.rows))
+
+
 def _matches(row, visible_ids, term_choice, section_choice) -> bool:
     """The one filter predicate, applied to both datasets.
 
@@ -468,7 +583,9 @@ def _render_difficulty(stats, rows) -> None:
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER")
+    current_user = require_role(
+        "SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER", "SUBJECT_TEACHER"
+    )
     st.title("Insights")
     st.caption("Nothing on this page changes any data.")
     render_flashes()
@@ -494,8 +611,21 @@ def render() -> None:
     # `has_role`, which treats SUPER_ADMIN as satisfying any check — true
     # and harmless for page access, but this is a data question and it
     # should be answered by the roles the account actually holds.
+    school_wide = bool(current_user.role_codes & SCHOOL_WIDE_ROLES)
+    advises = "ADVISER" in current_user.role_codes
+
+    # **A subject teacher gets a different page, not a narrower one.**
+    # Their scope is the classes they teach, which sit inside sections
+    # whose other subjects are not theirs to see — so the school-wide
+    # layout below, built on whole sections, cannot simply be filtered
+    # for them. A teacher who also advises is shown the adviser view,
+    # which is the broader of the two entitlements.
+    if not school_wide and not advises:
+        _render_teacher_view(str(sy_choice), current_user)
+        return
+
     scope_ids = None
-    if not (current_user.role_codes & SCHOOL_WIDE_ROLES):
+    if not school_wide:
         scope_ids = _advised_sections(str(sy_choice), str(current_user.id))
         if not scope_ids:
             st.info(

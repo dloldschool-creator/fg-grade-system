@@ -691,8 +691,10 @@ nothing but filters. Merging them would make a strand change re-pay for
 the attendance-month table nobody moved. Spec §42 asks for role-specific
 dashboards and only the administrator one existed, so this fills a gap
 rather than adding scope. Admins, registrars and school heads see the
-whole school; advisers see the sections they advise — see **Advisers see
-the same page, scoped** below, which is where the access rules live.
+whole school; advisers see the sections they advise; subject teachers
+get a different, offering-scoped view. The access rules live in the two
+sections below, and they are the part of this page most worth reading
+before changing anything.
 
 **The shape: aggregate in SQL, cache once per school year, slice in
 Python.** Each metric issues a fixed 8 queries for a whole year and
@@ -830,13 +832,50 @@ the view is down to **one section**, which is a state, not a role: an
 adviser lands there without touching a filter, and an admin who picks a
 section gets the same thing.
 
+**A subject teacher gets a different page, not a narrower one**
+(2026-08-29). This is the one scoping decision here that is a privacy
+boundary rather than a convenience, so it is worth stating plainly:
+
+- **They are scoped by offering, not by section.** An adviser owns whole
+  sections; a subject teacher owns one subject inside sections whose
+  other subjects belong to colleagues. The busiest teacher here holds
+  **30 classes across 10 sections** — handing them those ten sections'
+  ids would show them ten sections' worth of other people's grades.
+- So the school-wide layout cannot simply be filtered for them.
+  `_render_teacher_view` is a separate branch, and three things are
+  deliberately absent: the section-level encoding table, the school-wide
+  difficulty ranking, and **`at_risk_learners`, which reads whole-term
+  averages across every subject** and would expose a learner's standing
+  in subjects they do not teach.
+- `taught_offering_ids()` is the scope, from **active** assignments —
+  the same rule the Gradebook uses, so a reassigned teacher loses the
+  class as it moves. `subject_grade_stats` and `offering_progress` both
+  take `offering_ids` alongside `section_ids`; **`offering_progress`
+  refuses to run with neither** rather than falling back school-wide.
+- A teacher who also advises is shown the **adviser** view, the broader
+  of the two entitlements. `tests/test_analytics_service.py` asserts the
+  offering scope is strictly smaller than the section scope wherever a
+  section runs more than one subject — the leak itself, tested.
+
+`offering_progress` also carries `submitted`, counting
+`SUBMITTED_OR_BEYOND` rather than only SUBMITTED: rule 7 runs
+DRAFT → SUBMITTED → VERIFIED → FINALIZED, and a teacher told "0
+submitted" on a finalized class would be chased for work already done.
+Encoding and submitting are separate steps, so "encoded but not
+submitted" is a real state and the page says so.
+
+**The teacher view does not name the learners still missing a grade.**
+The count is there; the Gradebook is where you act, already shows the
+class with the blanks visible, and a second roster here would be one
+more thing to keep in step.
+
 **Still open on this page:** nobody has viewed it signed-in — every
 function is verified against real and constructed data, but the layout
-itself is unseen, and the adviser path especially so, since it cannot be
-reached without an adviser account. Annual (General Average) risk is not
-covered, only term-level. Attendance-based risk (§31's
-consecutive-absence warning) is a separate metric and is not built.
-Subject teachers have no view of their own (§42 asks for one).
+itself is unseen, and the adviser and teacher paths especially so, since
+neither can be reached without an account holding that role. Annual
+(General Average) risk is not covered, only term-level. Attendance-based
+risk (§31's consecutive-absence warning) is a separate metric and is not
+built.
 
 ## Where things stand
 

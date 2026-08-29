@@ -32,6 +32,7 @@ from app.analytics_service import (
     roll_up,
     subject_difficulty,
     subject_grade_stats,
+    taught_offering_ids,
 )
 from app.database import SessionLocal
 from app.models.organization import SchoolYear
@@ -469,6 +470,135 @@ def test_at_risk_never_loads_a_learner_outside_the_scope(session, school_year):
     ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
     report = at_risk_learners(session, school_year.id, ids)
     assert {r.section_id for r in report.rows} <= set(ids)
+
+
+# --- Subject teacher scoping -----------------------------------------------
+#
+# A subject teacher is scoped by **offering**, not by section, and that
+# is a privacy boundary rather than a convenience: their classes sit
+# inside sections whose other subjects belong to colleagues.
+
+
+def _any_teacher(session, school_year):
+    from app.models.subjects import SectionSubjectOffering, TeacherAssignment
+
+    row = (
+        session.query(TeacherAssignment)
+        .join(
+            SectionSubjectOffering,
+            TeacherAssignment.section_subject_offering_id == SectionSubjectOffering.id,
+        )
+        .filter(
+            TeacherAssignment.is_active.is_(True),
+            SectionSubjectOffering.school_year_id == school_year.id,
+        )
+        .first()
+    )
+    if row is None:
+        pytest.skip("no active teaching assignment")
+    return str(row.teacher_user_id)
+
+
+def test_a_teacher_gets_only_the_classes_they_hold(session, school_year):
+    from app.models.subjects import SectionSubjectOffering
+
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    assert ids, "the teacher should hold at least one offering"
+
+    everything = {
+        o.id
+        for o in session.query(SectionSubjectOffering)
+        .filter_by(school_year_id=school_year.id)
+        .all()
+    }
+    assert set(ids) < everything, "the teacher scope did not narrow anything"
+
+
+def test_a_teacher_does_not_get_the_rest_of_their_sections_subjects(session, school_year):
+    """The leak this scope exists to prevent.
+
+    Scoping a subject teacher by the *sections* their classes are in
+    would hand them every other subject in those sections — their
+    colleagues' grades. The offering scope must be strictly smaller than
+    the section scope wherever a section runs more than one subject.
+    """
+    from app.models.subjects import SectionSubjectOffering
+
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    rows = offering_progress(session, school_year.id, offering_ids=ids)
+    if not rows:
+        pytest.skip("no offerings resolved")
+
+    their_sections = {r.section_id for r in rows}
+    everything_in_those_sections = {
+        o.id
+        for o in session.query(SectionSubjectOffering)
+        .filter(
+            SectionSubjectOffering.school_year_id == school_year.id,
+            SectionSubjectOffering.section_id.in_(their_sections),
+        )
+        .all()
+    }
+    if len(everything_in_those_sections) <= len(ids):
+        pytest.skip("this teacher happens to hold every offering in their sections")
+    assert set(ids) < everything_in_those_sections
+    assert {r.subject_id for r in rows} != {
+        o.subject_id
+        for o in session.query(SectionSubjectOffering)
+        .filter(SectionSubjectOffering.section_id.in_(their_sections))
+        .all()
+    }
+
+
+def test_an_unknown_teacher_holds_nothing(session, school_year):
+    import uuid as _uuid
+
+    assert taught_offering_ids(session, school_year.id, str(_uuid.uuid4())) == ()
+    assert taught_offering_ids(session, school_year.id, None) == ()
+
+
+def test_offering_progress_needs_a_scope_and_refuses_to_go_school_wide(session, school_year):
+    """Neither scope given must return nothing, not everything. The
+    school-wide path is the section-level metric, not this one."""
+    assert offering_progress(session, school_year.id) == []
+    assert offering_progress(session, school_year.id, None, None) == []
+    assert offering_progress(session, school_year.id, offering_ids=()) == []
+
+
+def test_grade_stats_takes_the_offering_scope_too(session, school_year):
+    """Otherwise a teacher's distribution would be built from every
+    subject in their sections, colleagues' grades included."""
+    assert subject_grade_stats(session, school_year.id, offering_ids=()).rows == ()
+
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    scoped = subject_grade_stats(session, school_year.id, offering_ids=ids)
+    assert all(r.subject_id is not None for r in scoped.rows)
+
+
+def test_a_teachers_view_costs_the_same_at_thirty_classes(session, school_year):
+    """One teacher here holds 30 offerings. The query count must not
+    follow."""
+    from tests.test_query_cost import QueryCounter
+
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    offering_progress(session, school_year.id, offering_ids=ids)  # warm
+    with QueryCounter() as counter:
+        offering_progress(session, school_year.id, offering_ids=ids)
+    assert counter.count <= 8, f"{counter.count} queries for a teacher's classes"
+
+
+def test_submitted_never_exceeds_encoded(session, school_year):
+    """Submitting is a step past encoding (rule 7), so the submitted
+    count is a subset. More submitted than encoded would mean the two
+    counts were measured over different populations."""
+    teacher = _any_teacher(session, school_year)
+    ids = taught_offering_ids(session, school_year.id, teacher)
+    for row in offering_progress(session, school_year.id, offering_ids=ids):
+        assert row.submitted <= row.encoded
 
 
 # --- The per-subject drill-down --------------------------------------------
