@@ -690,7 +690,9 @@ deliberately filter-free, Insights answers *how are we doing* and is
 nothing but filters. Merging them would make a strand change re-pay for
 the attendance-month table nobody moved. Spec §42 asks for role-specific
 dashboards and only the administrator one existed, so this fills a gap
-rather than adding scope.
+rather than adding scope. Admins, registrars and school heads see the
+whole school; advisers see the sections they advise — see **Advisers see
+the same page, scoped** below, which is where the access rules live.
 
 **The shape: aggregate in SQL, cache once per school year, slice in
 Python.** Each metric issues a fixed 8 queries for a whole year and
@@ -708,13 +710,14 @@ count stays flat.
   detached — which is why the service returns frozen dataclasses of
   primitives, and why `str(uuid)` goes in rather than the UUID.
 - **The argument list is the cache key, and the cache is shared across
-  every signed-in user.** It is safe today only because the three roles
-  that can open the page (SUPER_ADMIN, REGISTRAR, SCHOOL_HEAD) already
-  see the whole school. The day an adviser or subject teacher reaches
-  it, whatever scopes their view has to become an argument, or one
-  adviser is served another's cached sections. **This is not
-  theoretical: `_at_risk` caches learner names.** Same failure as the
-  Learner Masterlist entry above, with a cache in front of it.
+  every signed-in user.** Advisers reach the page (added 2026-08-29), so
+  every cached loader takes `section_ids` and it is **in the key, not
+  just in the query**. Scoping the query alone would be worse than not
+  scoping at all: it would look correct and serve whichever adviser
+  asked first. `None` is the whole school; an adviser passes the tuple
+  of sections they hold. **Not theoretical — `_at_risk` caches learner
+  names.** Same failure as the Learner Masterlist entry above, with a
+  cache in front of it.
 - Keep cached objects aggregate-sized. The process has ~1GB; caching a
   roster is how you evict everything else.
 
@@ -791,11 +794,49 @@ test therefore builds `TermGradeSummary` rows directly. Worth knowing
 before someone tries to drive the grading pipeline end to end from a
 test.
 
+**Advisers see the same page, scoped** (2026-08-29). §42 asks for an
+adviser dashboard, and all four metrics turn out to be adviser questions
+once narrowed — "how is my class spread", "which subject is mine
+struggling in", "who is failing". So the page is one page with a scoped
+data source rather than a second page:
+
+- `SCHOOL_WIDE_ROLES` (SUPER_ADMIN, REGISTRAR, SCHOOL_HEAD) get
+  `section_ids=None`; anyone else gets `advised_section_ids()`. Read off
+  `role_codes`, **not `has_role`**, which treats SUPER_ADMIN as
+  satisfying every check — right for page access, wrong for a data
+  question.
+- **`None` is the whole school; `()` is a viewer entitled to nothing.**
+  Both are falsy, and treating them alike is how an adviser holding no
+  section sees all ~1,200 learners. `_sections_in_scope` is the one
+  place that distinction lives, and `tests/test_analytics_service.py`
+  asserts the empty scope returns nothing on every metric.
+- Scoping is in **SQL**; the grade-level/strand/term dropdowns still
+  filter cached rows in Python. Access narrowing and display narrowing
+  are different jobs and the split is deliberate — a viewer must never
+  have rows loaded they are not entitled to, even to discard them.
+- `advised_section_ids` compares in SQL because `AuthUser.id` is a `str`
+  and `sections.adviser_user_id` is a UUID. Hold a Section object
+  instead and you want `section_access.is_advised_by`.
+- **An adviser may hold more than one section** — one here holds two —
+  so nothing assumes a single one.
+
+**`offering_progress()` is the adviser's actual question**, at section ×
+subject × term with the assigned teacher's name from the active
+`teacher_assignments` row. Section-and-term progress says whether you
+are behind; this says on what and whose door to knock on. The adviser
+does not encode these grades — the subject teacher does — but the
+adviser holds the report card, so chasing is their job. It renders when
+the view is down to **one section**, which is a state, not a role: an
+adviser lands there without touching a filter, and an admin who picks a
+section gets the same thing.
+
 **Still open on this page:** nobody has viewed it signed-in — every
 function is verified against real and constructed data, but the layout
-itself is unseen. Annual (General Average) risk is not covered, only
-term-level. Attendance-based risk (§31's consecutive-absence warning) is
-a separate metric and is not built.
+itself is unseen, and the adviser path especially so, since it cannot be
+reached without an adviser account. Annual (General Average) risk is not
+covered, only term-level. Attendance-based risk (§31's
+consecutive-absence warning) is a separate metric and is not built.
+Subject teachers have no view of their own (§42 asks for one).
 
 ## Where things stand
 

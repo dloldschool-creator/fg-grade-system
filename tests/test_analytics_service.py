@@ -22,11 +22,13 @@ from app.analytics_service import (
     AtRiskRow,
     EncodingRow,
     SubjectGradeRow,
+    advised_section_ids,
     at_risk_headline,
     at_risk_learners,
     distribution,
     encoding_progress,
     grade_bands,
+    offering_progress,
     roll_up,
     subject_difficulty,
     subject_grade_stats,
@@ -383,6 +385,135 @@ def test_the_stats_cost_does_not_scale_with_the_roster(session, school_year):
     with QueryCounter() as counter:
         subject_grade_stats(session, school_year.id)
     assert counter.count <= 8, f"{counter.count} queries for the grade stats"
+
+
+# --- Adviser scoping -------------------------------------------------------
+#
+# The rule these guard: `section_ids=None` means the whole school, and an
+# **empty tuple means a viewer entitled to nothing**. Treating the two
+# alike — the natural thing to write, since both are falsy — shows every
+# learner in the school to an adviser holding no section.
+
+
+def _any_advised_section(session, school_year):
+    from app.models.academic_structure import Section
+
+    section = (
+        session.query(Section)
+        .filter(
+            Section.school_year_id == school_year.id,
+            Section.adviser_user_id.isnot(None),
+        )
+        .first()
+    )
+    if section is None:
+        pytest.skip("no section with an adviser")
+    return section
+
+
+def test_an_empty_scope_returns_nothing_not_everything(session, school_year):
+    """The fail-closed case, on every metric that takes a scope."""
+    assert encoding_progress(session, school_year.id, ()) == []
+    assert subject_grade_stats(session, school_year.id, ()).rows == ()
+    assert at_risk_learners(session, school_year.id, ()).rows == ()
+    assert offering_progress(session, school_year.id, ()) == []
+
+
+def test_none_means_the_whole_school(session, school_year):
+    """And is not accidentally equivalent to the empty scope."""
+    everything = encoding_progress(session, school_year.id, None)
+    if not everything:
+        pytest.skip("no sections in this school year")
+    assert len(everything) > len(encoding_progress(session, school_year.id, ()))
+
+
+def test_an_adviser_sees_only_the_sections_they_advise(session, school_year):
+    section = _any_advised_section(session, school_year)
+    adviser = str(section.adviser_user_id)
+
+    ids = advised_section_ids(session, school_year.id, adviser)
+    assert section.id in ids
+
+    rows = encoding_progress(session, school_year.id, ids)
+    assert rows, "the adviser's own section should be present"
+    assert {r.section_id for r in rows} <= set(ids)
+
+    everything = encoding_progress(session, school_year.id, None)
+    assert len(rows) < len(everything), "scoping did not narrow anything"
+
+
+def test_advised_sections_are_matched_in_sql_not_python(session, school_year):
+    """`AuthUser.id` is a `str` and `sections.adviser_user_id` is a UUID.
+    Postgres coerces; Python does not. Passing the string form is what
+    the page actually does, so it is what the test does."""
+    section = _any_advised_section(session, school_year)
+
+    as_text = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    as_uuid = advised_section_ids(session, school_year.id, section.adviser_user_id)
+
+    assert section.id in as_text, "a str adviser id must match"
+    assert as_text == as_uuid
+
+
+def test_an_adviser_of_nothing_gets_an_empty_tuple(session, school_year):
+    import uuid as _uuid
+
+    assert advised_section_ids(session, school_year.id, str(_uuid.uuid4())) == ()
+    assert advised_section_ids(session, school_year.id, None) == ()
+
+
+def test_at_risk_never_loads_a_learner_outside_the_scope(session, school_year):
+    """Scoped in the query rather than filtered afterwards — another
+    adviser's learner must not be loaded even to be discarded."""
+    section = _any_advised_section(session, school_year)
+    ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    report = at_risk_learners(session, school_year.id, ids)
+    assert {r.section_id for r in report.rows} <= set(ids)
+
+
+# --- The per-subject drill-down --------------------------------------------
+
+
+def test_offering_progress_is_one_row_per_subject_and_term(session, school_year):
+    section = _any_advised_section(session, school_year)
+    rows = offering_progress(session, school_year.id, (section.id,))
+    if not rows:
+        pytest.skip("that section has no offerings")
+    keys = [(r.subject_id, r.term_id) for r in rows]
+    assert len(keys) == len(set(keys))
+    assert all(r.section_id == section.id for r in rows)
+
+
+def test_offering_progress_puts_the_least_done_first(session, school_year):
+    section = _any_advised_section(session, school_year)
+    rows = offering_progress(session, school_year.id, (section.id,))
+    if len(rows) < 2:
+        pytest.skip("needs at least two offerings")
+    percents = [r.percent if r.percent is not None else 1e9 for r in rows]
+    assert percents == sorted(percents)
+
+
+def test_offering_progress_expects_one_grade_per_learner(session, school_year):
+    """Per offering, every learner on the roll owes exactly one grade —
+    unlike the section-level metric, where expected is multiplied by the
+    number of subjects."""
+    section = _any_advised_section(session, school_year)
+    rows = offering_progress(session, school_year.id, (section.id,))
+    if not rows:
+        pytest.skip("that section has no offerings")
+    for row in rows:
+        assert row.expected == row.active_learners
+        assert row.encoded <= row.expected
+
+
+def test_the_drill_down_cost_is_flat(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    section = _any_advised_section(session, school_year)
+    offering_progress(session, school_year.id, (section.id,))  # warm
+    with QueryCounter() as counter:
+        offering_progress(session, school_year.id, (section.id,))
+    assert counter.count <= 8, f"{counter.count} queries for the drill-down"
 
 
 # --- Learners at risk ------------------------------------------------------

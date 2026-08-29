@@ -73,7 +73,7 @@ GROUPS = [
             (dashboard, "Dashboard", "📈", "dashboard",
              ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
             (insights, "Insights", "🔎", "insights",
-             ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
+             ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER")),
         ],
     ),
     (

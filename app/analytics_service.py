@@ -50,6 +50,56 @@ ACTIVE_ENROLLMENT_STATUSES = frozenset(
 )
 
 
+def advised_section_ids(session, school_year_id, adviser_user_id) -> tuple:
+    """The sections one adviser holds, as a tuple of ids.
+
+    **Compared in SQL, never in Python.** `AuthUser.id` is a `str` and
+    `sections.adviser_user_id` is a `uuid.UUID`; Postgres coerces between
+    them so this filter matches, while the same two values compared in
+    Python never would. That mismatch has already shipped once here. When
+    you hold a Section object rather than a query, use
+    `app.section_access.is_advised_by` instead — it exists for exactly
+    this and coerces both sides.
+
+    An adviser may hold **more than one** section: there is deliberately
+    no constraint against it, and one of this school's advisers holds
+    two. Nothing downstream may assume a single section.
+
+    Returned as a tuple so it can go straight into a `st.cache_data` key,
+    which is how the page keeps one adviser from being served another's
+    cached rows.
+    """
+    if adviser_user_id is None:
+        return ()
+    rows = (
+        session.query(Section.id)
+        .filter(
+            Section.school_year_id == school_year_id,
+            Section.adviser_user_id == adviser_user_id,
+        )
+        .order_by(Section.name)
+        .all()
+    )
+    return tuple(row[0] for row in rows)
+
+
+def _sections_in_scope(session, school_year_id, section_ids):
+    """Sections for the year, narrowed to `section_ids` when given.
+
+    `None` means the whole school — the admin, registrar and school-head
+    view. An **empty tuple is not the same as None**: it means a scoped
+    viewer who holds no sections, and must return nothing rather than
+    everything. Getting that backwards is how a scoped page shows the
+    whole school to someone entitled to none of it.
+    """
+    query = session.query(Section).filter_by(school_year_id=school_year_id)
+    if section_ids is not None:
+        if not section_ids:
+            return {}
+        query = query.filter(Section.id.in_(section_ids))
+    return {s.id: s for s in query.all()}
+
+
 @dataclass(frozen=True)
 class EncodingRow:
     """One section × term. Carries its own dimensions so the page can
@@ -102,14 +152,17 @@ class EncodingRow:
         return 100.0 * self.encoded / self.expected
 
 
-def encoding_progress(session, school_year_id) -> list[EncodingRow]:
+def encoding_progress(session, school_year_id, section_ids=None) -> list[EncodingRow]:
     """How far grade encoding has got, per section per term.
 
-    Returns **every** section × term in the school year, unfiltered. The
-    caller filters the returned rows in Python, and that is on purpose:
-    the result is one row per section per term — 30 × 3 today — so the
-    whole year's progress is small enough to cache once and slice for
-    free. Pushing the grade-level/strand/section filters into SQL would
+    Returns every section × term the viewer may see — the whole year when
+    `section_ids` is None, otherwise just those sections. The caller then
+    filters the returned rows in Python, and that split is on purpose:
+    **access scoping belongs in SQL, display filtering does not.** The
+    result is one row per section per term — 30 × 3 today — so the
+    dropdowns can slice a cached list for free, while a viewer never has
+    rows loaded that they are not entitled to. Pushing the
+    grade-level/strand/section *display* filters into SQL as well would
     put an 85ms round trip behind every dropdown for no gain.
 
     Rows come back ordered by grade level, track, strand, section, term.
@@ -128,7 +181,7 @@ def encoding_progress(session, school_year_id) -> list[EncodingRow]:
         .order_by(Term.term_number)
         .all()
     )
-    sections = session.query(Section).filter_by(school_year_id=school_year_id).all()
+    sections = list(_sections_in_scope(session, school_year_id, section_ids).values())
     if not terms or not sections:
         return []
 
@@ -181,6 +234,160 @@ def encoding_progress(session, school_year_id) -> list[EncodingRow]:
             r.strand_name,
             r.section_name,
             r.term_number,
+        )
+    )
+    return rows
+
+
+@dataclass(frozen=True)
+class OfferingProgressRow:
+    """One section × subject × term — the grain a class adviser needs.
+
+    Section × term answers "am I behind"; this answers "on what, and who
+    do I ask". The adviser does not encode these grades — the subject
+    teacher does — but the adviser owns the report card, so chasing is
+    their job and the teacher's name is the actionable column.
+    """
+
+    section_id: uuid.UUID
+    section_name: str
+    subject_id: uuid.UUID
+    subject_name: str
+    subject_code: str
+    term_id: uuid.UUID
+    term_name: str
+    term_number: int
+    # Empty when the offering carries no active assignment. That is a real
+    # state worth seeing, not a gap to hide: an unassigned offering is one
+    # nobody has been asked to encode.
+    teacher_name: str
+    display_order: int
+    active_learners: int
+    encoded: int
+
+    @property
+    def expected(self) -> int:
+        return self.active_learners
+
+    @property
+    def missing(self) -> int:
+        return max(self.expected - self.encoded, 0)
+
+    @property
+    def percent(self) -> float | None:
+        if self.expected == 0:
+            return None
+        return 100.0 * self.encoded / self.expected
+
+
+def offering_progress(session, school_year_id, section_ids) -> list[OfferingProgressRow]:
+    """Encoding progress per subject per term, for a few named sections.
+
+    `section_ids` is required and not optional here: this is the
+    drill-down, and running it school-wide would be ~810 rows of detail
+    nobody asked for. The page calls it only once the view is down to a
+    single section.
+
+    Teacher names come from the **active** assignment on each offering
+    (`teacher_assignments.is_active`), the same source Teacher
+    Assignments writes, so a reassignment shows here immediately rather
+    than through a copied column that would need syncing.
+    """
+    if not section_ids:
+        return []
+
+    from app.models.rbac import User
+    from app.models.subjects import TeacherAssignment
+
+    offerings = (
+        session.query(SectionSubjectOffering)
+        .filter(
+            SectionSubjectOffering.school_year_id == school_year_id,
+            SectionSubjectOffering.section_id.in_(section_ids),
+        )
+        .all()
+    )
+    if not offerings:
+        return []
+
+    sections = _sections_in_scope(session, school_year_id, section_ids)
+    terms = {
+        t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
+    }
+    subjects = {
+        s.id: s
+        for s in session.query(Subject)
+        .filter(Subject.id.in_({o.subject_id for o in offerings}))
+        .all()
+    }
+    active_learners = _active_learners_by_section(session, school_year_id)
+
+    offering_ids = [o.id for o in offerings]
+    encoded = dict(
+        session.query(TermGrade.section_subject_offering_id, func.count(TermGrade.id))
+        .select_from(TermGrade)
+        .join(Enrollment, TermGrade.enrollment_id == Enrollment.id)
+        .filter(
+            TermGrade.section_subject_offering_id.in_(offering_ids),
+            TermGrade.official_grade.isnot(None),
+            Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+        )
+        .group_by(TermGrade.section_subject_offering_id)
+        .all()
+    )
+    assignments = {
+        a.section_subject_offering_id: a
+        for a in session.query(TeacherAssignment)
+        .filter(
+            TeacherAssignment.section_subject_offering_id.in_(offering_ids),
+            TeacherAssignment.is_active.is_(True),
+        )
+        .all()
+    }
+    teachers = {}
+    if assignments:
+        teachers = {
+            u.id: u
+            for u in session.query(User)
+            .filter(User.id.in_({a.teacher_user_id for a in assignments.values()}))
+            .all()
+        }
+
+    rows = []
+    for offering in offerings:
+        section = sections.get(offering.section_id)
+        term = terms.get(offering.term_id)
+        if section is None or term is None:
+            continue
+        subject = subjects.get(offering.subject_id)
+        assignment = assignments.get(offering.id)
+        teacher = teachers.get(assignment.teacher_user_id) if assignment else None
+        rows.append(
+            OfferingProgressRow(
+                section_id=section.id,
+                section_name=section.name,
+                subject_id=offering.subject_id,
+                subject_name=subject.official_name if subject else "",
+                subject_code=subject.code if subject else "",
+                term_id=term.id,
+                term_name=term.name,
+                term_number=term.term_number,
+                teacher_name=(teacher.full_name if teacher else ""),
+                display_order=offering.display_order or 0,
+                active_learners=active_learners.get(section.id, 0),
+                encoded=encoded.get(offering.id, 0),
+            )
+        )
+
+    # Least done first, so the subject to chase is at the top. Ties go to
+    # the section's own display order, then the subject name.
+    rows.sort(
+        key=lambda r: (
+            r.percent if r.percent is not None else 1e9,
+            r.section_name,
+            r.term_number,
+            r.display_order,
+            r.subject_name,
         )
     )
     return rows
@@ -393,7 +600,7 @@ class GradeStats:
         return any(row.graded for row in self.rows)
 
 
-def subject_grade_stats(session, school_year_id) -> GradeStats:
+def subject_grade_stats(session, school_year_id, section_ids=None) -> GradeStats:
     """Encoded term grades for a school year, per section × term × subject.
 
     Returns **only combinations that have at least one encoded grade** —
@@ -411,10 +618,7 @@ def subject_grade_stats(session, school_year_id) -> GradeStats:
     passing_grade = float(resolve_passing_grade(session, school_year_id))
     bands = grade_bands(passing_grade)
 
-    sections = {
-        s.id: s
-        for s in session.query(Section).filter_by(school_year_id=school_year_id).all()
-    }
+    sections = _sections_in_scope(session, school_year_id, section_ids)
     terms = {
         t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
     }
@@ -687,7 +891,7 @@ class AtRiskReport:
     rows: tuple[AtRiskRow, ...]
 
 
-def at_risk_learners(session, school_year_id) -> AtRiskReport:
+def at_risk_learners(session, school_year_id, section_ids=None) -> AtRiskReport:
     """Learners whose stored term summary shows a failing subject or a
     failing term average.
 
@@ -722,15 +926,18 @@ def at_risk_learners(session, school_year_id) -> AtRiskReport:
     if not summaries:
         return AtRiskReport(passing_grade=passing_grade, rows=())
 
-    enrollments = {
-        e.id: e
-        for e in session.query(Enrollment)
-        .filter(
-            Enrollment.id.in_({s.enrollment_id for s in summaries}),
-            Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
-        )
-        .all()
-    }
+    enrollment_query = session.query(Enrollment).filter(
+        Enrollment.id.in_({s.enrollment_id for s in summaries}),
+        Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+    )
+    # Narrowed here rather than by dropping rows later: a scoped viewer
+    # must not have another adviser's learners loaded at all, even to
+    # discard them.
+    if section_ids is not None:
+        if not section_ids:
+            return AtRiskReport(passing_grade=passing_grade, rows=())
+        enrollment_query = enrollment_query.filter(Enrollment.section_id.in_(section_ids))
+    enrollments = {e.id: e for e in enrollment_query.all()}
     if not enrollments:
         return AtRiskReport(passing_grade=passing_grade, rows=())
 
@@ -740,10 +947,7 @@ def at_risk_learners(session, school_year_id) -> AtRiskReport:
         .filter(Learner.id.in_({e.learner_id for e in enrollments.values()}))
         .all()
     }
-    sections = {
-        s.id: s
-        for s in session.query(Section).filter_by(school_year_id=school_year_id).all()
-    }
+    sections = _sections_in_scope(session, school_year_id, section_ids)
     terms = {
         t.id: t for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
     }

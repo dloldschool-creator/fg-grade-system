@@ -36,6 +36,10 @@ from app.models.organization import SchoolYear
 
 DASH = "—"
 
+# Roles that see the whole school. Anyone else reaching this page is
+# scoped to the sections they advise — see `render`.
+SCHOOL_WIDE_ROLES = frozenset({"SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD"})
+
 # Short enough that a teacher who has just submitted sees it reflected
 # while a head is watching the page during encoding week, long enough
 # that dragging the filters costs nothing.
@@ -43,31 +47,26 @@ CACHE_TTL_SECONDS = 120
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading learners at risk…")
-def _at_risk(school_year_id: str):
+def _at_risk(school_year_id: str, section_ids):
     """Cached at-risk list.
 
-    **This one holds learner names**, which makes the cache-key rule
-    below concrete rather than theoretical. It is shared across everyone
-    signed in, and is safe today only because the three roles that can
-    open this page already see every learner in the school. Anything that
-    narrows a viewer to a subset — an adviser, a subject teacher — has to
-    become an argument to this function on the same day it gains access.
+    **This one holds learner names**, which is why `section_ids` is in
+    the key and not merely in the query. See `_encoding_progress`.
     """
     with get_session() as session:
-        return analytics_service.at_risk_learners(session, school_year_id)
+        return analytics_service.at_risk_learners(session, school_year_id, section_ids)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading grade statistics…")
-def _grade_stats(school_year_id: str):
+def _grade_stats(school_year_id: str, section_ids):
     """Cached distribution and difficulty source, same contract as
-    `_encoding_progress` below — including the warning about the cache
-    key and who is allowed to read it."""
+    `_encoding_progress` below."""
     with get_session() as session:
-        return analytics_service.subject_grade_stats(session, school_year_id)
+        return analytics_service.subject_grade_stats(session, school_year_id, section_ids)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading encoding progress…")
-def _encoding_progress(school_year_id: str):
+def _encoding_progress(school_year_id: str, section_ids):
     """Cached aggregate for one school year.
 
     The session is opened *inside* the cached function — a `Session` is
@@ -75,16 +74,35 @@ def _encoding_progress(school_year_id: str):
     back detached. `analytics_service` returns frozen dataclasses of
     primitives for exactly this reason.
 
-    **The argument list is the cache key, and `st.cache_data` is shared
-    across every signed-in user.** That is safe only while this page is
-    limited to the three roles that already see the whole school. The day
-    an adviser or subject teacher reaches it, whatever scopes their view
-    has to become an argument here, or one adviser will be served
-    another's cached sections. See the Learner Masterlist entry in
-    CLAUDE.md for the same failure without a cache in front of it.
+    **`section_ids` is in the signature because the argument list is the
+    cache key, and `st.cache_data` is shared across every signed-in
+    user.** `None` is the whole school, for the roles that may see it; an
+    adviser passes the tuple of sections they hold, so two advisers can
+    never collide on one entry. Scoping the query without scoping the key
+    would be worse than not scoping at all — it would look right and
+    serve whichever adviser asked first. See the Learner Masterlist entry
+    in CLAUDE.md for the same failure without a cache in front of it.
     """
     with get_session() as session:
-        return analytics_service.encoding_progress(session, school_year_id)
+        return analytics_service.encoding_progress(session, school_year_id, section_ids)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading subject progress…")
+def _offering_progress(school_year_id: str, section_ids):
+    """Cached per-subject drill-down. Same key contract as above."""
+    with get_session() as session:
+        return analytics_service.offering_progress(session, school_year_id, section_ids)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _advised_sections(school_year_id: str, user_id: str):
+    """Which sections this adviser holds, cached per user.
+
+    Keyed by `user_id`, which is what makes every other cache key on this
+    page safe: they are keyed by the tuple this returns.
+    """
+    with get_session() as session:
+        return analytics_service.advised_section_ids(session, school_year_id, user_id)
 
 
 class _Dim:
@@ -266,6 +284,42 @@ def _render_at_risk(report, rows) -> None:
     )
 
 
+def _render_by_subject(rows) -> None:
+    """Per-subject progress for a single section, least done first.
+
+    This is the class adviser's question. Section-and-term progress says
+    whether they are behind; this says on what, and whose door to knock
+    on — the adviser does not encode these grades, the subject teacher
+    does, but the adviser is the one holding the report card.
+    """
+    if not rows:
+        st.caption("This section has no subjects offered yet.")
+        return
+
+    frame = pd.DataFrame(
+        [
+            {
+                "Term": row.term_name,
+                "Subject": row.subject_name or row.subject_code,
+                "Teacher": row.teacher_name or "Not assigned",
+                "Encoded": f"{row.encoded} / {row.expected}",
+                "Missing": row.missing,
+                "Progress": _fmt_percent(row.percent),
+            }
+            for row in rows
+        ]
+    )
+    st.dataframe(frame, hide_index=True, width="stretch")
+
+    unassigned = [r for r in rows if not r.teacher_name]
+    if unassigned:
+        st.warning(
+            f"{len(unassigned)} of these subjects have no teacher assigned, "
+            "so nobody has been asked to encode them. They can be assigned "
+            "on Teacher Assignments."
+        )
+
+
 def _matches(row, visible_ids, term_choice, section_choice) -> bool:
     """The one filter predicate, applied to both datasets.
 
@@ -414,7 +468,7 @@ def _render_difficulty(stats, rows) -> None:
 
 
 def render() -> None:
-    require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER")
     st.title("Insights")
     st.caption("Nothing on this page changes any data.")
     render_flashes()
@@ -435,12 +489,34 @@ def render() -> None:
 
     # str() rather than the UUID so the cache key is a plain value and the
     # same year always hashes the same way.
-    rows = _encoding_progress(str(sy_choice))
+    # What this viewer is entitled to see, resolved once and then carried
+    # into every cache key below. Read off `role_codes` rather than
+    # `has_role`, which treats SUPER_ADMIN as satisfying any check — true
+    # and harmless for page access, but this is a data question and it
+    # should be answered by the roles the account actually holds.
+    scope_ids = None
+    if not (current_user.role_codes & SCHOOL_WIDE_ROLES):
+        scope_ids = _advised_sections(str(sy_choice), str(current_user.id))
+        if not scope_ids:
+            st.info(
+                "You are not advising a section in this school year, so "
+                "there is nothing to show here yet."
+            )
+            return
+
+    rows = _encoding_progress(str(sy_choice), scope_ids)
     if not rows:
         st.info("This school year has no sections or no terms yet.")
         return
-    stats = _grade_stats(str(sy_choice))
-    risk = _at_risk(str(sy_choice))
+    stats = _grade_stats(str(sy_choice), scope_ids)
+    risk = _at_risk(str(sy_choice), scope_ids)
+
+    if scope_ids is not None:
+        st.caption(
+            f"Showing the {len(scope_ids)} section(s) you advise."
+            if len(scope_ids) > 1
+            else "Showing the section you advise."
+        )
 
     # One set of filters for the whole page. The dimensions come from the
     # progress rows rather than the grade statistics because those cover
@@ -529,6 +605,24 @@ def render() -> None:
             "can actually encode against, but each one needs a real subject "
             "chosen on Section Subject Offerings."
         )
+
+    # The per-subject breakdown, once the view is down to one section.
+    # Gated on that rather than on the viewer's role: it is the same
+    # question whoever asks it, and an adviser with a single section
+    # simply arrives here without touching a filter. Running it
+    # school-wide would be ~810 rows of detail nobody asked for, and it
+    # is a separate query, so the gate keeps it off the school-wide path
+    # entirely.
+    sections_in_view = {row.section_id for row in shown}
+    if len(sections_in_view) == 1:
+        only = next(iter(sections_in_view))
+        name = next(r.section_name for r in shown if r.section_id == only)
+        st.divider()
+        st.subheader(f"{name} — by subject")
+        by_subject = _offering_progress(str(sy_choice), (only,))
+        if term_choice != ALL:
+            by_subject = [r for r in by_subject if r.term_id == term_choice]
+        _render_by_subject(by_subject)
 
     st.divider()
     st.subheader("Grade distribution")
