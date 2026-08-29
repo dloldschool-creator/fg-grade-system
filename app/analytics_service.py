@@ -1117,6 +1117,318 @@ def at_risk_learners(session, school_year_id, section_ids=None) -> AtRiskReport:
 
 
 # --------------------------------------------------------------------------
+# Annual standing (§19-20)
+# --------------------------------------------------------------------------
+#
+# The year-end counterpart of `at_risk_learners`, reading
+# `annual_grade_summaries` instead of the term summaries. Three things
+# make it more than the same query against a different table.
+#
+# **It never says "will not be promoted".** DO 017 explicitly leaves
+# retention, promotion, graduation and honors to a forthcoming order
+# (§25, §26), and the order also adds a rule the finalize guard does not
+# yet implement — a learner taking more electives than the minimum must
+# pass all of them. So this reports what the stored summary says and
+# stops there. Naming a consequence would be inventing school policy.
+#
+# **The General Average is read, never recomputed.** It is unit-weighted
+# under DO 017 and built from each subject's real term pattern (rule 4);
+# a second implementation here would drift from the report card. The
+# stored `averaging_method` and `total_units` come along so the number
+# can be explained rather than merely displayed.
+#
+# **The failed-subject list obeys §16.** `subject_final_grades` carries a
+# row for *every* subject including both Grade 11 language components,
+# but the components' finals are not what counts — the combined learning
+# area's is, once. Listing the raw failed rows would report a learner as
+# failing Effective Communication and Mabisang Komunikasyon when the pair
+# as one area passed, or miss a failed pair whose components each
+# scraped through. `_failed_areas` applies the same substitution the
+# General Average does.
+
+
+@dataclass(frozen=True)
+class AnnualRiskRow:
+    """One learner's year, as the stored annual summary describes it."""
+
+    enrollment_id: uuid.UUID
+    learner_name: str
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_name: str
+    strand_id: uuid.UUID | None
+    strand_name: str
+    general_average: float | None
+    lowest_final_grade: float | None
+    failed_subject_count: int
+    complete: bool
+    # How the average was reached, so a mis-set unit is visible rather
+    # than just a slightly different plausible number.
+    averaging_method: str
+    total_units: float | None
+    # Learning areas the learner failed, already collapsed per §16.
+    failed_areas: tuple[str, ...]
+
+    @property
+    def provisional(self) -> bool:
+        """An incomplete record's average is built from part of the
+        subject list, so it will still move."""
+        return not self.complete
+
+
+@dataclass(frozen=True)
+class AnnualSectionRow:
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_name: str
+    learners: int
+    complete: int
+    flagged: int
+
+    @property
+    def incomplete(self) -> int:
+        return self.learners - self.complete
+
+    @property
+    def complete_rate(self) -> float | None:
+        if not self.learners:
+            return None
+        return 100.0 * self.complete / self.learners
+
+
+@dataclass(frozen=True)
+class AnnualRiskReport:
+    passing_grade: float
+    sections: tuple[AnnualSectionRow, ...]
+    flagged: tuple[AnnualRiskRow, ...]
+
+    @property
+    def any_summaries(self) -> bool:
+        return any(s.learners for s in self.sections)
+
+
+def annual_risk(session, school_year_id, section_ids=None) -> AnnualRiskReport:
+    """Learners whose stored **annual** summary shows a failing subject
+    or a failing General Average.
+
+    **Only failing learners are named.** An incomplete annual record is
+    the other thing that blocks a year closing, but right now that is
+    almost every learner, so it is reported per section as a count rather
+    than as a list of hundreds. `complete_rate` is the finalize-readiness
+    figure; the flagged list is the academic one.
+    """
+    from app.grading_service import resolve_passing_grade
+    from app.models.grades import AnnualGradeSummary
+
+    passing_grade = float(resolve_passing_grade(session, school_year_id))
+
+    sections = _sections_in_scope(session, school_year_id, section_ids)
+    if not sections:
+        return AnnualRiskReport(passing_grade=passing_grade, sections=(), flagged=())
+
+    enrollments = {
+        e.id: e
+        for e in session.query(Enrollment)
+        .filter(
+            Enrollment.school_year_id == school_year_id,
+            Enrollment.section_id.in_(list(sections)),
+            Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+        )
+        .all()
+    }
+    if not enrollments:
+        return AnnualRiskReport(passing_grade=passing_grade, sections=(), flagged=())
+
+    summaries = {
+        s.enrollment_id: s
+        for s in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_(list(enrollments)))
+        .all()
+    }
+
+    flagged_ids = [
+        enrollment_id
+        for enrollment_id, summary in summaries.items()
+        if (summary.failed_subject_count or 0) > 0
+        or (
+            summary.general_average is not None
+            and float(summary.general_average) < passing_grade
+        )
+    ]
+
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner)
+        .filter(
+            Learner.id.in_({enrollments[i].learner_id for i in flagged_ids})
+        )
+        .all()
+    } if flagged_ids else {}
+    grade_levels = {g.id: g for g in session.query(GradeLevel).all()}
+    strands = {s.id: s for s in session.query(Strand).all()}
+    failed_by_enrollment = _failed_areas(session, school_year_id, flagged_ids)
+
+    rows = []
+    for enrollment_id in flagged_ids:
+        enrollment = enrollments[enrollment_id]
+        summary = summaries[enrollment_id]
+        section = sections.get(enrollment.section_id)
+        learner = learners.get(enrollment.learner_id)
+        if section is None or learner is None:
+            continue
+        grade_level = grade_levels.get(section.grade_level_id)
+        strand = strands.get(section.strand_id)
+        rows.append(
+            AnnualRiskRow(
+                enrollment_id=enrollment_id,
+                learner_name=f"{learner.last_name}, {learner.first_name}",
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_name=grade_level.name if grade_level else "",
+                strand_id=section.strand_id,
+                strand_name=strand.name if strand else "",
+                general_average=(
+                    float(summary.general_average)
+                    if summary.general_average is not None
+                    else None
+                ),
+                lowest_final_grade=(
+                    float(summary.lowest_final_grade)
+                    if summary.lowest_final_grade is not None
+                    else None
+                ),
+                failed_subject_count=summary.failed_subject_count or 0,
+                complete=summary.completion_status == CompletionStatus.COMPLETE,
+                averaging_method=(
+                    summary.averaging_method.value if summary.averaging_method else ""
+                ),
+                total_units=(
+                    float(summary.total_units)
+                    if summary.total_units is not None
+                    else None
+                ),
+                failed_areas=tuple(failed_by_enrollment.get(enrollment_id, ())),
+            )
+        )
+
+    flagged_set = set(flagged_ids)
+    by_section: dict = {}
+    for enrollment_id, enrollment in enrollments.items():
+        bucket = by_section.setdefault(
+            enrollment.section_id, {"learners": 0, "complete": 0, "flagged": 0}
+        )
+        bucket["learners"] += 1
+        summary = summaries.get(enrollment_id)
+        if summary is not None and summary.completion_status == CompletionStatus.COMPLETE:
+            bucket["complete"] += 1
+        if enrollment_id in flagged_set:
+            bucket["flagged"] += 1
+
+    section_rows = []
+    for section_id, bucket in by_section.items():
+        section = sections[section_id]
+        grade_level = grade_levels.get(section.grade_level_id)
+        section_rows.append(
+            AnnualSectionRow(
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_name=grade_level.name if grade_level else "",
+                learners=bucket["learners"],
+                complete=bucket["complete"],
+                flagged=bucket["flagged"],
+            )
+        )
+
+    rows.sort(
+        key=lambda r: (
+            -r.failed_subject_count,
+            r.general_average if r.general_average is not None else 1e9,
+            r.learner_name,
+        )
+    )
+    section_rows.sort(key=lambda s: (-s.flagged, s.complete_rate or 0.0, s.section_name))
+    return AnnualRiskReport(
+        passing_grade=passing_grade,
+        sections=tuple(section_rows),
+        flagged=tuple(rows),
+    )
+
+
+def _failed_areas(session, school_year_id, enrollment_ids) -> dict:
+    """`{enrollment_id: (learning area names failed,)}`, collapsed per §16.
+
+    The Grade 11 language pair is one learning area for this purpose. Its
+    two component subjects each carry a `subject_final_grades` row with
+    its own remark, and neither is what counts — the
+    `combined_learning_area_results` row is, once. So the components are
+    dropped and the combined area substituted, exactly the way the
+    General Average is built (rule 4). Getting this wrong reports a
+    learner as failing two languages when the pair passed, or as failing
+    none when the pair did not.
+    """
+    if not enrollment_ids:
+        return {}
+
+    from app.models.enums import SubjectRemark
+    from app.models.grades import CombinedLearningAreaResult, SubjectFinalGrade
+    from app.models.subjects import CombinedLearningArea, CombinedLearningAreaComponent
+
+    component_subject_ids = {
+        row[0]
+        for row in session.query(CombinedLearningAreaComponent.subject_id).all()
+    }
+    finals = (
+        session.query(SubjectFinalGrade)
+        .filter(
+            SubjectFinalGrade.enrollment_id.in_(enrollment_ids),
+            SubjectFinalGrade.school_year_id == school_year_id,
+            SubjectFinalGrade.remark == SubjectRemark.FAILED,
+        )
+        .all()
+    )
+    combined = (
+        session.query(CombinedLearningAreaResult)
+        .filter(
+            CombinedLearningAreaResult.enrollment_id.in_(enrollment_ids),
+            CombinedLearningAreaResult.school_year_id == school_year_id,
+            CombinedLearningAreaResult.remark == SubjectRemark.FAILED,
+        )
+        .all()
+    )
+
+    subject_names = {}
+    wanted = {f.subject_id for f in finals} - component_subject_ids
+    if wanted:
+        subject_names = {
+            s.id: s.official_name
+            for s in session.query(Subject).filter(Subject.id.in_(wanted)).all()
+        }
+    area_names = {}
+    if combined:
+        area_names = {
+            a.id: a.name
+            for a in session.query(CombinedLearningArea)
+            .filter(
+                CombinedLearningArea.id.in_({c.combined_learning_area_id for c in combined})
+            )
+            .all()
+        }
+
+    result: dict = {}
+    for final in finals:
+        if final.subject_id in component_subject_ids:
+            continue
+        name = subject_names.get(final.subject_id)
+        if name:
+            result.setdefault(final.enrollment_id, []).append(name)
+    for row in combined:
+        name = area_names.get(row.combined_learning_area_id)
+        if name:
+            result.setdefault(row.enrollment_id, []).append(name)
+    return {key: tuple(sorted(names)) for key, names in result.items()}
+
+
+# --------------------------------------------------------------------------
 # Attendance risk (§31)
 # --------------------------------------------------------------------------
 #

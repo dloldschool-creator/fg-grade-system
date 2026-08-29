@@ -680,10 +680,10 @@ the components' sum, or the languages are weighted twice.
 ## Analytics — Overview → Insights
 
 Added 2026-08-29. `app/analytics_service.py` (queries, no Streamlit) and
-`app/admin_pages/insights.py` (the page), covering five metrics behind
+`app/admin_pages/insights.py` (the page), covering six metrics behind
 one shared filter set: **grade encoding progress**, **grade
-distribution**, **subject difficulty**, **learners at risk**, and
-**attendance risk (§31)**.
+distribution**, **subject difficulty**, **learners at risk** (per term),
+**annual standing**, and **attendance risk (§31)**.
 
 It sits beside the Dashboard rather than inside it. The split is by
 question: the Dashboard answers *what is outstanding right now* and is
@@ -870,6 +870,37 @@ The count is there; the Gradebook is where you act, already shows the
 class with the blanks visible, and a second roster here would be one
 more thing to keep in step.
 
+**Annual standing (`annual_risk`) is the year-end counterpart of
+`at_risk_learners`** (2026-08-29), reading `annual_grade_summaries`.
+Three things make it more than the same query against another table:
+
+- **It never says "will not be promoted".** DO 017 leaves retention,
+  promotion, graduation and honors to a forthcoming order (§25, §26),
+  and adds a rule the finalize guard does not implement — a learner
+  taking more electives than the minimum must pass all of them. So it
+  reports what the summary says and stops. Naming a consequence would
+  be inventing school policy on a page.
+- **The General Average is read, never recomputed** — unit-weighted
+  under DO 017 and built from each subject's real term pattern. The
+  stored `averaging_method` and `total_units` come along so the number
+  can be explained rather than just displayed.
+- **The failed-area list obeys §16, and this is the trap.**
+  `subject_final_grades` carries a row for *every* subject including
+  both Grade 11 language components, and neither component is what
+  counts — the combined area's result is, once. A list built from the
+  raw FAILED rows reports a learner as failing two languages when the
+  pair passed, or misses a failed pair whose components each scraped
+  through. `_failed_areas` applies the same substitution the General
+  Average does. Both directions are tested against constructed records:
+  components failing while the pair passes, and components passing while
+  the pair fails.
+
+**Only failing learners are named; incomplete records are a per-section
+count.** An incomplete annual record is the other thing that blocks a
+year closing, but that is currently almost every learner, so listing
+them would be hundreds of names. `complete_rate` is the
+finalize-readiness figure; the flagged list is the academic one.
+
 **Attendance risk (§31) is the one metric that cannot aggregate in SQL**
 (2026-08-29). Consecutive-run detection needs each learner's days *in
 order*, so `attendance_risk()` is shaped differently from everything
@@ -912,10 +943,10 @@ form could be reconciled against.
 **Still open on this page:** nobody has viewed it signed-in — every
 function is verified against real and constructed data, but the layout
 itself is unseen, and the adviser and teacher paths especially so, since
-neither can be reached without an account holding that role. Annual
-(General Average) risk is not covered, only term-level. Attendance risk
-is not in the subject teacher view: attendance is the adviser's job and
-the Attendance page does not admit subject teachers either.
+neither can be reached without an account holding that role. Neither
+annual standing nor attendance risk is in the subject teacher view:
+both describe a learner across every subject, which is not a subject
+teacher's to see, and the Attendance page does not admit them either.
 
 ## Where things stand
 

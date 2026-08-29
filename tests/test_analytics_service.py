@@ -23,6 +23,7 @@ from app.analytics_service import (
     EncodingRow,
     SubjectGradeRow,
     advised_section_ids,
+    annual_risk,
     at_risk_headline,
     attendance_headline,
     attendance_risk,
@@ -646,6 +647,314 @@ def test_the_drill_down_cost_is_flat(session, school_year):
     with QueryCounter() as counter:
         offering_progress(session, school_year.id, (section.id,))
     assert counter.count <= 8, f"{counter.count} queries for the drill-down"
+
+
+# --- Annual standing -------------------------------------------------------
+
+
+def test_annual_risk_respects_the_scope(session, school_year):
+    assert annual_risk(session, school_year.id, ()).sections == ()
+    assert annual_risk(session, school_year.id, ()).flagged == ()
+
+    section = _any_advised_section(session, school_year)
+    ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    scoped = annual_risk(session, school_year.id, ids)
+    assert {s.section_id for s in scoped.sections} <= set(ids)
+    assert {r.section_id for r in scoped.flagged} <= set(ids)
+
+
+def test_annual_risk_reports_completion_per_section(session, school_year):
+    """Incomplete records are the other thing that blocks a year closing,
+    and right now that is nearly every learner — so they are counted per
+    section rather than listed by name."""
+    report = annual_risk(session, school_year.id)
+    if not report.sections:
+        pytest.skip("no sections")
+    for row in report.sections:
+        assert row.complete + row.incomplete == row.learners
+        assert 0.0 <= (row.complete_rate or 0.0) <= 100.0
+
+
+def test_the_annual_cost_is_flat(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    annual_risk(session, school_year.id)  # warm
+    with QueryCounter() as counter:
+        annual_risk(session, school_year.id)
+    assert counter.count <= 14, f"{counter.count} queries for annual standing"
+
+
+def test_a_failing_general_average_flags_and_a_passing_one_does_not(
+    session, school_year
+):
+    """Against the real query, written and rolled back."""
+    from app.models.enums import AveragingMethod, CompletionStatus
+    from app.models.grades import AnnualGradeSummary
+    from app.models.learners import Enrollment
+
+    section = _any_advised_section(session, school_year)
+    roster = (
+        session.query(Enrollment)
+        .filter_by(school_year_id=school_year.id, section_id=section.id)
+        .limit(3)
+        .all()
+    )
+    if len(roster) < 3:
+        pytest.skip("needs three learners")
+    taken = {
+        s.enrollment_id
+        for s in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_([e.id for e in roster]))
+        .all()
+    }
+    roster = [e for e in roster if e.id not in taken]
+    if len(roster) < 3:
+        pytest.skip("those learners already have annual summaries")
+
+    cases = [
+        (Decimal("72"), Decimal("60"), 2),   # failing average and subjects
+        (Decimal("88"), Decimal("80"), 1),   # passing average, one failed subject
+        (Decimal("90"), Decimal("85"), 0),   # healthy
+    ]
+    for enrollment, (average, lowest, failed) in zip(roster, cases):
+        session.add(
+            AnnualGradeSummary(
+                enrollment_id=enrollment.id,
+                school_year_id=school_year.id,
+                general_average=average,
+                lowest_final_grade=lowest,
+                failed_subject_count=failed,
+                completion_status=CompletionStatus.COMPLETE,
+                averaging_method=AveragingMethod.UNIT_WEIGHTED,
+                total_units=Decimal("40"),
+            )
+        )
+    session.flush()  # never committed
+
+    report = annual_risk(session, school_year.id, (section.id,))
+    flagged = {r.enrollment_id: r for r in report.flagged}
+
+    assert roster[0].id in flagged, "a failing General Average must flag"
+    assert roster[1].id in flagged, "a failed subject must flag even at a good average"
+    assert roster[2].id not in flagged, "a passing learner must not flag"
+    assert flagged[roster[0].id].general_average == 72.0
+    assert flagged[roster[0].id].averaging_method == "UNIT_WEIGHTED"
+    assert flagged[roster[0].id].total_units == 40.0
+    # Worst first: two failed subjects before one.
+    order = [r.enrollment_id for r in report.flagged]
+    assert order.index(roster[0].id) < order.index(roster[1].id)
+
+
+def test_a_null_general_average_is_not_a_failing_one(session, school_year):
+    """Rule 2 again: a learner nobody has graded has no average, and an
+    absent average must never compare as low."""
+    from app.models.enums import CompletionStatus
+    from app.models.grades import AnnualGradeSummary
+    from app.models.learners import Enrollment
+
+    section = _any_advised_section(session, school_year)
+    existing = {
+        s.enrollment_id
+        for s in session.query(AnnualGradeSummary).all()
+    }
+    enrollment = next(
+        (
+            e
+            for e in session.query(Enrollment)
+            .filter_by(school_year_id=school_year.id, section_id=section.id)
+            .all()
+            if e.id not in existing
+        ),
+        None,
+    )
+    if enrollment is None:
+        pytest.skip("no learner without an annual summary")
+
+    session.add(
+        AnnualGradeSummary(
+            enrollment_id=enrollment.id,
+            school_year_id=school_year.id,
+            general_average=None,
+            lowest_final_grade=None,
+            failed_subject_count=0,
+            completion_status=CompletionStatus.INCOMPLETE,
+        )
+    )
+    session.flush()
+
+    report = annual_risk(session, school_year.id, (section.id,))
+    assert enrollment.id not in {r.enrollment_id for r in report.flagged}
+
+
+def test_the_failed_area_list_collapses_the_language_pair(session, school_year):
+    """**§16, in the place it is easiest to get wrong.**
+
+    `subject_final_grades` carries a row for each of the two Grade 11
+    language components, but neither is what counts — the combined
+    learning area's result is, once. A list built from the raw failed
+    rows would report a learner as failing two languages when the pair
+    as one area passed.
+
+    Writes finals for both components marked FAILED and a combined
+    result marked PASSED, then asserts neither component name appears.
+    Rolled back; never committed.
+    """
+    from app.models.enums import AveragingMethod, CompletionStatus, SubjectRemark
+    from app.models.grades import (
+        AnnualGradeSummary,
+        CombinedLearningAreaResult,
+        SubjectFinalGrade,
+    )
+    from app.models.learners import Enrollment
+    from app.models.subjects import (
+        CombinedLearningArea,
+        CombinedLearningAreaComponent,
+        Subject,
+    )
+
+    area = session.query(CombinedLearningArea).first()
+    if area is None:
+        pytest.skip("no combined learning area configured")
+    components = (
+        session.query(CombinedLearningAreaComponent)
+        .filter_by(combined_learning_area_id=area.id)
+        .all()
+    )
+    if len(components) < 2:
+        pytest.skip("the combined area has fewer than two components")
+
+    section = _any_advised_section(session, school_year)
+    taken = {s.enrollment_id for s in session.query(AnnualGradeSummary).all()}
+    enrollment = next(
+        (
+            e
+            for e in session.query(Enrollment)
+            .filter_by(school_year_id=school_year.id, section_id=section.id)
+            .all()
+            if e.id not in taken
+        ),
+        None,
+    )
+    if enrollment is None:
+        pytest.skip("no learner without an annual summary")
+
+    session.add(
+        AnnualGradeSummary(
+            enrollment_id=enrollment.id,
+            school_year_id=school_year.id,
+            general_average=Decimal("74"),
+            lowest_final_grade=Decimal("70"),
+            failed_subject_count=1,
+            completion_status=CompletionStatus.COMPLETE,
+            averaging_method=AveragingMethod.UNIT_WEIGHTED,
+        )
+    )
+    for component in components:
+        session.add(
+            SubjectFinalGrade(
+                enrollment_id=enrollment.id,
+                subject_id=component.subject_id,
+                school_year_id=school_year.id,
+                final_grade=Decimal("74"),
+                remark=SubjectRemark.FAILED,
+            )
+        )
+    session.add(
+        CombinedLearningAreaResult(
+            enrollment_id=enrollment.id,
+            combined_learning_area_id=area.id,
+            school_year_id=school_year.id,
+            final_grade=Decimal("76"),
+            remark=SubjectRemark.PASSED,
+        )
+    )
+    session.flush()
+
+    report = annual_risk(session, school_year.id, (section.id,))
+    row = next(r for r in report.flagged if r.enrollment_id == enrollment.id)
+
+    component_names = {
+        session.get(Subject, c.subject_id).official_name for c in components
+    }
+    assert not (set(row.failed_areas) & component_names), (
+        "a language component must never appear on its own — the pair is "
+        f"one learning area, and it passed. Got {row.failed_areas}"
+    )
+    assert area.name not in row.failed_areas, "the pair passed, so it must not be listed"
+
+
+def test_a_failed_language_pair_is_listed_once_by_its_own_name(session, school_year):
+    """The other direction: the pair failed, so it appears once, under
+    the combined area's name rather than as two components."""
+    from app.models.enums import AveragingMethod, CompletionStatus, SubjectRemark
+    from app.models.grades import (
+        AnnualGradeSummary,
+        CombinedLearningAreaResult,
+        SubjectFinalGrade,
+    )
+    from app.models.learners import Enrollment
+    from app.models.subjects import CombinedLearningArea, CombinedLearningAreaComponent
+
+    area = session.query(CombinedLearningArea).first()
+    if area is None:
+        pytest.skip("no combined learning area configured")
+    components = (
+        session.query(CombinedLearningAreaComponent)
+        .filter_by(combined_learning_area_id=area.id)
+        .all()
+    )
+    section = _any_advised_section(session, school_year)
+    taken = {s.enrollment_id for s in session.query(AnnualGradeSummary).all()}
+    enrollment = next(
+        (
+            e
+            for e in session.query(Enrollment)
+            .filter_by(school_year_id=school_year.id, section_id=section.id)
+            .all()
+            if e.id not in taken
+        ),
+        None,
+    )
+    if enrollment is None:
+        pytest.skip("no learner without an annual summary")
+
+    session.add(
+        AnnualGradeSummary(
+            enrollment_id=enrollment.id,
+            school_year_id=school_year.id,
+            general_average=Decimal("74"),
+            failed_subject_count=1,
+            completion_status=CompletionStatus.COMPLETE,
+            averaging_method=AveragingMethod.UNIT_WEIGHTED,
+        )
+    )
+    # Components each scraped a pass; the pair as one area did not.
+    for component in components:
+        session.add(
+            SubjectFinalGrade(
+                enrollment_id=enrollment.id,
+                subject_id=component.subject_id,
+                school_year_id=school_year.id,
+                final_grade=Decimal("76"),
+                remark=SubjectRemark.PASSED,
+            )
+        )
+    session.add(
+        CombinedLearningAreaResult(
+            enrollment_id=enrollment.id,
+            combined_learning_area_id=area.id,
+            school_year_id=school_year.id,
+            final_grade=Decimal("74"),
+            remark=SubjectRemark.FAILED,
+        )
+    )
+    session.flush()
+
+    report = annual_risk(session, school_year.id, (section.id,))
+    row = next(r for r in report.flagged if r.enrollment_id == enrollment.id)
+    assert row.failed_areas.count(area.name) == 1, (
+        f"the pair should be listed once by its own name; got {row.failed_areas}"
+    )
 
 
 # --- Attendance risk (§31) -------------------------------------------------

@@ -101,6 +101,14 @@ def _offering_progress(school_year_id: str, section_ids=None, offering_ids=None)
         )
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading annual standing…")
+def _annual_risk(school_year_id: str, section_ids):
+    """Cached year-end standing. Holds learner names, so `section_ids` is
+    in the key for the same reason it is on `_at_risk`."""
+    with get_session() as session:
+        return analytics_service.annual_risk(session, school_year_id, section_ids)
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading attendance…")
 def _attendance_risk(school_year_id: str, year: int, month: int, section_ids):
     """Cached §31 attendance warning for one month.
@@ -520,6 +528,92 @@ def _render_attendance(report) -> None:
     )
 
 
+def _render_annual(report) -> None:
+    """Year-end standing from the stored annual summaries.
+
+    **Says nothing about promotion or graduation.** DO 017 leaves
+    retention, promotion, graduation and honors to a forthcoming order,
+    and adds a rule the finalize guard does not yet implement — a
+    learner taking more electives than the minimum must pass all of
+    them. So this reports what the summary says and stops; naming a
+    consequence would be inventing school policy on a page.
+    """
+    if not report.sections:
+        st.info("No sections in view for this school year.")
+        return
+
+    learners = sum(s.learners for s in report.sections)
+    complete = sum(s.complete for s in report.sections)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Learners flagged", f"{len(report.flagged):,}")
+    col2.metric(
+        "Records complete",
+        _fmt_percent(100.0 * complete / learners if learners else None),
+        help=f"{complete:,} of {learners:,} — a year cannot be finalized without this",
+    )
+    col3.metric("Still incomplete", f"{learners - complete:,}")
+
+    if report.flagged:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Learner": row.learner_name,
+                        "Grade": row.grade_level_name or DASH,
+                        "Section": row.section_name,
+                        "General Average": _fmt_grade(row.general_average),
+                        "Lowest final": _fmt_grade(row.lowest_final_grade),
+                        "Subjects failed": row.failed_subject_count,
+                        "Which": ", ".join(row.failed_areas) if row.failed_areas else DASH,
+                        "Record": "Still encoding" if row.provisional else "Complete",
+                    }
+                    for row in report.flagged
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        methods = {row.averaging_method for row in report.flagged if row.averaging_method}
+        if methods:
+            st.caption(
+                "General Averages here were computed as "
+                + ", ".join(sorted(m.replace("_", " ").lower() for m in methods))
+                + ". They are read from the stored records, not recalculated on "
+                "this page, so they match the report cards exactly."
+            )
+    else:
+        st.success(
+            f"No learner has a failing subject or a General Average below "
+            f"{report.passing_grade:g} in a computed annual record."
+        )
+
+    st.markdown("**Record completion by section**")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Section": row.section_name,
+                    "Grade": row.grade_level_name or DASH,
+                    "Learners": row.learners,
+                    "Complete": row.complete,
+                    "Incomplete": row.incomplete,
+                    "Complete %": _fmt_percent(row.complete_rate),
+                    "Flagged": row.flagged,
+                }
+                for row in report.sections
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        "An incomplete record is one where some subject has no final grade "
+        "yet — it blocks finalizing that learner's year, and its General "
+        "Average will still move. Nothing here decides promotion or "
+        "graduation; those rules are set elsewhere."
+    )
+
+
 def _render_attendance_section(school_year_id: str, scope_ids) -> None:
     """Month picker plus the §31 report.
 
@@ -906,6 +1000,10 @@ def render() -> None:
     st.divider()
     st.subheader("Learners at risk")
     _render_at_risk(risk, shown_risk)
+
+    st.divider()
+    st.subheader("Annual standing")
+    _render_annual(_annual_risk(str(sy_choice), scope_ids))
 
     st.divider()
     st.subheader("Attendance")
