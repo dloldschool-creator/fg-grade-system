@@ -1116,6 +1116,341 @@ def at_risk_learners(session, school_year_id, section_ids=None) -> AtRiskReport:
     return AtRiskReport(passing_grade=passing_grade, rows=tuple(rows))
 
 
+# --------------------------------------------------------------------------
+# Attendance risk (§31)
+# --------------------------------------------------------------------------
+#
+# **The rule is not reimplemented here.** `app/attendance_engine.py`
+# already owns §31 — what an eligible class day is, that LATE and CUTTING
+# still count as present, that an unencoded day is neither present nor
+# absent, and that a five-day absence run counts in *class* days so a
+# weekend does not break it but a day the learner turned up does. A
+# second version of any of that would drift from SF2 while looking
+# right, so this module batches the I/O and calls `summarize_attendance`
+# per learner, exactly as the Attendance page does.
+#
+# **Bounded to one month, deliberately.** The other metrics aggregate in
+# SQL and return tens of rows; consecutive-run detection cannot, because
+# it needs each learner's days in order. One month is ~20 class days ×
+# the roster, which is a real amount of data — so the query selects three
+# columns rather than ORM objects, and the function takes a month rather
+# than a year.
+
+
+@dataclass(frozen=True)
+class AttendanceRiskRow:
+    """One learner flagged by §31 in one month."""
+
+    enrollment_id: uuid.UUID
+    learner_name: str
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_name: str
+    strand_id: uuid.UUID | None
+    strand_name: str
+    eligible_days: int
+    days_present: int
+    days_absent: int
+    late_count: int
+    cutting_count: int
+    unencoded_days: int
+    longest_run: int
+    run_started: date | None
+    run_ended: date | None
+
+    @property
+    def known_days(self) -> int:
+        """Days somebody has actually marked. LATE and CUTTING are days
+        present, so present + absent is the whole encoded set."""
+        return self.days_present + self.days_absent
+
+    @property
+    def absence_rate(self) -> float | None:
+        """Absences as a share of the days **anybody has marked**, and
+        None when nobody has marked any.
+
+        Deliberately not `absent / eligible`: on a month nobody has
+        encoded, that reads 0%, which looks like perfect attendance
+        rather than an empty sheet. Same rule as everywhere else here —
+        absent data is not a zero value.
+        """
+        if not self.known_days:
+            return None
+        return 100.0 * self.days_absent / self.known_days
+
+
+@dataclass(frozen=True)
+class AttendanceSectionRow:
+    """A section's month, in totals rather than in people.
+
+    Exists so the page can report attendance for everyone without
+    naming everyone: the flagged list stays short because §31 flags few
+    learners, while this covers the whole roster.
+    """
+
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_name: str
+    strand_id: uuid.UUID | None
+    strand_name: str
+    learners: int
+    eligible_days: int
+    days_present: int
+    days_absent: int
+    unencoded_days: int
+    flagged: int
+
+    @property
+    def known_days(self) -> int:
+        return self.days_present + self.days_absent
+
+    @property
+    def absence_rate(self) -> float | None:
+        """**Recomputed from the totals**, never the mean of the
+        learners' own rates — the percentage trap that shipped twice
+        here already, in SF2 and again in SF4.
+
+        Denominated on days actually marked, not on eligible days, so an
+        unencoded month reads as unknown rather than as 0% absence. Read
+        it next to `encoded_rate`, which says how much of the month the
+        figure is based on.
+        """
+        if not self.known_days:
+            return None
+        return 100.0 * self.days_absent / self.known_days
+
+    @property
+    def encoded_rate(self) -> float | None:
+        if not self.eligible_days:
+            return None
+        return 100.0 * (self.eligible_days - self.unencoded_days) / self.eligible_days
+
+
+@dataclass(frozen=True)
+class AttendanceRiskReport:
+    year: int
+    month: int
+    class_days: int
+    sections: tuple[AttendanceSectionRow, ...]
+    flagged: tuple[AttendanceRiskRow, ...]
+
+    @property
+    def any_records(self) -> bool:
+        return any(s.days_present or s.days_absent for s in self.sections)
+
+
+def attendance_risk(
+    session, school_year_id, year: int, month: int, section_ids=None
+) -> AttendanceRiskReport:
+    """§31's five-consecutive-absence warning, plus each section's totals,
+    for one month.
+
+    Flags **only** what the spec defines as a warning. There is no
+    absence-rate threshold here on purpose: §31 names the consecutive
+    run and nothing else, and a percentage cutoff invented in an
+    analytics page would read as school policy. The rate is reported
+    alongside as context, never as the thing being judged.
+    """
+    from app.attendance_engine import (
+        Movement,
+        compute_active_window,
+        summarize_attendance,
+    )
+    from app.models.attendance import AcademicCalendarDate, AttendanceRecord
+    from app.models.learners import LearnerMovement
+    from app.models.organization import SchoolYear
+
+    sections = _sections_in_scope(session, school_year_id, section_ids)
+    if not sections:
+        return AttendanceRiskReport(year, month, 0, (), ())
+
+    class_days = (
+        session.query(AcademicCalendarDate)
+        .filter(
+            AcademicCalendarDate.school_year_id == school_year_id,
+            AcademicCalendarDate.is_default_class_day.is_(True),
+            func.extract("year", AcademicCalendarDate.calendar_date) == year,
+            func.extract("month", AcademicCalendarDate.calendar_date) == month,
+        )
+        .order_by(AcademicCalendarDate.calendar_date)
+        .all()
+    )
+    if not class_days:
+        return AttendanceRiskReport(year, month, 0, (), ())
+    day_by_id = {d.id: d.calendar_date for d in class_days}
+    all_days = [d.calendar_date for d in class_days]
+
+    enrollments = (
+        session.query(Enrollment)
+        .filter(
+            Enrollment.school_year_id == school_year_id,
+            Enrollment.section_id.in_(list(sections)),
+        )
+        .all()
+    )
+    if not enrollments:
+        return AttendanceRiskReport(year, month, len(class_days), (), ())
+
+    enrollment_ids = [e.id for e in enrollments]
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner)
+        .filter(Learner.id.in_({e.learner_id for e in enrollments}))
+        .all()
+    }
+    grade_levels = {g.id: g for g in session.query(GradeLevel).all()}
+    strands = {s.id: s for s in session.query(Strand).all()}
+    school_year = session.get(SchoolYear, school_year_id)
+
+    # Batched rather than `active_window_for` per learner, which costs two
+    # round trips each. The window itself is still built by the engine's
+    # own `compute_active_window`, so the movement rules stay in one place.
+    movements: dict = {}
+    for movement in (
+        session.query(LearnerMovement)
+        .filter(LearnerMovement.enrollment_id.in_(enrollment_ids))
+        .all()
+    ):
+        movements.setdefault(movement.enrollment_id, []).append(movement)
+
+    # Three columns, not ORM objects: a month across the whole school is
+    # roughly 20 class days times the roster, and hydrating that many
+    # instances is the expensive part.
+    statuses: dict = {}
+    for enrollment_id, calendar_date_id, status in (
+        session.query(
+            AttendanceRecord.enrollment_id,
+            AttendanceRecord.calendar_date_id,
+            AttendanceRecord.status,
+        )
+        .filter(
+            AttendanceRecord.enrollment_id.in_(enrollment_ids),
+            AttendanceRecord.calendar_date_id.in_(list(day_by_id)),
+        )
+        .all()
+    ):
+        day = day_by_id.get(calendar_date_id)
+        if day is not None:
+            statuses.setdefault(enrollment_id, {})[day] = status
+
+    flagged: list[AttendanceRiskRow] = []
+    totals: dict = {}
+    for enrollment in enrollments:
+        section = sections.get(enrollment.section_id)
+        learner = learners.get(enrollment.learner_id)
+        if section is None or learner is None:
+            continue
+        window = compute_active_window(
+            [
+                Movement(m.movement_type, m.effective_date)
+                for m in movements.get(enrollment.id, [])
+            ],
+            default_start=school_year.start_date if school_year else None,
+        )
+        summary = summarize_attendance(
+            all_days, window, statuses.get(enrollment.id, {})
+        )
+        if summary.eligible_days == 0:
+            continue
+
+        bucket = totals.setdefault(
+            section.id,
+            {"learners": 0, "eligible": 0, "present": 0, "absent": 0, "unencoded": 0, "flagged": 0},
+        )
+        bucket["learners"] += 1
+        bucket["eligible"] += summary.eligible_days
+        bucket["present"] += summary.days_present
+        bucket["absent"] += summary.days_absent
+        bucket["unencoded"] += summary.unencoded_days
+
+        if not summary.has_consecutive_absence_warning:
+            continue
+        longest_start, longest_end, longest = _longest_run(summary, all_days)
+        bucket["flagged"] += 1
+        grade_level = grade_levels.get(section.grade_level_id)
+        strand = strands.get(section.strand_id)
+        flagged.append(
+            AttendanceRiskRow(
+                enrollment_id=enrollment.id,
+                learner_name=f"{learner.last_name}, {learner.first_name}",
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_name=grade_level.name if grade_level else "",
+                strand_id=section.strand_id,
+                strand_name=strand.name if strand else "",
+                eligible_days=summary.eligible_days,
+                days_present=summary.days_present,
+                days_absent=summary.days_absent,
+                late_count=summary.late_count,
+                cutting_count=summary.cutting_count,
+                unencoded_days=summary.unencoded_days,
+                longest_run=longest,
+                run_started=longest_start,
+                run_ended=longest_end,
+            )
+        )
+
+    section_rows = []
+    for section_id, bucket in totals.items():
+        section = sections[section_id]
+        grade_level = grade_levels.get(section.grade_level_id)
+        strand = strands.get(section.strand_id)
+        section_rows.append(
+            AttendanceSectionRow(
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_name=grade_level.name if grade_level else "",
+                strand_id=section.strand_id,
+                strand_name=strand.name if strand else "",
+                learners=bucket["learners"],
+                eligible_days=bucket["eligible"],
+                days_present=bucket["present"],
+                days_absent=bucket["absent"],
+                unencoded_days=bucket["unencoded"],
+                flagged=bucket["flagged"],
+            )
+        )
+
+    # Worst first on both lists: the longest absence run, then the most
+    # days missed; and for sections, the highest absence rate.
+    flagged.sort(key=lambda r: (-r.longest_run, -r.days_absent, r.learner_name))
+    section_rows.sort(key=lambda s: (-(s.absence_rate or 0.0), s.section_name))
+    return AttendanceRiskReport(
+        year=year,
+        month=month,
+        class_days=len(class_days),
+        sections=tuple(section_rows),
+        flagged=tuple(flagged),
+    )
+
+
+def _longest_run(summary, all_days) -> tuple:
+    """The longest §31 run on a summary, measured in eligible class days
+    the same way the engine measures it."""
+    best = (None, None, 0)
+    for start, end in summary.consecutive_absence_runs:
+        length = sum(1 for day in all_days if start <= day <= end)
+        if length > best[2]:
+            best = (start, end, length)
+    return best
+
+
+def attendance_headline(report: AttendanceRiskReport) -> tuple[int, int, float | None]:
+    """`(learners flagged, sections affected, overall absence rate)`.
+
+    The rate is recomputed from the school's totals, not averaged across
+    sections — a 5-learner section and a 45-learner one do not weigh the
+    same.
+    """
+    absent = sum(s.days_absent for s in report.sections)
+    known = sum(s.known_days for s in report.sections)
+    return (
+        len(report.flagged),
+        len({s.section_id for s in report.sections if s.flagged}),
+        100.0 * absent / known if known else None,
+    )
+
+
 def at_risk_headline(rows) -> tuple[int, int]:
     """`(learners, flags)`.
 

@@ -680,9 +680,10 @@ the components' sum, or the languages are weighted twice.
 ## Analytics — Overview → Insights
 
 Added 2026-08-29. `app/analytics_service.py` (queries, no Streamlit) and
-`app/admin_pages/insights.py` (the page), covering four metrics behind
+`app/admin_pages/insights.py` (the page), covering five metrics behind
 one shared filter set: **grade encoding progress**, **grade
-distribution**, **subject difficulty**, and **learners at risk**.
+distribution**, **subject difficulty**, **learners at risk**, and
+**attendance risk (§31)**.
 
 It sits beside the Dashboard rather than inside it. The split is by
 question: the Dashboard answers *what is outstanding right now* and is
@@ -869,13 +870,52 @@ The count is there; the Gradebook is where you act, already shows the
 class with the blanks visible, and a second roster here would be one
 more thing to keep in step.
 
+**Attendance risk (§31) is the one metric that cannot aggregate in SQL**
+(2026-08-29). Consecutive-run detection needs each learner's days *in
+order*, so `attendance_risk()` is shaped differently from everything
+else here:
+
+- **Bounded to one month**, and the month is part of the query rather
+  than a filter over cached rows. A month is ~20 class days × the
+  roster; the record query selects three columns rather than ORM
+  instances, because hydrating that many is the expensive part.
+- **The §31 rule is not reimplemented.** `app/attendance_engine.py`
+  already owns what an eligible class day is, that LATE and CUTTING
+  count as present, that an unencoded day breaks a run, and that a run
+  is counted in *class* days so a weekend does not break it. This
+  batches the I/O — one query for movements, one for records — and calls
+  `summarize_attendance` per learner, exactly as the Attendance page
+  does. `active_window_for` is deliberately **not** used: it costs two
+  round trips per learner, so windows are built from batched movements
+  through the engine's own pure `compute_active_window`.
+- **Only §31's warning is flagged.** No absence-rate threshold, because
+  §31 names the consecutive run and nothing else — a percentage cutoff
+  invented in an analytics page would read as school policy.
+- Two outputs: a **short** flagged list that names people, and a section
+  table in totals, so attendance can be reported without naming
+  everyone.
+
+**The trap it walked into: `absent / eligible` reads 0% on a month
+nobody has encoded**, which looks like perfect attendance rather than an
+empty sheet. The rate is denominated on days somebody has **actually
+marked**, and is None until someone has — rule 2 wearing a different
+hat. It is displayed next to `encoded_rate`, which says how much of the
+month the figure rests on; 20% absence across 24% of the month is a very
+different claim from 20% across all of it. Caught by seeing the real
+output, not by review.
+
+Attendance is reported by **month**, not by the page's Term filter,
+because SF2 is monthly and `attendance_month_status` finalizes monthly.
+Slicing it by term here would put a number on screen that no official
+form could be reconciled against.
+
 **Still open on this page:** nobody has viewed it signed-in — every
 function is verified against real and constructed data, but the layout
 itself is unseen, and the adviser and teacher paths especially so, since
 neither can be reached without an account holding that role. Annual
-(General Average) risk is not covered, only term-level. Attendance-based
-risk (§31's consecutive-absence warning) is a separate metric and is not
-built.
+(General Average) risk is not covered, only term-level. Attendance risk
+is not in the subject teacher view: attendance is the adviser's job and
+the Attendance page does not admit subject teachers either.
 
 ## Where things stand
 

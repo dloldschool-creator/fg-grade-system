@@ -24,6 +24,8 @@ from app.analytics_service import (
     SubjectGradeRow,
     advised_section_ids,
     at_risk_headline,
+    attendance_headline,
+    attendance_risk,
     at_risk_learners,
     distribution,
     encoding_progress,
@@ -644,6 +646,205 @@ def test_the_drill_down_cost_is_flat(session, school_year):
     with QueryCounter() as counter:
         offering_progress(session, school_year.id, (section.id,))
     assert counter.count <= 8, f"{counter.count} queries for the drill-down"
+
+
+# --- Attendance risk (§31) -------------------------------------------------
+
+
+def _month_with_class_days(session, school_year):
+    from app.attendance_service import months_with_class_days
+
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    return months[0]
+
+
+def test_an_unmarked_month_has_no_absence_rate_rather_than_zero(session, school_year):
+    """The trap this metric walks into first.
+
+    `absent / eligible` on a month nobody has encoded is 0%, which reads
+    as perfect attendance rather than as an empty sheet. The rate is
+    denominated on days somebody has actually marked, so it is None
+    until someone has. Rule 2, wearing a different hat.
+    """
+    year, month = _month_with_class_days(session, school_year)
+    report = attendance_risk(session, school_year.id, year, month)
+    if report.any_records:
+        pytest.skip("this month has attendance encoded")
+    assert report.sections, "sections should still be reported"
+    for row in report.sections:
+        assert row.eligible_days > 0
+        assert row.absence_rate is None, "an unmarked month must not read 0% absent"
+        assert row.encoded_rate == 0.0
+    assert attendance_headline(report)[2] is None
+
+
+def test_attendance_risk_respects_the_section_scope(session, school_year):
+    year, month = _month_with_class_days(session, school_year)
+    assert attendance_risk(session, school_year.id, year, month, ()).sections == ()
+
+    section = _any_advised_section(session, school_year)
+    ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    scoped = attendance_risk(session, school_year.id, year, month, ids)
+    assert {s.section_id for s in scoped.sections} <= set(ids)
+    assert {r.section_id for r in scoped.flagged} <= set(ids)
+
+
+def test_a_month_with_no_class_days_reports_nothing(session, school_year):
+    report = attendance_risk(session, school_year.id, 1999, 1)
+    assert report.class_days == 0
+    assert report.sections == ()
+    assert report.flagged == ()
+
+
+def test_the_attendance_cost_is_flat(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    year, month = _month_with_class_days(session, school_year)
+    attendance_risk(session, school_year.id, year, month)  # warm
+    with QueryCounter() as counter:
+        attendance_risk(session, school_year.id, year, month)
+    assert counter.count <= 10, f"{counter.count} queries for a month of attendance"
+
+
+def test_five_consecutive_absences_flag_and_four_do_not(session, school_year):
+    """§31's rule, against the real query.
+
+    Writes attendance for two learners and **rolls back** — the fixture
+    never commits. The run is counted in *class days*, so the weekend
+    between two school days does not break it; the engine owns that rule
+    and this asserts the analytics layer calls it correctly rather than
+    reimplementing it.
+    """
+    from app.attendance_service import class_days_in_month
+    from app.models.attendance import AttendanceRecord
+    from app.models.enums import AttendanceStatus
+    from app.models.learners import Enrollment
+
+    year, month = _month_with_class_days(session, school_year)
+    days = class_days_in_month(session, school_year.id, year, month)
+    if len(days) < 8:
+        pytest.skip("needs at least eight class days in the month")
+
+    section = _any_advised_section(session, school_year)
+    roster = (
+        session.query(Enrollment)
+        .filter_by(school_year_id=school_year.id, section_id=section.id)
+        .limit(2)
+        .all()
+    )
+    if len(roster) < 2:
+        pytest.skip("needs two learners in the section")
+
+    before = attendance_risk(session, school_year.id, year, month, (section.id,))
+    already = {r.enrollment_id for r in before.flagged}
+
+    # First learner: five absences in a row. Second: four, then present.
+    for index, day in enumerate(days[:5]):
+        session.add(
+            AttendanceRecord(
+                enrollment_id=roster[0].id,
+                calendar_date_id=day.id,
+                status=AttendanceStatus.ABSENT,
+            )
+        )
+    for index, day in enumerate(days[:5]):
+        session.add(
+            AttendanceRecord(
+                enrollment_id=roster[1].id,
+                calendar_date_id=day.id,
+                status=(
+                    AttendanceStatus.ABSENT if index < 4 else AttendanceStatus.PRESENT
+                ),
+            )
+        )
+    session.flush()  # visible to this transaction only; never committed
+
+    report = attendance_risk(session, school_year.id, year, month, (section.id,))
+    flagged = {r.enrollment_id: r for r in report.flagged}
+
+    assert roster[0].id in flagged, "five consecutive absences must flag"
+    assert roster[1].id not in flagged or roster[1].id in already, (
+        "four consecutive absences must not flag"
+    )
+    assert flagged[roster[0].id].longest_run == 5
+    assert flagged[roster[0].id].days_absent == 5
+
+    # And the rate is now real, because something has been marked.
+    section_row = next(s for s in report.sections if s.section_id == section.id)
+    assert section_row.absence_rate is not None
+    assert section_row.known_days == section_row.days_present + section_row.days_absent
+
+
+def test_late_and_cutting_still_count_as_present(session, school_year):
+    """The engine's rule (§31): the learner was in school. A version that
+    treated LATE as an absence would break a run that should hold, and
+    inflate every absence rate."""
+    from app.attendance_service import class_days_in_month
+    from app.models.attendance import AttendanceRecord
+    from app.models.enums import AttendanceStatus
+    from app.models.learners import Enrollment
+
+    year, month = _month_with_class_days(session, school_year)
+    days = class_days_in_month(session, school_year.id, year, month)
+    if len(days) < 6:
+        pytest.skip("needs six class days")
+
+    section = _any_advised_section(session, school_year)
+    enrollment = (
+        session.query(Enrollment)
+        .filter_by(school_year_id=school_year.id, section_id=section.id)
+        .first()
+    )
+    if enrollment is None:
+        pytest.skip("no learners in the section")
+
+    # Absent, absent, LATE, absent, absent — five absences around a day
+    # the learner turned up late, which must break the run.
+    pattern = [
+        AttendanceStatus.ABSENT,
+        AttendanceStatus.ABSENT,
+        AttendanceStatus.LATE,
+        AttendanceStatus.ABSENT,
+        AttendanceStatus.ABSENT,
+    ]
+    for day, status in zip(days[:5], pattern):
+        session.add(
+            AttendanceRecord(
+                enrollment_id=enrollment.id, calendar_date_id=day.id, status=status
+            )
+        )
+    session.flush()
+
+    report = attendance_risk(session, school_year.id, year, month, (section.id,))
+    row = next((r for r in report.flagged if r.enrollment_id == enrollment.id), None)
+    assert row is None, "a late day must break the run, so this must not flag"
+
+    section_row = next(s for s in report.sections if s.section_id == section.id)
+    assert section_row.days_present >= 1, "LATE must count as a day present"
+
+
+def test_the_section_absence_rate_is_not_an_average_of_learner_rates():
+    """Same percentage trap as everywhere else, on a different metric."""
+    from app.analytics_service import AttendanceSectionRow
+
+    row = AttendanceSectionRow(
+        section_id=uuid.uuid4(),
+        section_name="TEST",
+        grade_level_name="Grade 11",
+        strand_id=uuid.uuid4(),
+        strand_name="STEM",
+        learners=2,
+        eligible_days=100,
+        days_present=90,
+        days_absent=10,
+        unencoded_days=0,
+        flagged=1,
+    )
+    assert row.known_days == 100
+    assert row.absence_rate == 10.0
+    assert row.encoded_rate == 100.0
 
 
 # --- Learners at risk ------------------------------------------------------

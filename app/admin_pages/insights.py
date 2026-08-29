@@ -19,6 +19,8 @@ rows — is counted in Postgres and never crosses the wire; see
 `app/analytics_service.py`.
 """
 
+import calendar as _calendar
+
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -97,6 +99,29 @@ def _offering_progress(school_year_id: str, section_ids=None, offering_ids=None)
         return analytics_service.offering_progress(
             session, school_year_id, section_ids, offering_ids
         )
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading attendance…")
+def _attendance_risk(school_year_id: str, year: int, month: int, section_ids):
+    """Cached §31 attendance warning for one month.
+
+    Keyed by the month as well as the scope, because unlike the other
+    metrics this one cannot be fetched for a whole year and sliced:
+    consecutive-run detection needs each learner's days in order, so the
+    month is part of the query rather than a filter over cached rows.
+    """
+    with get_session() as session:
+        return analytics_service.attendance_risk(
+            session, school_year_id, year, month, section_ids
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _attendance_months(school_year_id: str):
+    from app.attendance_service import months_with_class_days
+
+    with get_session() as session:
+        return months_with_class_days(session, school_year_id)
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -408,6 +433,122 @@ def _render_my_classes(rows) -> None:
         "on each class roll. A blank is not a zero — it means nobody has "
         "been graded there yet."
     )
+
+
+def _render_attendance(report) -> None:
+    """§31's five-consecutive-absence warning, for one month.
+
+    Two tables on purpose. The flagged list names people and stays short
+    because the rule flags few; the section table covers the whole roster
+    in totals, so attendance can be reported without naming everyone.
+    """
+    if not report.sections:
+        st.info("No class days in this month for the sections in view.")
+        return
+
+    flagged, sections_affected, rate = analytics_service.attendance_headline(report)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Learners flagged", f"{flagged:,}")
+    col2.metric("Sections affected", f"{sections_affected:,}")
+    col3.metric(
+        "Absence rate",
+        _fmt_percent(rate),
+        help="Absences as a share of the days anyone has marked.",
+    )
+
+    if not report.any_records:
+        st.info(
+            f"Nobody has marked attendance for this month yet, across "
+            f"{len(report.sections)} section(s) and {report.class_days} class "
+            "day(s). Until then there is nothing to warn about — an empty "
+            "sheet is not perfect attendance."
+        )
+        return
+
+    if report.flagged:
+        st.markdown(
+            f"**{flagged} learner(s) with five or more consecutive absences.**"
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Learner": row.learner_name,
+                        "Section": row.section_name,
+                        "Longest run": row.longest_run,
+                        "From": f"{row.run_started:%d %b}" if row.run_started else DASH,
+                        "To": f"{row.run_ended:%d %b}" if row.run_ended else DASH,
+                        "Absent": row.days_absent,
+                        "Present": row.days_present,
+                        "Late": row.late_count,
+                        "Not yet marked": row.unencoded_days,
+                    }
+                    for row in report.flagged
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.success("No learner has five or more consecutive absences this month.")
+
+    st.markdown("**By section**")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Section": row.section_name,
+                    "Grade": row.grade_level_name or DASH,
+                    "Learners": row.learners,
+                    "Days marked": _fmt_percent(row.encoded_rate),
+                    "Absence rate": _fmt_percent(row.absence_rate),
+                    "Absences": row.days_absent,
+                    "Flagged": row.flagged,
+                }
+                for row in report.sections
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        "A run counts school days, so a weekend does not break it but a day "
+        "the learner attended does. Late and cutting still count as present. "
+        "**Absence rate is a share of the days someone has actually marked**, "
+        "not of the whole month — read it next to Days marked, which says how "
+        "much of the month it is based on."
+    )
+
+
+def _render_attendance_section(school_year_id: str, scope_ids) -> None:
+    """Month picker plus the §31 report.
+
+    A month picker rather than the page's Term filter, because attendance
+    is reported by month everywhere else in this system — SF2 is a
+    monthly form, and `attendance_month_status` is finalized per month.
+    Making this the one place that sliced attendance by term would put a
+    number on screen that no official form could be reconciled against.
+    """
+    months = _attendance_months(school_year_id)
+    if not months:
+        st.info("This school year has no class days on the calendar yet.")
+        return
+
+    labels = {
+        (year, month): f"{_calendar.month_name[month]} {year}" for year, month in months
+    }
+    # Latest month first: the question is almost always about the month
+    # just gone, not the one the year opened with.
+    options = list(reversed(months))
+    _forget_stale("insights_month", options)
+    chosen = st.selectbox(
+        "Month",
+        options=options,
+        format_func=lambda v: labels[v],
+        key="insights_month",
+    )
+    year, month = chosen
+    _render_attendance(_attendance_risk(school_year_id, year, month, scope_ids))
 
 
 def _render_teacher_view(school_year_id: str, current_user) -> None:
@@ -765,3 +906,7 @@ def render() -> None:
     st.divider()
     st.subheader("Learners at risk")
     _render_at_risk(risk, shown_risk)
+
+    st.divider()
+    st.subheader("Attendance")
+    _render_attendance_section(str(sy_choice), scope_ids)
