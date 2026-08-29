@@ -680,11 +680,12 @@ the components' sum, or the languages are weighted twice.
 ## Analytics — Overview → Insights
 
 Added 2026-08-29. `app/analytics_service.py` (queries, no Streamlit) and
-`app/admin_pages/insights.py` (the page), covering seven metrics behind
+`app/admin_pages/insights.py` (the page), covering eight metrics behind
 one shared filter set: **grade encoding progress**, **grade
 distribution**, **subject difficulty**, **learners at risk** (per term),
-**annual standing**, **attendance risk (§31)**, and — for subject
-teachers only — **learners at risk in their own subjects**.
+**annual standing**, **attendance risk (§31)**, **award eligibility
+(§24)**, and — for subject teachers only — **learners at risk in their
+own subjects**.
 
 It sits beside the Dashboard rather than inside it. The split is by
 question: the Dashboard answers *what is outstanding right now* and is
@@ -952,13 +953,66 @@ because SF2 is monthly and `attendance_month_status` finalizes monthly.
 Slicing it by term here would put a number on screen that no official
 form could be reconciled against.
 
+**Award eligibility (§24) reads `learner_awards`, and its whole
+difficulty is the denominator** (2026-08-30). `award_eligibility()`
+counts the rows `award_service.compute_award_eligibility` already wrote;
+`award_policy_options()` feeds the page's own policy picker. Five things
+are worth knowing before changing it:
+
+- **"Not computed" is not "not eligible", and today it is everybody** —
+  all 566 annual slots and all 1,698 term ones are unjudged, because a
+  `learner_awards` row exists only after someone presses *Compute
+  eligibility for all* on the Awards page for that section. So the
+  eligible share is denominated on the learners **judged**, never on the
+  roster, and is `None` until one is. It sits next to the share of the
+  roster judged, the same pairing as attendance's `absence_rate` beside
+  `encoded_rate`, and for the same reason: "3 of 4 judged" and "3 of 40"
+  are different claims.
+- **Nothing is re-judged.** §24's rules — complete record, derogatory
+  record, minimum average, the tier ladder, the required reason — live
+  in `app/award_service.py`. A second evaluator here would eventually
+  name a learner the Awards page will not certify. Tier counts come from
+  the stored `award_name`, never re-derived from the average against
+  `tier_thresholds`.
+- **A stale award is worse than a missing one, because it looks
+  answered.** `learner_awards.computed_at` against the summary's own
+  `computed_at` catches a result judged before the average it was judged
+  on last moved. Flagged and named, never refreshed — recomputing writes,
+  and this page writes nothing. `_is_stale` normalises both sides: they
+  are written tz-aware into `TIMESTAMP WITHOUT TIME ZONE` columns, so a
+  value read from Postgres is naive while one still sitting in the
+  session from an uncommitted write is not.
+- **An override is counted on its own axis and never folded in** (§40,
+  §67), and is never stale — `compute_award_eligibility` deliberately
+  leaves those rows alone, so it is not waiting for a recompute.
+- **One policy version at a time**, chosen by a picker of the section's
+  own, like the attendance month. Academic Excellence is annual on the
+  General Average; Legacy Tiered Honors is per term on the Term Average.
+  A learner can hold both, so a combined count means nothing. A TERM
+  policy also produces one row per section **per term**, so with more
+  than one term in view every count is of learner-terms, not learners —
+  the labels say so, and the eligible list reports both numbers. Same
+  trap as learners-versus-flags on the at-risk list.
+
+`tests/test_insights_awards_render.py` is the first test here that
+renders a piece of the page through Streamlit's own runtime rather than
+testing the service under it. The award section has the most conditional
+layout on the page — a Term column only for a per-term policy, three
+warnings that each appear only when true, a headline whose labels change
+with the terms in view — and none of it can be reached without an
+account holding the right role. `AppTest` still has no browser (see
+`tests/test_add_form_reset.py`), so it proves the script runs and the
+tables are built, not what they look like.
+
 **Still open on this page:** nobody has viewed it signed-in — every
-function is verified against real and constructed data, but the layout
-itself is unseen, and the adviser and teacher paths especially so, since
-neither can be reached without an account holding that role. Neither
-annual standing nor attendance risk is in the subject teacher view:
-both describe a learner across every subject, which is not a subject
-teacher's to see, and the Attendance page does not admit them either.
+function is verified against real and constructed data, and the award
+section's layout is now driven through `AppTest`, but the page as a
+whole is unseen, and the adviser and teacher paths especially so, since
+neither can be reached without an account holding that role. Annual
+standing, attendance risk and award eligibility are all absent from the
+subject teacher view: each describes a learner across every subject,
+which is not a subject teacher's to see, and neither the Attendance nor
+the Awards page admits them either.
 
 ## Where things stand
 

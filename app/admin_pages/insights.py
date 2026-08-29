@@ -122,6 +122,34 @@ def _annual_risk(school_year_id: str, section_ids):
         return analytics_service.annual_risk(session, school_year_id, section_ids)
 
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _award_policies(school_year_id: str):
+    """The award policies effective for the year.
+
+    No scope in the key, and deliberately so: a policy is school-wide
+    configuration rather than learner data, and every viewer who reaches
+    this page picks from the same list. What they see *through* it is
+    scoped by `_award_eligibility` below.
+    """
+    with get_session() as session:
+        return analytics_service.award_policy_options(session, school_year_id)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading award eligibility…")
+def _award_eligibility(school_year_id: str, award_policy_version_id: str, section_ids):
+    """Cached §24 eligibility for one policy version.
+
+    Holds learner names, so `section_ids` is in the key and not merely in
+    the query — the same rule as `_at_risk`. The policy version is in the
+    key too, because two policies are two different questions and one
+    must never be served the other's answer.
+    """
+    with get_session() as session:
+        return analytics_service.award_eligibility(
+            session, school_year_id, award_policy_version_id, section_ids
+        )
+
+
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Reading attendance…")
 def _attendance_risk(school_year_id: str, year: int, month: int, section_ids):
     """Cached §31 attendance warning for one month.
@@ -891,6 +919,224 @@ def _render_difficulty(stats, rows) -> None:
     )
 
 
+def _render_awards(report, rows, eligible) -> None:
+    """What the stored award rows say, for one policy version.
+
+    **Reads `learner_awards`; never re-judges anybody.** §24's rules live
+    in `app/award_service.py`, and a second evaluator here would sooner
+    or later put a name on this page that the Awards page will not
+    certify.
+
+    The headline is deliberately three numbers rather than one. "12
+    eligible" alone is unreadable: out of twelve judged it is remarkable,
+    out of four hundred it is a school with a problem, and out of nobody
+    judged at all it is not a fact yet.
+
+    **A term-scoped policy is judged once per term**, so with more than
+    one term in view every count here is a count of learner-terms, not of
+    learners — a learner With Honors all year is three of them. The
+    labels say so rather than letting "1,698" read as a roster of 566,
+    and the eligible list reports both numbers. Same trap, and the same
+    fix, as the learners-versus-flags pair on the at-risk list.
+    """
+    if not rows:
+        st.info("No sections in view for this policy.")
+        return
+
+    # One term in view collapses the distinction, and so does an annual
+    # policy, so the wording is chosen from what is actually on screen
+    # rather than from the policy's scope alone.
+    terms_in_view = len({row.term_id for row in rows})
+    by_term = report.policy.per_term and terms_in_view > 1
+    unit = "learner-term" if by_term else "learner"
+
+    learners, computed, eligible_count, share = analytics_service.award_headline(rows)
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "Eligible",
+        f"{eligible_count:,}",
+        help=(
+            f"Award results, across {terms_in_view} terms — a learner eligible "
+            "in more than one term is counted once per term."
+            if by_term
+            else None
+        ),
+    )
+    col2.metric(
+        "Of those judged",
+        _fmt_percent(share),
+        help=f"{eligible_count:,} of the {computed:,} judged so far",
+    )
+    col3.metric(
+        "Judged" if by_term else "Roster judged",
+        _fmt_percent(100.0 * computed / learners if learners else None),
+        help=f"{computed:,} of {learners:,} {unit}s",
+    )
+
+    if not computed:
+        st.info(
+            f"Eligibility has not been computed for any of these {learners:,} "
+            f"{unit}s yet. Nobody is ineligible — nobody has been judged. It "
+            "is run per section, from the **Compute eligibility for all** "
+            "button on the Awards page."
+        )
+        return
+
+    tiers = analytics_service.award_tiers(eligible)
+    if tiers and (len(tiers) > 1 or report.policy.tiered):
+        st.dataframe(
+            pd.DataFrame(
+                [{"Award": name, "Learners": count} for name, count in tiers]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    if eligible:
+        distinct = len({row.enrollment_id for row in eligible})
+        st.markdown(
+            f"**{distinct} eligible learner(s)**"
+            if distinct == len(eligible)
+            else f"**{distinct} eligible learner(s), {len(eligible)} award(s)**"
+        )
+        if distinct != len(eligible):
+            st.caption(
+                "A learner who qualifies in more than one term counts once as "
+                "a learner and once per term as an award."
+            )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Learner": row.learner_name,
+                        "Grade": row.grade_level_name or DASH,
+                        "Section": row.section_name,
+                        **({"Term": row.term_name or DASH} if report.policy.per_term else {}),
+                        "Award": row.award_name,
+                        report.policy.average_label: _fmt_grade(row.average),
+                        "Source": "Override" if row.is_override else "Policy",
+                        "Up to date": "Recompute" if row.stale else "Yes",
+                    }
+                    for row in eligible
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.info(
+            f"Nobody among the {computed:,} learners judged so far meets this "
+            "policy."
+        )
+
+    st.markdown("**By section**")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Section": row.section_name,
+                    "Grade": row.grade_level_name or DASH,
+                    **({"Term": row.term_name or DASH} if report.policy.per_term else {}),
+                    "Learners": row.learners,
+                    "Judged": row.computed,
+                    "Not yet judged": row.not_computed,
+                    "Eligible": row.eligible,
+                    "Not eligible": row.not_eligible,
+                    "Overridden": row.overridden,
+                    "Needs recompute": row.stale,
+                }
+                for row in rows
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+
+    # Three things worth saying out loud, each only when it is true.
+    stale = sum(row.stale for row in rows)
+    if stale:
+        st.warning(
+            f"{stale} of these results were computed before the "
+            f"{report.policy.average_label.lower()} they were judged on last "
+            "changed, so they describe a grade set that has moved since. "
+            "Recompute them on the Awards page — nothing on this page writes."
+        )
+    overridden = sum(row.overridden for row in rows)
+    if overridden:
+        st.caption(
+            f"{overridden} of these results were set by hand rather than by the "
+            "policy. They are counted separately above and are never "
+            "recomputed; each one carries an audited reason on the Awards page."
+        )
+    if report.policy.requires_complete_record:
+        incomplete = sum(row.incomplete_records for row in rows)
+        if incomplete:
+            st.caption(
+                f"This policy requires a complete record, and {incomplete} of "
+                "these learners do not have one yet — some subject still has no "
+                "grade. That is context, not a verdict — every learner who is "
+                "not eligible has their own recorded reason, and it is on the "
+                "Awards page."
+            )
+    st.caption(
+        "Read from the eligibility already computed on the Awards page, never "
+        "re-judged here — so this agrees with the certificates. A learner who "
+        "has not been judged is not counted as ineligible."
+    )
+
+
+def _render_awards_section(school_year_id: str, scope_ids, term_choice, visible_ids, section_choice) -> None:
+    """Policy picker plus the §24 eligibility report.
+
+    A picker of its own, like the attendance month, because the policy
+    version is this metric's primary dimension rather than one of the
+    page's filters. Academic Excellence and the tiered Honors are judged
+    on different averages over different periods; adding their eligible
+    counts together would produce a number that describes nothing, and a
+    learner can hold one of each.
+    """
+    options = _award_policies(school_year_id)
+    if not options:
+        st.info(
+            "No award policy is effective for this school year yet. One is set "
+            "up on the Award Policy page."
+        )
+        return
+
+    ids = [o.version_id for o in options]
+    label_by_id = {o.version_id: o.label for o in options}
+    _forget_stale("insights_award_policy", ids)
+    chosen = st.selectbox(
+        "Award policy",
+        options=ids,
+        format_func=lambda v: label_by_id[v],
+        key="insights_award_policy",
+    )
+    report = _award_eligibility(school_year_id, str(chosen), scope_ids)
+    if report is None:
+        st.info("That award policy no longer exists — pick another.")
+        return
+
+    st.caption(
+        f"Judged on the **{report.policy.average_label}**"
+        + (", once per term." if report.policy.per_term else ", once for the year.")
+    )
+
+    # The page's Term filter applies only to a per-term policy. An annual
+    # award has no term dimension at all, so narrowing it by term would
+    # silently empty the table rather than narrow it.
+    rows = [r for r in report.sections if r.section_id in visible_ids]
+    eligible = [r for r in report.eligible if r.section_id in visible_ids]
+    if section_choice != ALL:
+        rows = [r for r in rows if r.section_id == section_choice]
+        eligible = [r for r in eligible if r.section_id == section_choice]
+    if report.policy.per_term and term_choice != ALL:
+        rows = [r for r in rows if r.term_id == term_choice]
+        eligible = [r for r in eligible if r.term_id == term_choice]
+
+    _render_awards(report, rows, eligible)
+
+
 def render() -> None:
     current_user = require_role(
         "SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER", "SUBJECT_TEACHER"
@@ -1078,6 +1324,12 @@ def render() -> None:
     st.divider()
     st.subheader("Annual standing")
     _render_annual(_annual_risk(str(sy_choice), scope_ids))
+
+    st.divider()
+    st.subheader("Award eligibility")
+    _render_awards_section(
+        str(sy_choice), scope_ids, term_choice, visible_ids, section_choice
+    )
 
     st.divider()
     st.subheader("Attendance")

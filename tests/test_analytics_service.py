@@ -19,7 +19,10 @@ import pytest
 
 from app import analytics_service
 from app.analytics_service import (
+    ACTIVE_ENROLLMENT_STATUSES,
     AtRiskRow,
+    AwardLearnerRow,
+    AwardSectionRow,
     EncodingRow,
     SubjectGradeRow,
     advised_section_ids,
@@ -28,6 +31,10 @@ from app.analytics_service import (
     attendance_headline,
     attendance_risk,
     at_risk_learners,
+    award_eligibility,
+    award_headline,
+    award_policy_options,
+    award_tiers,
     distribution,
     encoding_progress,
     grade_bands,
@@ -1485,3 +1492,457 @@ def test_an_unencoded_year_reports_no_grades_rather_than_zeroes(session, school_
         pytest.skip("this school year has encoded grades")
     assert stats.rows == ()
     assert [count for _band, count in distribution(stats.rows, stats.bands)] == [0] * 5
+
+
+# --- Award eligibility (§24) -----------------------------------------------
+#
+# The one thing these guard above all others: **a learner nobody has
+# judged is not an ineligible learner**. `learner_awards` rows exist only
+# after someone presses "Compute eligibility for all" on the Awards page,
+# so the denominator that matters is the learners judged, not the roster.
+# Counting the other way reports a school with no honours when the truth
+# is that nobody has run the check — and it looks entirely plausible.
+
+
+def _award_option(session, school_year, per_term: bool):
+    options = award_policy_options(session, school_year.id)
+    if not options:
+        pytest.skip("no award policy effective for this school year")
+    match = next((o for o in options if o.per_term == per_term), None)
+    if match is None:
+        pytest.skip(f"no {'TERM' if per_term else 'ANNUAL'}-scoped award policy")
+    return match
+
+
+def _award_row(**overrides):
+    """An AwardSectionRow with only the counts that matter set."""
+    fields = dict(
+        section_id=uuid.uuid4(),
+        section_name="TEST",
+        grade_level_id=uuid.uuid4(),
+        grade_level_name="Grade 11",
+        strand_id=uuid.uuid4(),
+        strand_name="STEM",
+        term_id=None,
+        term_name="",
+        term_number=0,
+        learners=40,
+        computed=0,
+        eligible=0,
+        not_eligible=0,
+        overridden=0,
+        stale=0,
+        incomplete_records=0,
+    )
+    fields.update(overrides)
+    return AwardSectionRow(**fields)
+
+
+def _award_learner(**overrides):
+    fields = dict(
+        enrollment_id=uuid.uuid4(),
+        learner_name="DELA CRUZ, Juan",
+        section_id=uuid.uuid4(),
+        section_name="TEST",
+        grade_level_name="Grade 11",
+        term_id=None,
+        term_name="",
+        award_name="With Honors",
+        average=91.0,
+        is_override=False,
+        stale=False,
+    )
+    fields.update(overrides)
+    return AwardLearnerRow(**fields)
+
+
+# --- The arithmetic, as pure functions --------------------------------------
+
+
+def test_the_eligible_share_is_of_those_judged_not_of_the_roster():
+    row = _award_row(learners=40, computed=4, eligible=3, not_eligible=1)
+    assert row.eligible_rate == 75.0, "3 of the 4 judged, not 3 of 40"
+    assert row.computed_rate == 10.0
+    assert row.not_computed == 36
+
+
+def test_an_unjudged_section_has_no_eligible_share_rather_than_zero():
+    """Rule 2 wearing another hat: nobody judged is not nobody eligible.
+    0.0 would also sort a section nobody has run above one where the
+    check ran and found nothing."""
+    row = _award_row(learners=40, computed=0)
+    assert row.eligible_rate is None
+    assert row.computed_rate == 0.0, "the roster share is genuinely zero"
+
+
+def test_a_section_with_nobody_on_the_roll_has_no_percentage_either():
+    assert _award_row(learners=0).computed_rate is None
+
+
+def test_the_headline_recomputes_the_share_from_the_totals():
+    """Never the mean of the section shares — a 5-learner section and a
+    45-learner one do not weigh the same. Same mistake as SF2 and SF4."""
+    rows = [
+        _award_row(learners=5, computed=5, eligible=5),      # 100%
+        _award_row(learners=45, computed=45, eligible=5),    # ~11%
+    ]
+    learners, computed, eligible, share = award_headline(rows)
+    assert (learners, computed, eligible) == (50, 50, 10)
+    assert share == pytest.approx(20.0)
+    assert share != pytest.approx((100.0 + 100.0 * 5 / 45) / 2)
+
+
+def test_the_headline_share_is_none_while_nothing_has_been_judged():
+    _learners, computed, eligible, share = award_headline(
+        [_award_row(learners=40, computed=0)]
+    )
+    assert (computed, eligible) == (0, 0)
+    assert share is None
+
+
+def test_tiers_are_counted_by_the_name_the_award_was_given():
+    """Read off `award_name` as stored, never re-derived from the average
+    against `tier_thresholds` — the ladder was applied once, at compute
+    time, against the version in force then."""
+    rows = [
+        _award_learner(award_name="With Honors", average=91.0),
+        _award_learner(award_name="With Honors", average=92.0),
+        _award_learner(award_name="With High Honors", average=96.0),
+    ]
+    assert award_tiers(rows) == [("With Honors", 2), ("With High Honors", 1)]
+
+
+def test_tiers_are_recomputed_from_the_rows_in_view():
+    assert award_tiers([]) == []
+
+
+# --- Against the live database ---------------------------------------------
+
+
+def test_an_unknown_policy_version_is_none_not_an_empty_report(session, school_year):
+    """A missing question, not an answer of zero — an empty report would
+    render as "nobody is eligible"."""
+    assert award_eligibility(session, school_year.id, uuid.uuid4()) is None
+
+
+def test_award_eligibility_respects_the_scope(session, school_year):
+    option = _award_option(session, school_year, per_term=False)
+
+    empty = award_eligibility(session, school_year.id, option.version_id, ())
+    assert empty is not None
+    assert empty.sections == ()
+    assert empty.eligible == ()
+
+    section = _any_advised_section(session, school_year)
+    ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    scoped = award_eligibility(session, school_year.id, option.version_id, ids)
+    assert {r.section_id for r in scoped.sections} <= set(ids)
+    assert {r.section_id for r in scoped.eligible} <= set(ids)
+
+    everything = award_eligibility(session, school_year.id, option.version_id, None)
+    assert len(everything.sections) > len(scoped.sections), "scoping narrowed nothing"
+
+
+def test_a_roster_nobody_has_judged_reports_no_share(session, school_year):
+    """The state the whole school is in today, and the one most likely to
+    be reported wrongly."""
+    option = _award_option(session, school_year, per_term=False)
+    report = award_eligibility(session, school_year.id, option.version_id)
+    if not report.sections or report.any_computed:
+        pytest.skip("some eligibility has been computed")
+    for row in report.sections:
+        assert row.computed == 0
+        assert row.eligible_rate is None, "unjudged must not read as 0% eligible"
+        assert row.not_computed == row.learners
+
+
+def test_an_annual_policy_has_one_row_per_section_and_no_term(
+    session, school_year
+):
+    option = _award_option(session, school_year, per_term=False)
+    report = award_eligibility(session, school_year.id, option.version_id)
+    if not report.sections:
+        pytest.skip("no sections")
+    keys = [(r.section_id, r.term_id) for r in report.sections]
+    assert len(keys) == len(set(keys)), "a section appears twice"
+    assert all(r.term_id is None for r in report.sections)
+
+
+def test_a_term_policy_has_a_row_per_section_and_term(session, school_year):
+    from app.models.organization import Term
+
+    option = _award_option(session, school_year, per_term=True)
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).count()
+    if not terms:
+        pytest.skip("no terms")
+    report = award_eligibility(session, school_year.id, option.version_id)
+    if not report.sections:
+        pytest.skip("no sections")
+    per_section: dict = {}
+    for row in report.sections:
+        per_section.setdefault(row.section_id, set()).add(row.term_id)
+    assert all(len(v) == terms for v in per_section.values())
+    assert all(r.term_id is not None for r in report.sections)
+
+
+def test_the_award_cost_is_flat(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    option = _award_option(session, school_year, per_term=False)
+    award_eligibility(session, school_year.id, option.version_id)  # warm
+    with QueryCounter() as counter:
+        award_eligibility(session, school_year.id, option.version_id)
+    assert counter.count <= 12, f"{counter.count} queries for award eligibility"
+
+
+def _three_unjudged_enrollments(session, school_year, section, version_id):
+    """Three learners in `section` with no annual summary and no award row
+    for this policy — so the writes below are the only ones in play."""
+    from app.models.awards import LearnerAward
+    from app.models.grades import AnnualGradeSummary
+    from app.models.learners import Enrollment
+
+    roster = (
+        session.query(Enrollment)
+        .filter_by(school_year_id=school_year.id, section_id=section.id)
+        .filter(Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES))
+        .limit(8)
+        .all()
+    )
+    ids = [e.id for e in roster]
+    if not ids:
+        pytest.skip("no learners in this section")
+    taken = {
+        row[0]
+        for row in session.query(AnnualGradeSummary.enrollment_id)
+        .filter(AnnualGradeSummary.enrollment_id.in_(ids))
+        .all()
+    } | {
+        row[0]
+        for row in session.query(LearnerAward.enrollment_id)
+        .filter(
+            LearnerAward.enrollment_id.in_(ids),
+            LearnerAward.award_policy_version_id == version_id,
+        )
+        .all()
+    }
+    free = [e for e in roster if e.id not in taken]
+    if len(free) < 3:
+        pytest.skip("needs three learners with no summary and no award yet")
+    return free[:3]
+
+
+def test_eligible_not_eligible_and_overridden_are_counted_apart(
+    session, school_year
+):
+    """§40/§67: an override is a human decision with an audited reason.
+    Folding it into the policy's eligible count would make an
+    administrator's call indistinguishable from the engine's — the one
+    thing the audit trail exists to keep separate.
+
+    Written, flushed, asserted, rolled back. Never committed.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.awards import LearnerAward
+    from app.models.enums import AveragingMethod, AwardResult, CompletionStatus
+    from app.models.grades import AnnualGradeSummary
+
+    option = _award_option(session, school_year, per_term=False)
+    section = _any_advised_section(session, school_year)
+    roster = _three_unjudged_enrollments(
+        session, school_year, section, option.version_id
+    )
+
+    computed_at = datetime.now(timezone.utc) - timedelta(days=1)
+    cases = [
+        (Decimal("96"), AwardResult.ELIGIBLE_AWARDED, "Academic Excellence", False),
+        (Decimal("81"), AwardResult.NOT_ELIGIBLE, None, False),
+        (Decimal("74"), AwardResult.ELIGIBLE_AWARDED, "Academic Excellence", True),
+    ]
+    for enrollment, (average, result, name, override) in zip(roster, cases):
+        session.add(
+            AnnualGradeSummary(
+                enrollment_id=enrollment.id,
+                school_year_id=school_year.id,
+                general_average=average,
+                lowest_final_grade=average,
+                failed_subject_count=0,
+                completion_status=CompletionStatus.COMPLETE,
+                averaging_method=AveragingMethod.UNIT_WEIGHTED,
+                total_units=Decimal("40"),
+                computed_at=computed_at - timedelta(days=1),
+            )
+        )
+        session.add(
+            LearnerAward(
+                enrollment_id=enrollment.id,
+                school_year_id=school_year.id,
+                award_policy_version_id=option.version_id,
+                term_id=None,
+                award_result=result,
+                award_name=name,
+                reason="test",
+                is_override=override,
+                computed_at=computed_at,
+            )
+        )
+    session.flush()
+
+    report = award_eligibility(
+        session, school_year.id, option.version_id, (section.id,)
+    )
+    row = next(r for r in report.sections if r.section_id == section.id)
+    assert row.computed == 3
+    assert row.eligible == 2
+    assert row.not_eligible == 1
+    assert row.overridden == 1, "the override is counted on its own axis"
+    assert row.eligible_rate == pytest.approx(100.0 * 2 / 3)
+
+    named = {r.enrollment_id: r for r in report.eligible}
+    assert set(named) == {roster[0].id, roster[2].id}
+    assert named[roster[0].id].average == 96.0
+    assert named[roster[0].id].is_override is False
+    assert named[roster[2].id].is_override is True
+    # Highest average first — it is an honour roll.
+    assert [r.enrollment_id for r in report.eligible][0] == roster[0].id
+
+
+def test_an_award_judged_before_the_average_moved_is_flagged_stale(
+    session, school_year
+):
+    """A stale award is worse than a missing one because it looks
+    answered: the stored result describes a grade set that has since
+    changed. Flagged, never silently recomputed — this page writes
+    nothing.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.awards import LearnerAward
+    from app.models.enums import AveragingMethod, AwardResult, CompletionStatus
+    from app.models.grades import AnnualGradeSummary
+
+    option = _award_option(session, school_year, per_term=False)
+    section = _any_advised_section(session, school_year)
+    roster = _three_unjudged_enrollments(
+        session, school_year, section, option.version_id
+    )
+
+    now = datetime.now(timezone.utc)
+    # (award judged at, summary last computed at, overridden)
+    cases = [
+        (now - timedelta(hours=2), now, False),   # stale: the average moved after
+        (now, now - timedelta(hours=2), False),   # fresh: judged after the average
+        (now - timedelta(hours=2), now, True),    # overridden: never stale
+    ]
+    for enrollment, (judged, summarised, override) in zip(roster, cases):
+        session.add(
+            AnnualGradeSummary(
+                enrollment_id=enrollment.id,
+                school_year_id=school_year.id,
+                general_average=Decimal("95"),
+                lowest_final_grade=Decimal("90"),
+                failed_subject_count=0,
+                completion_status=CompletionStatus.COMPLETE,
+                averaging_method=AveragingMethod.UNIT_WEIGHTED,
+                total_units=Decimal("40"),
+                computed_at=summarised,
+            )
+        )
+        session.add(
+            LearnerAward(
+                enrollment_id=enrollment.id,
+                school_year_id=school_year.id,
+                award_policy_version_id=option.version_id,
+                term_id=None,
+                award_result=AwardResult.ELIGIBLE_AWARDED,
+                award_name="Academic Excellence",
+                reason="test",
+                is_override=override,
+                computed_at=judged,
+            )
+        )
+    session.flush()
+
+    report = award_eligibility(
+        session, school_year.id, option.version_id, (section.id,)
+    )
+    row = next(r for r in report.sections if r.section_id == section.id)
+    assert row.stale == 1, "only the one judged before its average moved"
+
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[roster[0].id].stale is True
+    assert by_enrollment[roster[1].id].stale is False
+    assert by_enrollment[roster[2].id].stale is False, (
+        "an overridden award is not waiting for a recompute"
+    )
+
+
+def test_a_term_scoped_row_is_not_counted_under_an_annual_policy(
+    session, school_year
+):
+    """`learner_awards.term_id` is what separates the two scopes. A row
+    of the wrong shape answers a different question, so it is left out
+    rather than counted into this one."""
+    from datetime import datetime, timezone
+
+    from app.models.awards import LearnerAward
+    from app.models.enums import AwardResult
+    from app.models.organization import Term
+
+    option = _award_option(session, school_year, per_term=False)
+    section = _any_advised_section(session, school_year)
+    roster = _three_unjudged_enrollments(
+        session, school_year, section, option.version_id
+    )
+    term = (
+        session.query(Term)
+        .filter_by(school_year_id=school_year.id)
+        .order_by(Term.term_number)
+        .first()
+    )
+    if term is None:
+        pytest.skip("no terms")
+
+    session.add(
+        LearnerAward(
+            enrollment_id=roster[0].id,
+            school_year_id=school_year.id,
+            award_policy_version_id=option.version_id,
+            term_id=term.id,
+            award_result=AwardResult.ELIGIBLE_AWARDED,
+            award_name="Academic Excellence",
+            reason="test",
+            computed_at=datetime.now(timezone.utc),
+        )
+    )
+    session.flush()
+
+    report = award_eligibility(
+        session, school_year.id, option.version_id, (section.id,)
+    )
+    row = next(r for r in report.sections if r.section_id == section.id)
+    assert row.computed == 0
+    assert roster[0].id not in {r.enrollment_id for r in report.eligible}
+
+
+def test_the_named_list_never_leaves_the_scope(session, school_year):
+    """This metric names people, so the scope has to hold in SQL rather
+    than in a filter afterwards — the same rule as `_at_risk`."""
+    option = _award_option(session, school_year, per_term=False)
+    section = _any_advised_section(session, school_year)
+    ids = advised_section_ids(session, school_year.id, str(section.adviser_user_id))
+    report = award_eligibility(session, school_year.id, option.version_id, ids)
+    assert {r.section_id for r in report.eligible} <= set(ids)
+
+
+def test_award_policy_options_describe_both_scopes(session, school_year):
+    options = award_policy_options(session, school_year.id)
+    if not options:
+        pytest.skip("no award policy effective for this school year")
+    for option in options:
+        assert option.label.endswith(f"(v{option.version_number})")
+        assert option.per_term == (option.scope == "TERM")
+        assert option.average_label == (
+            "Term Average" if option.per_term else "General Average"
+        )

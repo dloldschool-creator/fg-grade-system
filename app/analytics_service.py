@@ -25,7 +25,7 @@ the query count stays flat.
 
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timezone
 
 from sqlalchemy import and_, case, func, or_
 
@@ -1974,3 +1974,499 @@ def at_risk_headline(rows) -> tuple[int, int]:
     would most want to get right.
     """
     return len({row.enrollment_id for row in rows}), len(rows)
+
+
+# --------------------------------------------------------------------------
+# Award eligibility (§24)
+# --------------------------------------------------------------------------
+#
+# **Nothing here decides who wins an award.** `app/award_service.py` owns
+# §24 — the complete-record and derogatory-record requirements, the
+# minimum average, the tier ladder, and the reason string that has to
+# accompany every "not eligible". This reads the `learner_awards` rows
+# that function already wrote, and counts them. A second evaluator living
+# in an analytics page would sooner or later name a learner the Awards
+# page will not certify, which is rule 1 with a certificate attached.
+#
+# **"Not computed" is not "not eligible", and today it is almost
+# everybody.** A `learner_awards` row exists only after someone has
+# pressed *Compute eligibility for all* on the Awards page, for that
+# section, for that policy version. Counting an unjudged learner as
+# ineligible would report a school with no honours at all when the truth
+# is that nobody has run it yet — rule 2 in a different costume. So the
+# eligible share is denominated on the learners actually **computed**,
+# never on the roster, and it is `None` until at least one is. It is
+# displayed next to `computed_rate`, which says how much of the roster
+# the figure rests on: "3 eligible out of 4 judged" and "3 out of 40" are
+# very different claims. Same pairing, and the same reason, as the
+# attendance rate sitting next to `encoded_rate`.
+#
+# **A stale award is worse than a missing one, because it looks
+# answered.** `learner_awards.computed_at` records when the row was
+# evaluated; the summary it was evaluated against carries its own
+# `computed_at`. A grade encoded after the award was computed leaves a
+# stored result describing a grade set that no longer exists. Those are
+# counted and named, never quietly refreshed — recomputing would write,
+# and this page writes nothing.
+#
+# **An override is counted apart and never folded in.** §40 and §67 make
+# an override a human decision with an audited reason, and
+# `compute_award_eligibility` deliberately leaves those rows alone.
+# Adding them to the engine's eligible count would make an
+# administrator's decision indistinguishable from the policy's, which is
+# the one thing the audit trail exists to keep separate. An overridden
+# row is also never stale — it is not waiting for a recompute.
+#
+# **One policy version at a time.** Academic Excellence is annual and
+# judged on the General Average; the tiered Honors is per term and judged
+# on the Term Average. A learner can hold both, so a combined "eligible"
+# count across policies is a number that means nothing. The page picks a
+# version the way the attendance section picks a month.
+
+
+@dataclass(frozen=True)
+class AwardPolicyOption:
+    """One selectable award policy version, carrying the two things the
+    page needs to lay itself out: whether it has a term dimension, and
+    whether it is a tier ladder or a single flat award."""
+
+    version_id: uuid.UUID
+    policy_name: str
+    version_number: int
+    scope: str
+    status: str
+    tiered: bool
+    requires_complete_record: bool
+
+    @property
+    def label(self) -> str:
+        return f"{self.policy_name} (v{self.version_number})"
+
+    @property
+    def per_term(self) -> bool:
+        return self.scope == "TERM"
+
+    @property
+    def average_label(self) -> str:
+        """What the policy is judged on, named the way the report card
+        names it — a TERM policy reads the Term Average (§17), an ANNUAL
+        one the General Average (§19/§20)."""
+        return "Term Average" if self.per_term else "General Average"
+
+
+@dataclass(frozen=True)
+class AwardSectionRow:
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_id: uuid.UUID | None
+    grade_level_name: str
+    strand_id: uuid.UUID | None
+    strand_name: str
+    term_id: uuid.UUID | None
+    term_name: str
+    term_number: int
+    learners: int
+    computed: int
+    eligible: int
+    not_eligible: int
+    overridden: int
+    stale: int
+    # Records the policy's own completeness requirement would reject.
+    # Read straight off the summary's `completion_status`, never derived
+    # from grades — and it is context, not the award's reason. The reason
+    # §24 requires is per learner and lives on the Awards page.
+    incomplete_records: int
+
+    @property
+    def not_computed(self) -> int:
+        return max(self.learners - self.computed, 0)
+
+    @property
+    def computed_rate(self) -> float | None:
+        """`None`, not 0%, for a section with nobody on the roll — an
+        empty section has not been judged badly, it has nothing to
+        judge."""
+        if not self.learners:
+            return None
+        return 100.0 * self.computed / self.learners
+
+    @property
+    def eligible_rate(self) -> float | None:
+        """A share of the learners **judged**, not of the roster, and
+        `None` until somebody has been judged. See the note above this
+        dataclass — it is the number the whole metric turns on."""
+        if not self.computed:
+            return None
+        return 100.0 * self.eligible / self.computed
+
+
+@dataclass(frozen=True)
+class AwardLearnerRow:
+    """One learner the stored award row says is eligible."""
+
+    enrollment_id: uuid.UUID
+    learner_name: str
+    section_id: uuid.UUID
+    section_name: str
+    grade_level_name: str
+    term_id: uuid.UUID | None
+    term_name: str
+    award_name: str
+    average: float | None
+    is_override: bool
+    stale: bool
+
+
+@dataclass(frozen=True)
+class AwardEligibilityReport:
+    policy: AwardPolicyOption
+    sections: tuple[AwardSectionRow, ...]
+    eligible: tuple[AwardLearnerRow, ...]
+
+    @property
+    def any_computed(self) -> bool:
+        return any(s.computed for s in self.sections)
+
+
+def award_policy_options(session, school_year_id) -> tuple[AwardPolicyOption, ...]:
+    """Every award policy version effective for the year.
+
+    Two queries, and no scoping argument: a policy is school-wide
+    configuration, not learner data — an adviser choosing between
+    "Academic Excellence" and "Honors" reads the same list the registrar
+    reads. What either of them then sees *through* it is scoped by
+    `award_eligibility`.
+    """
+    from app.models.awards import AwardPolicy, AwardPolicyVersion
+
+    versions = (
+        session.query(AwardPolicyVersion)
+        .filter_by(effective_school_year_id=school_year_id)
+        .all()
+    )
+    if not versions:
+        return ()
+    policies = {
+        p.id: p
+        for p in session.query(AwardPolicy)
+        .filter(AwardPolicy.id.in_({v.award_policy_id for v in versions}))
+        .all()
+    }
+    options = [_policy_option(version, policies.get(version.award_policy_id)) for version in versions]
+    options.sort(key=lambda o: (o.policy_name, -o.version_number))
+    return tuple(options)
+
+
+def _policy_option(version, policy) -> AwardPolicyOption:
+    return AwardPolicyOption(
+        version_id=version.id,
+        policy_name=policy.name if policy else "Award",
+        version_number=version.version_number,
+        scope=version.scope.value if version.scope else "ANNUAL",
+        status=version.status.value if version.status else "",
+        tiered=bool(version.tier_thresholds),
+        requires_complete_record=bool(version.require_complete_record),
+    )
+
+
+def award_eligibility(
+    session, school_year_id, award_policy_version_id, section_ids=None
+) -> AwardEligibilityReport | None:
+    """What the stored `learner_awards` rows say, for one policy version.
+
+    Returns `None` when the version does not exist — a policy deleted
+    between the page drawing its selector and this running is a missing
+    question, not an answer of zero.
+
+    A TERM-scoped policy produces one row per section **per term**, since
+    it is judged three times a year; an ANNUAL one produces one row per
+    section with `term_id` left `None`. The page filters those rows in
+    Python, so changing term costs no round trip.
+    """
+    from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
+    from app.models.enums import AwardResult, AwardScope
+    from app.models.grades import AnnualGradeSummary
+
+    version = session.get(AwardPolicyVersion, award_policy_version_id)
+    if version is None:
+        return None
+    policy = session.get(AwardPolicy, version.award_policy_id)
+    option = _policy_option(version, policy)
+    per_term = version.scope == AwardScope.TERM
+
+    sections = _sections_in_scope(session, school_year_id, section_ids)
+    if not sections:
+        return AwardEligibilityReport(policy=option, sections=(), eligible=())
+
+    grade_levels = {g.id: g for g in session.query(GradeLevel).all()}
+    strands = {s.id: s for s in session.query(Strand).all()}
+    terms = (
+        session.query(Term)
+        .filter_by(school_year_id=school_year_id)
+        .order_by(Term.term_number)
+        .all()
+    )
+
+    enrollments = {
+        e.id: e
+        for e in session.query(Enrollment)
+        .filter(
+            Enrollment.school_year_id == school_year_id,
+            Enrollment.section_id.in_(list(sections)),
+            Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+        )
+        .all()
+    }
+    if not enrollments:
+        return AwardEligibilityReport(policy=option, sections=(), eligible=())
+
+    awards = (
+        session.query(LearnerAward)
+        .filter(
+            LearnerAward.enrollment_id.in_(list(enrollments)),
+            LearnerAward.award_policy_version_id == version.id,
+        )
+        .all()
+    )
+
+    # Keyed `(enrollment_id, term_id)` for a TERM policy and
+    # `(enrollment_id, None)` for an ANNUAL one — the same key the awards
+    # are bucketed under below, so a term-scoped award is only ever
+    # compared against its own term's summary and never against the
+    # year's. Columns, not ORM instances: a roster's worth of summaries is
+    # the one thing on this page that scales with learners.
+    if per_term:
+        summaries = {
+            (row[0], row[1]): (row[2], row[3], row[4])
+            for row in session.query(
+                TermGradeSummary.enrollment_id,
+                TermGradeSummary.term_id,
+                TermGradeSummary.term_average,
+                TermGradeSummary.computed_at,
+                TermGradeSummary.completion_status,
+            )
+            .filter(TermGradeSummary.enrollment_id.in_(list(enrollments)))
+            .all()
+        }
+    else:
+        summaries = {
+            (row[0], None): (row[1], row[2], row[3])
+            for row in session.query(
+                AnnualGradeSummary.enrollment_id,
+                AnnualGradeSummary.general_average,
+                AnnualGradeSummary.computed_at,
+                AnnualGradeSummary.completion_status,
+            )
+            .filter(AnnualGradeSummary.enrollment_id.in_(list(enrollments)))
+            .all()
+        }
+
+    buckets: dict = {}
+
+    def bucket_for(section_id, term_id):
+        return buckets.setdefault(
+            (section_id, term_id),
+            {
+                "learners": 0,
+                "computed": 0,
+                "eligible": 0,
+                "not_eligible": 0,
+                "overridden": 0,
+                "stale": 0,
+                "incomplete": 0,
+            },
+        )
+
+    # The denominator first, so a section nobody has run the check on
+    # still appears with its roster rather than dropping out of the table
+    # — which is the state this metric mostly has to report.
+    slots = [t.id for t in terms] if per_term else [None]
+    for enrollment in enrollments.values():
+        for term_id in slots:
+            entry = bucket_for(enrollment.section_id, term_id)
+            entry["learners"] += 1
+            summary = summaries.get((enrollment.id, term_id))
+            if summary is not None and summary[2] != CompletionStatus.COMPLETE:
+                entry["incomplete"] += 1
+
+    wanted_learner_ids = set()
+    eligible_rows = []
+    for award in awards:
+        enrollment = enrollments.get(award.enrollment_id)
+        if enrollment is None:
+            continue
+        # A TERM policy's rows carry a term; an ANNUAL policy's do not. A
+        # row of the wrong shape answers a different question and is left
+        # out rather than counted into this one.
+        if per_term and award.term_id is None:
+            continue
+        if not per_term and award.term_id is not None:
+            continue
+        term_id = award.term_id if per_term else None
+        if (enrollment.section_id, term_id) not in buckets:
+            continue
+        entry = buckets[(enrollment.section_id, term_id)]
+        entry["computed"] += 1
+
+        eligible = award.award_result == AwardResult.ELIGIBLE_AWARDED
+        if eligible:
+            entry["eligible"] += 1
+        else:
+            entry["not_eligible"] += 1
+        if award.is_override:
+            entry["overridden"] += 1
+
+        summary = summaries.get((enrollment.id, term_id))
+        stale = (
+            False
+            if award.is_override
+            else _is_stale(award.computed_at, summary[1] if summary else None)
+        )
+        if stale:
+            entry["stale"] += 1
+
+        if eligible:
+            wanted_learner_ids.add(enrollment.learner_id)
+            eligible_rows.append((enrollment, award, term_id, summary, stale))
+
+    learners = (
+        {
+            learner.id: learner
+            for learner in session.query(Learner)
+            .filter(Learner.id.in_(wanted_learner_ids))
+            .all()
+        }
+        if wanted_learner_ids
+        else {}
+    )
+    term_names = {t.id: (t.name, t.term_number) for t in terms}
+
+    named = []
+    for enrollment, award, term_id, summary, stale in eligible_rows:
+        learner = learners.get(enrollment.learner_id)
+        section = sections.get(enrollment.section_id)
+        if learner is None or section is None:
+            continue
+        grade_level = grade_levels.get(section.grade_level_id)
+        named.append(
+            AwardLearnerRow(
+                enrollment_id=enrollment.id,
+                learner_name=f"{learner.last_name}, {learner.first_name}",
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_name=grade_level.name if grade_level else "",
+                term_id=term_id,
+                term_name=term_names.get(term_id, ("", 0))[0] if term_id else "",
+                # The tier as it was awarded, read from the row — never
+                # re-derived from the average against `tier_thresholds`.
+                # The ladder was applied once, at compute time, against
+                # the version in force then.
+                award_name=award.award_name or option.policy_name,
+                average=(
+                    float(summary[0]) if summary and summary[0] is not None else None
+                ),
+                is_override=bool(award.is_override),
+                stale=stale,
+            )
+        )
+
+    section_rows = []
+    for (section_id, term_id), entry in buckets.items():
+        section = sections[section_id]
+        grade_level = grade_levels.get(section.grade_level_id)
+        strand = strands.get(section.strand_id)
+        name, number = term_names.get(term_id, ("", 0)) if term_id else ("", 0)
+        section_rows.append(
+            AwardSectionRow(
+                section_id=section.id,
+                section_name=section.name,
+                grade_level_id=section.grade_level_id,
+                grade_level_name=grade_level.name if grade_level else "",
+                strand_id=section.strand_id,
+                strand_name=strand.name if strand else "",
+                term_id=term_id,
+                term_name=name,
+                term_number=number,
+                learners=entry["learners"],
+                computed=entry["computed"],
+                eligible=entry["eligible"],
+                not_eligible=entry["not_eligible"],
+                overridden=entry["overridden"],
+                stale=entry["stale"],
+                incomplete_records=entry["incomplete"],
+            )
+        )
+
+    # Highest first — it is an honour roll, and the learner at the top is
+    # what it is for. A missing average sorts last rather than as a zero
+    # (rule 2), which would otherwise park an eligible learner whose
+    # average has not been stored at the bottom, reading as the weakest.
+    named.sort(
+        key=lambda r: (
+            r.average is None,
+            -(r.average or 0.0),
+            r.term_name,
+            r.learner_name,
+        )
+    )
+    section_rows.sort(key=lambda s: (s.term_number, -s.eligible, s.section_name))
+    return AwardEligibilityReport(
+        policy=option, sections=tuple(section_rows), eligible=tuple(named)
+    )
+
+
+def _is_stale(award_computed_at, summary_computed_at) -> bool:
+    """Was the award judged before the average it was judged on last
+    moved?
+
+    Both timestamps are written tz-aware into `TIMESTAMP WITHOUT TIME
+    ZONE` columns, so a value read back from Postgres is naive while one
+    still sitting in the session from an uncommitted write is not.
+    Comparing the two raises rather than answering wrongly, which is the
+    right failure — but only if it never reaches a user, so both sides
+    are normalised here.
+    """
+    if award_computed_at is None or summary_computed_at is None:
+        return False
+    return _naive_utc(summary_computed_at) > _naive_utc(award_computed_at)
+
+
+def _naive_utc(value):
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def award_headline(rows) -> tuple[int, int, int, float | None]:
+    """`(learners, computed, eligible, eligible share of computed)`.
+
+    Four numbers because three of them are needed to read the fourth
+    honestly. The share is recomputed from the totals — never averaged
+    across sections, which would let a five-learner section weigh as much
+    as a forty-five-learner one — and it is `None` while nothing has been
+    computed, because a school that has not run the eligibility check has
+    not produced zero award winners.
+    """
+    learners = sum(row.learners for row in rows)
+    computed = sum(row.computed for row in rows)
+    eligible = sum(row.eligible for row in rows)
+    return (
+        learners,
+        computed,
+        eligible,
+        100.0 * eligible / computed if computed else None,
+    )
+
+
+def award_tiers(rows) -> list[tuple[str, int]]:
+    """`[(award name, learners), ...]`, commonest first.
+
+    Recomputed from whatever rows are in view rather than stored, for the
+    same reason `roll_up` recomputes a percentage: the page filters in
+    Python, and a count carried through a filter is a count of something
+    else.
+    """
+    counts: dict = {}
+    for row in rows:
+        counts[row.award_name] = counts.get(row.award_name, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
