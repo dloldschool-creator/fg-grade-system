@@ -1151,6 +1151,19 @@ trust this over the paragraph above:
       record — `app/excel_template.py` already carries the five
       openpyxl/Excel traps SF2 and SF9 hit. Label the output
       **TEMPORARY THREE-TERM SF10 – FOR SCHOOL USE ONLY** (§36.3).
+      **Known ahead of the file itself** (2026-09-02, from the user, not
+      yet verified against the actual template): **Folio (8.5 × 13in),
+      portrait** — unlike SF2/SF9, which are both landscape. And the
+      form is **two pages, one grade level per side**: Grade 11 on the
+      front, Grade 12 on the back. That second part means the single-
+      worksheet-per-form shape SF2/SF9 use won't carry over as-is —
+      `app/excel_template.py`'s renderer reads geometry off whatever
+      worksheet it's given, so two worksheets (or two print areas) is
+      no new layout code, but `sf9_report.load_sf9_context()`'s
+      per-grade-level query shape is the closer model than SF9's own
+      single-grade-level sheet. Confirm both details against the file
+      once it arrives — this is the user's recollection, not something
+      read off a template.
 - [ ] Also still open: §37's Grade 11 prior-entry/eligibility fields
       (PEPT, ALS A&E, CLC, previous school) already exist in
       `learner_admission_records` and are deliberately NOT snapshotted —
