@@ -1147,6 +1147,44 @@ def test_a_failed_language_pair_is_listed_once_by_its_own_name(session, school_y
 # --- Attendance risk (§31) -------------------------------------------------
 
 
+def _enrollments_without_attendance(session, school_year, section, day_ids, limit):
+    """Up to `limit` enrollments in `section` with no `AttendanceRecord` yet
+    for any of `day_ids` — so a test writing synthetic attendance for these
+    days can't collide with what a teacher has already encoded for real.
+
+    Hit on 2026-09-02: the naive `roster[:N]` picked a learner a real
+    teacher had already marked PRESENT that day, and the INSERT raised
+    `UniqueViolation` on `uq_attendance_records_enrollment_id` — this suite
+    runs against the same database the app does (no separate test DB), so
+    once encoding starts for real, "any learner in any section" can no
+    longer be assumed unmarked. The fixture still rolls back and never
+    commits, so nothing a teacher entered was ever at risk; the fix is to
+    stop assuming the days picked are blank.
+    """
+    from app.models.attendance import AttendanceRecord
+    from app.models.learners import Enrollment
+
+    encoded = (
+        session.query(AttendanceRecord.enrollment_id)
+        .join(Enrollment, Enrollment.id == AttendanceRecord.enrollment_id)
+        .filter(
+            Enrollment.school_year_id == school_year.id,
+            Enrollment.section_id == section.id,
+            AttendanceRecord.calendar_date_id.in_(day_ids),
+        )
+    )
+    return (
+        session.query(Enrollment)
+        .filter(
+            Enrollment.school_year_id == school_year.id,
+            Enrollment.section_id == section.id,
+            Enrollment.id.notin_(encoded),
+        )
+        .limit(limit)
+        .all()
+    )
+
+
 def _month_with_class_days(session, school_year):
     from app.attendance_service import months_with_class_days
 
@@ -1216,7 +1254,6 @@ def test_five_consecutive_absences_flag_and_four_do_not(session, school_year):
     from app.attendance_service import class_days_in_month
     from app.models.attendance import AttendanceRecord
     from app.models.enums import AttendanceStatus
-    from app.models.learners import Enrollment
 
     year, month = _month_with_class_days(session, school_year)
     days = class_days_in_month(session, school_year.id, year, month)
@@ -1224,14 +1261,11 @@ def test_five_consecutive_absences_flag_and_four_do_not(session, school_year):
         pytest.skip("needs at least eight class days in the month")
 
     section = _any_advised_section(session, school_year)
-    roster = (
-        session.query(Enrollment)
-        .filter_by(school_year_id=school_year.id, section_id=section.id)
-        .limit(2)
-        .all()
+    roster = _enrollments_without_attendance(
+        session, school_year, section, [d.id for d in days[:5]], 2
     )
     if len(roster) < 2:
-        pytest.skip("needs two learners in the section")
+        pytest.skip("needs two learners with none of these days already encoded")
 
     before = attendance_risk(session, school_year.id, year, month, (section.id,))
     already = {r.enrollment_id for r in before.flagged}
@@ -1280,7 +1314,6 @@ def test_late_and_cutting_still_count_as_present(session, school_year):
     from app.attendance_service import class_days_in_month
     from app.models.attendance import AttendanceRecord
     from app.models.enums import AttendanceStatus
-    from app.models.learners import Enrollment
 
     year, month = _month_with_class_days(session, school_year)
     days = class_days_in_month(session, school_year.id, year, month)
@@ -1288,13 +1321,12 @@ def test_late_and_cutting_still_count_as_present(session, school_year):
         pytest.skip("needs six class days")
 
     section = _any_advised_section(session, school_year)
-    enrollment = (
-        session.query(Enrollment)
-        .filter_by(school_year_id=school_year.id, section_id=section.id)
-        .first()
+    candidates = _enrollments_without_attendance(
+        session, school_year, section, [d.id for d in days[:5]], 1
     )
-    if enrollment is None:
-        pytest.skip("no learners in the section")
+    if not candidates:
+        pytest.skip("no learner with none of these days already encoded")
+    enrollment = candidates[0]
 
     # Absent, absent, LATE, absent, absent — five absences around a day
     # the learner turned up late, which must break the run.
