@@ -151,8 +151,10 @@ def render() -> None:
             )
         st.table(preview_rows)
         st.caption(
-            "The Grade 11 language pair is listed as two separate subjects, so the "
-            "card's list adds up to the Term Average printed beneath it."
+            "The Grade 11 language pair is printed as one combined learning area "
+            "(a parent row plus its two indented components), so \"Active subjects\" "
+            "counts one row more than the section's real subject count — the card's "
+            "list still adds up to the Term Average printed beneath it."
         )
 
         st.divider()
