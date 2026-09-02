@@ -20,9 +20,9 @@ from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceMonthStatus
-from app.models.enums import CompletionStatus, FinalizationState
+from app.models.enums import CompletionStatus, FinalizationState, Sex
 from app.models.grades import AnnualGradeSummary, TermGrade
-from app.models.learners import Enrollment
+from app.models.learners import Enrollment, Learner
 from app.models.organization import SchoolYear, Term
 
 # The statuses that mean a learner is still on the roll — same set the
@@ -88,6 +88,76 @@ def _enrollment_overview(session, sy_id) -> list[dict]:
 
     rows.sort(key=lambda r: (r["_grade_order"], r["Track"], r["Strand"], r["Section"]))
     return rows
+
+
+def _gender_breakdown(session, sy_id) -> list[dict]:
+    """Male / Female / Total per grade level and strand, for active
+    enrollees only — one join query, aggregated in Python since the
+    roster is a few hundred rows at most.
+    """
+    rows = (
+        session.query(GradeLevel.name, GradeLevel.display_order, Strand.name, Learner.sex)
+        .select_from(Enrollment)
+        .join(Section, Section.id == Enrollment.section_id)
+        .join(GradeLevel, GradeLevel.id == Section.grade_level_id)
+        .outerjoin(Strand, Strand.id == Section.strand_id)
+        .join(Learner, Learner.id == Enrollment.learner_id)
+        .filter(
+            Enrollment.school_year_id == sy_id,
+            Enrollment.enrollment_status.in_(ACTIVE_STATUSES),
+        )
+        .all()
+    )
+
+    grade_order: dict[str, int] = {}
+    buckets: dict[tuple[str, str], dict[str, int]] = {}
+    for grade_name, order, strand_name, sex in rows:
+        grade_order[grade_name] = order
+        key = (grade_name, strand_name or DASH)
+        bucket = buckets.setdefault(key, {"Male": 0, "Female": 0})
+        if sex == Sex.MALE:
+            bucket["Male"] += 1
+        elif sex == Sex.FEMALE:
+            bucket["Female"] += 1
+
+    result = [
+        {
+            "_grade_order": grade_order[grade_name],
+            "Grade": grade_name,
+            "Strand": strand_name,
+            "Male": bucket["Male"],
+            "Female": bucket["Female"],
+            "Total": bucket["Male"] + bucket["Female"],
+        }
+        for (grade_name, strand_name), bucket in buckets.items()
+    ]
+    result.sort(key=lambda r: (r["_grade_order"], r["Strand"]))
+    return result
+
+
+def _render_gender_breakdown(rows: list[dict]) -> None:
+    """A Strand / Male / Female / Total table per grade level."""
+    for grade in dict.fromkeys(row["Grade"] for row in rows):
+        block = [row for row in rows if row["Grade"] == grade]
+        st.markdown(f"**{grade}**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {k: row[k] for k in ("Strand", "Male", "Female", "Total")}
+                    for row in block
+                ]
+                + [
+                    {
+                        "Strand": "Total",
+                        "Male": sum(r["Male"] for r in block),
+                        "Female": sum(r["Female"] for r in block),
+                        "Total": sum(r["Total"] for r in block),
+                    }
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
 
 
 DISPLAY_COLUMNS = ["Track", "Strand", "Section", "Active", "On roll", "Records complete"]
@@ -217,6 +287,10 @@ def render() -> None:
                 if row["Records complete"] != DASH
             ),
         )
+
+        gender_rows = _gender_breakdown(session, sy_choice)
+        if gender_rows:
+            _render_gender_breakdown(gender_rows)
 
         st.divider()
         st.subheader("Sections")
