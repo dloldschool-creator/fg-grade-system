@@ -43,12 +43,17 @@ CARDS_PER_PAGE = CARDS_ACROSS * CARDS_DOWN
 
 # How many subject lines fit before the card has to elide.
 #
-# The geometry allows about 14.9 lines at 7.6pt between the first subject
-# line and the rule above TERM AVERAGE, so 12 leaves room for the "+N more"
-# line and a margin of error. It was 8 while the Grade 11 language pair
-# printed as two flat rows; under DO 017 the pair prints as a parent plus
-# two indented components, which is three lines, and a Grade 11 term with
-# three electives would have elided real subjects at the old cap.
+# At the card's font sizes (8.3pt row pitch) the geometry allows about 13
+# lines between the first subject line and the rule above TERM AVERAGE, so
+# 12 leaves one line of margin for the "+N more" line — tighter than before
+# the fonts were enlarged for readability (was ~4 lines of margin at 7.6pt),
+# but still well clear of the realistic worst case: a full Grade 11 term
+# with the language pair (parent + two indented components) plus three
+# electives is 10 lines (see test_a_full_grade_11_term_fits_...). It was 8
+# while the pair printed as two flat rows; under DO 017 the pair prints as
+# a parent plus two indented components, which is three lines, and a Grade
+# 11 term with three electives would have elided real subjects at the old
+# cap.
 MAX_SUBJECT_LINES = 12
 
 
@@ -104,14 +109,14 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
     text_w = inner_w - seal - 5
 
     c.setFillColor(_BLUE)
-    c.setFont("Helvetica-Bold", 6.6)
-    c.drawString(text_x, cursor - 8, _fit(c, data.school_name.upper(), "Helvetica-Bold", 6.6, text_w))
+    c.setFont("Helvetica-Bold", 7.2)
+    c.drawString(text_x, cursor - 9, _fit(c, data.school_name.upper(), "Helvetica-Bold", 7.2, text_w))
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 7.6)
-    c.drawString(text_x, cursor - 17, "TEMPORARY REPORT CARD")
+    c.setFont("Helvetica-Bold", 8.4)
+    c.drawString(text_x, cursor - 19, "TEMPORARY REPORT CARD")
     c.setFillColor(_GRAY)
-    c.setFont("Helvetica", 6.8)
-    c.drawString(text_x, cursor - 25, data.term_name)
+    c.setFont("Helvetica", 7.4)
+    c.drawString(text_x, cursor - 29, data.term_name)
 
     cursor -= seal + 5
     c.setStrokeColor(_RULE)
@@ -119,58 +124,58 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
     c.line(inner_x, cursor, inner_x + inner_w, cursor)
 
     # Learner identity.
-    cursor -= 10
+    cursor -= 11
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 8.4)
-    c.drawString(inner_x, cursor, _fit(c, data.learner_name.upper(), "Helvetica-Bold", 8.4, inner_w))
-    cursor -= 8.5
+    c.setFont("Helvetica-Bold", 9.2)
+    c.drawString(inner_x, cursor, _fit(c, data.learner_name.upper(), "Helvetica-Bold", 9.2, inner_w))
+    cursor -= 9.5
     c.setFillColor(_GRAY)
-    c.setFont("Helvetica", 6.2)
+    c.setFont("Helvetica", 6.8)
     identity = f"LRN: {data.lrn or '—'}    {data.grade_level} · {data.section_name}"
-    c.drawString(inner_x, cursor, _fit(c, identity, "Helvetica", 6.2, inner_w))
+    c.drawString(inner_x, cursor, _fit(c, identity, "Helvetica", 6.8, inner_w))
 
     # Subjects. The grade column is right-aligned against the card edge.
-    cursor -= 9
+    cursor -= 10
     c.setFillColor(colors.black)
-    c.setFont("Helvetica", 6.6)
+    c.setFont("Helvetica", 7.2)
     grade_x = inner_x + inner_w
-    name_w = inner_w - 26
+    name_w = inner_w - 28
 
     shown = data.subjects[:MAX_SUBJECT_LINES]
     for name, grade in shown:
-        c.drawString(inner_x, cursor, _fit(c, name, "Helvetica", 6.6, name_w))
+        c.drawString(inner_x, cursor, _fit(c, name, "Helvetica", 7.2, name_w))
         c.drawRightString(grade_x, cursor, _grade_text(grade))
-        cursor -= 7.6
+        cursor -= 8.3
     if len(data.subjects) > MAX_SUBJECT_LINES:
         c.setFillColor(_GRAY)
         c.drawString(inner_x, cursor, f"+{len(data.subjects) - MAX_SUBJECT_LINES} more")
-        cursor -= 7.6
+        cursor -= 8.3
 
     # Term average sits just above the signature line, so it stays put
     # whatever the subject count.
     footer_y = y + pad
-    average_y = footer_y + 22
+    average_y = footer_y + 23
     c.setStrokeColor(_RULE)
     c.setLineWidth(0.5)
-    c.line(inner_x, average_y + 9, inner_x + inner_w, average_y + 9)
+    c.line(inner_x, average_y + 10, inner_x + inner_w, average_y + 10)
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 7.4)
+    c.setFont("Helvetica-Bold", 8.0)
     c.drawString(inner_x, average_y, "TERM AVERAGE")
     c.drawRightString(grade_x, average_y, _grade_text(data.term_average))
 
     if data.adviser_comment:
         c.setFillColor(_GRAY)
-        c.setFont("Helvetica-Oblique", 5.8)
+        c.setFont("Helvetica-Oblique", 6.2)
         c.drawString(
-            inner_x, average_y - 8,
-            _fit(c, data.adviser_comment, "Helvetica-Oblique", 5.8, inner_w),
+            inner_x, average_y - 9,
+            _fit(c, data.adviser_comment, "Helvetica-Oblique", 6.2, inner_w),
         )
 
     c.setFillColor(_GRAY)
-    c.setFont("Helvetica", 5.8)
+    c.setFont("Helvetica", 6.2)
     c.drawRightString(
         grade_x, footer_y,
-        _fit(c, f"{data.adviser_name.upper()} · Adviser", "Helvetica", 5.8, inner_w),
+        _fit(c, f"{data.adviser_name.upper()} · Adviser", "Helvetica", 6.2, inner_w),
     )
 
 
