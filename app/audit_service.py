@@ -87,6 +87,13 @@ TEACHER_ASSIGNED = "TEACHER_ASSIGNED"
 TEACHER_UNASSIGNED = "TEACHER_UNASSIGNED"
 DATA_IMPORTED = "DATA_IMPORTED"
 BACKUP_DOWNLOADED = "BACKUP_DOWNLOADED"
+# The one deliberate exception to "this module offers no update or delete"
+# above: app/audit_archive_service.py lets a Super Admin purge audit_logs
+# entries older than a cutoff, but only after exporting them, and only by
+# writing this entry first — timestamped now, so it is newer than the
+# cutoff and survives the delete that follows it in the same transaction.
+# It is the only surviving trace of who purged what and why.
+AUDIT_LOG_ARCHIVED = "AUDIT_LOG_ARCHIVED"
 
 # Actions §50 requires a reason for. Recording one without a reason is a
 # programming error, not a user error, so it raises rather than writing a
@@ -96,6 +103,7 @@ REASON_REQUIRED = {
     ATTENDANCE_MONTH_REOPENED,
     AWARD_OVERRIDDEN,
     CALENDAR_DAY_CHANGED,
+    AUDIT_LOG_ARCHIVED,
 }
 
 
