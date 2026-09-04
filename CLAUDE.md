@@ -694,6 +694,22 @@ the components' sum, or the languages are weighted twice.
   windows built in Python with `compute_active_window`. No signature or
   behavior change, so SF2, `export_service`, `seed_month_records` and
   `validate_month` all benefit for free.
+- **`summarize_month` was the same shape, one query per learner, called
+  in a loop from six places** (found 2026-09-04 auditing "save
+  attendance"/"finalize month" after the fix above): the Attendance
+  page's monthly summary table and its finalization panel — which runs
+  `validate_month` on **every render** once a month isn't NOT_STARTED,
+  not behind a button — `export_service.attendance_export`, SF2's
+  on-screen preview, and `sf2_report.py`'s printed form **twice**
+  (`_learner_rows`'s per-learner summary, and `_movement_counts` re-
+  querying `LearnerMovement` per learner even though `_learner_rows` two
+  lines above it had just batched the identical data for a different
+  purpose). `summarize_month_batch()` batches `records_for_month` once
+  for the whole roster; `movements_by_enrollment()` does the same for
+  `LearnerMovement`. `summarize_month` stays as the 1-enrollment wrapper.
+  Verified against a throwaway 40-learner section in the live database:
+  `validate_month` dropped from ~160 round trips to ~5 (0.53s), SF2
+  generation similarly (2.2s total).
 - **Analytics has a second cost axis: row volume.** Everything above is
   about round trips. `app/analytics_service.py` also has to not move
   ~32,000 `term_grades` into Python, so it aggregates in Postgres and

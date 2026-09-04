@@ -199,6 +199,40 @@ def test_roster_for_month_costs_a_fixed_number_of_queries(session, roster):
     )
 
 
+def test_summarize_month_batch_costs_a_fixed_number_of_queries(session, roster):
+    """`summarize_month_batch` must not scale with the roster. Six call
+    sites (the Attendance page's monthly summary and finalization report,
+    SF2's preview and the printed form, and the attendance export) used
+    to call `summarize_month` per learner — each one its own
+    `records_for_month` query — turning one page render into 2×N round
+    trips (`validate_month` also queried `LearnerMovement` per learner on
+    top of that)."""
+    from app.attendance_service import class_days_in_month, movements_by_enrollment, roster_for_month, summarize_month_batch
+    from app.models.organization import SchoolYear
+
+    section_id = roster[0].section_id
+    school_year_id = roster[0].school_year_id
+    school_year = session.get(SchoolYear, school_year_id)
+    year, month = school_year.start_date.year, school_year.start_date.month
+
+    full_roster = roster_for_month(session, section_id, school_year_id, year, month)
+    class_days = class_days_in_month(session, school_year_id, year, month)
+
+    with QueryCounter() as counter:
+        summaries = summarize_month_batch(session, full_roster, class_days)
+    assert counter.count <= 1, (
+        f"{counter.count} queries to summarize a {len(full_roster)}-learner roster; "
+        "something inside summarize_month_batch is querying per enrollment"
+    )
+    assert set(summaries) == {e.id for e, _, _ in full_roster}
+
+    with QueryCounter() as counter:
+        movements_by_enrollment(session, [e.id for e, _, _ in full_roster])
+    assert counter.count <= 1, (
+        f"{counter.count} queries for movements on a {len(full_roster)}-learner roster"
+    )
+
+
 def test_recompute_context_costs_a_fixed_number_of_queries(session, roster):
     """`_load_recompute_context` (the batch step behind
     `recompute_enrollment_grades_batch`) must not scale with how many

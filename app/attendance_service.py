@@ -305,19 +305,63 @@ def records_for_month(
     return {(row.enrollment_id, row.calendar_date_id): row for row in rows}
 
 
+def summarize_month_batch(
+    session: Session,
+    roster: list[tuple[Enrollment, Learner, ActiveWindow]],
+    class_days: list[AcademicCalendarDate],
+) -> dict:
+    """`{enrollment_id: AttendanceSummary}` for a whole roster in one
+    `records_for_month` call, instead of `summarize_month`'s one query per
+    learner. Several pages call `summarize_month` in a per-learner loop
+    right after already loading `roster` — the Attendance page's monthly
+    summary and finalization report, SF2's preview and the printed form,
+    and the attendance export — which turns one page action into 2×N
+    round trips. `roster` is the `(Enrollment, Learner, ActiveWindow)`
+    list `roster_for_month` returns."""
+    by_id = {d.id: d.calendar_date for d in class_days}
+    all_days = [d.calendar_date for d in class_days]
+    enrollment_ids = [e.id for e, _, _ in roster]
+    records = records_for_month(session, enrollment_ids, list(by_id))
+
+    statuses_by_enrollment: dict = {}
+    for (enrollment_id, calendar_date_id), record in records.items():
+        statuses_by_enrollment.setdefault(enrollment_id, {})[by_id[calendar_date_id]] = record.status
+
+    return {
+        enrollment.id: summarize_attendance(all_days, window, statuses_by_enrollment.get(enrollment.id, {}))
+        for enrollment, _learner, window in roster
+    }
+
+
 def summarize_month(
     session: Session,
     enrollment: Enrollment,
     window: ActiveWindow,
     class_days: list[AcademicCalendarDate],
 ) -> AttendanceSummary:
-    by_id = {d.id: d.calendar_date for d in class_days}
-    records = records_for_month(session, [enrollment.id], list(by_id))
-    statuses = {
-        by_id[calendar_date_id]: record.status
-        for (_, calendar_date_id), record in records.items()
-    }
-    return summarize_attendance([d.calendar_date for d in class_days], window, statuses)
+    """Single-enrollment convenience wrapper over `summarize_month_batch`
+    — prefer the batch function directly when summarizing a whole roster;
+    calling this one in a loop is the N+1 it exists to avoid."""
+    return summarize_month_batch(session, [(enrollment, None, window)], class_days)[enrollment.id]
+
+
+def movements_by_enrollment(session: Session, enrollment_ids: list) -> dict:
+    """`{enrollment_id: [LearnerMovement, ...]}` for a whole roster in one
+    query. `roster_for_month` already batches `LearnerMovement` this way
+    internally to build each learner's `ActiveWindow`, but doesn't expose
+    the raw rows — callers that need the actual movement type/date
+    (`validate_month`'s movement totals, SF2's transfer remarks) call this
+    separately rather than querying per enrollment."""
+    if not enrollment_ids:
+        return {}
+    result: dict = {}
+    for movement in (
+        session.query(LearnerMovement)
+        .filter(LearnerMovement.enrollment_id.in_(enrollment_ids))
+        .all()
+    ):
+        result.setdefault(movement.enrollment_id, []).append(movement)
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -404,10 +448,16 @@ def validate_month(
     sex_totals: dict[str, int] = {}
     movement_totals: dict[str, int] = {}
 
+    # Batched once for the whole roster instead of once per learner — this
+    # report renders on every Attendance page load (not behind a button),
+    # so a per-learner query here is paid on every rerun.
+    summaries = summarize_month_batch(session, roster, class_days)
+    movements = movements_by_enrollment(session, [e.id for e, _, _ in roster])
+
     for enrollment, learner, window in roster:
         sex_totals[learner.sex.value] = sex_totals.get(learner.sex.value, 0) + 1
 
-        summary = summarize_month(session, enrollment, window, class_days)
+        summary = summaries[enrollment.id]
         name = f"{learner.last_name}, {learner.first_name}"
         if summary.unencoded_days:
             problems.append(
@@ -419,9 +469,7 @@ def validate_month(
                 "(five or more consecutive class days)."
             )
 
-        for movement in (
-            session.query(LearnerMovement).filter_by(enrollment_id=enrollment.id).all()
-        ):
+        for movement in movements.get(enrollment.id, []):
             movement_totals[movement.movement_type.value] = (
                 movement_totals.get(movement.movement_type.value, 0) + 1
             )

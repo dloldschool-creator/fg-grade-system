@@ -40,13 +40,13 @@ from app.excel_template import (
 )
 from app.attendance_service import (
     class_days_in_month,
+    movements_by_enrollment,
     roster_for_month,
-    summarize_month,
+    summarize_month_batch,
 )
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
-from app.models.learners import LearnerMovement
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
 
@@ -229,6 +229,9 @@ def _learner_rows(session: Session, section_id, school_year_id, year: int, month
     month_start = date(year, month, 1)
     month_end = date(year, month, _calendar.monthrange(year, month)[1])
 
+    summaries = summarize_month_batch(session, roster, class_days)
+    movements = movements_by_enrollment(session, [e.id for e, _, _ in roster])
+
     males, females = [], []
     for enrollment, learner, window in roster:
         marks = []
@@ -238,14 +241,11 @@ def _learner_rows(session: Session, section_id, school_year_id, year: int, month
                 continue
             marks.append(printed_code(records.get((enrollment.id, day.id))))
 
-        summary = summarize_month(session, enrollment, window, class_days)
+        summary = summaries[enrollment.id]
 
         remarks = [
             movement_remark(m.movement_type, m.effective_date)
-            for m in session.query(LearnerMovement)
-            .filter_by(enrollment_id=enrollment.id)
-            .order_by(LearnerMovement.effective_date)
-            .all()
+            for m in sorted(movements.get(enrollment.id, []), key=lambda m: m.effective_date)
             if month_start <= m.effective_date <= month_end
         ]
 
@@ -279,11 +279,10 @@ def _movement_counts(session: Session, rows, year: int, month: int) -> dict:
     sex — the SF2 summary box's movement lines."""
     month_start = date(year, month, 1)
     month_end = date(year, month, _calendar.monthrange(year, month)[1])
+    movements = movements_by_enrollment(session, [row["enrollment"].id for row in rows])
     counts: dict = {}
     for row in rows:
-        for movement in (
-            session.query(LearnerMovement).filter_by(enrollment_id=row["enrollment"].id).all()
-        ):
+        for movement in movements.get(row["enrollment"].id, []):
             if not (month_start <= movement.effective_date <= month_end):
                 continue
             bucket = counts.setdefault(movement.movement_type, {"M": 0, "F": 0})

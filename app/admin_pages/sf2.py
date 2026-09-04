@@ -9,7 +9,7 @@ from app.attendance_service import (
     get_month_status,
     months_with_class_days,
     roster_for_month,
-    summarize_month,
+    summarize_month_batch,
 )
 from app.auth import require_role
 from app.models.attendance import AttendanceRecord
@@ -40,6 +40,7 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
         )
         records = {(r.enrollment_id, r.calendar_date_id): r.status for r in rows}
 
+    summaries = summarize_month_batch(session, roster, class_days)
     frame_rows = []
     for enrollment, learner, window in roster:
         row = {
@@ -52,7 +53,7 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
                 row[key] = "·"
             else:
                 row[key] = printed_code(records.get((enrollment.id, day.id)))
-        summary = summarize_month(session, enrollment, window, class_days)
+        summary = summaries[enrollment.id]
         row["ABS"] = summary.days_absent
         row["PRES"] = summary.days_present
         frame_rows.append(row)

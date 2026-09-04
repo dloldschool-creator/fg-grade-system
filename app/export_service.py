@@ -145,13 +145,14 @@ def final_grade_summary(session, section_id, school_year_id) -> ExportTable:
 
 def attendance_export(session, section_id, school_year_id, year: int, month: int) -> ExportTable:
     """Per-learner monthly totals, using the same engine the SF2 does."""
-    from app.attendance_service import class_days_in_month, roster_for_month, summarize_month
+    from app.attendance_service import class_days_in_month, roster_for_month, summarize_month_batch
 
     class_days = class_days_in_month(session, school_year_id, year, month)
     roster = roster_for_month(session, section_id, school_year_id, year, month)
+    summaries = summarize_month_batch(session, roster, class_days)
     rows = []
     for enrollment, learner, window in roster:
-        summary = summarize_month(session, enrollment, window, class_days)
+        summary = summaries[enrollment.id]
         rows.append(
             {
                 "LRN": learner.lrn or "",

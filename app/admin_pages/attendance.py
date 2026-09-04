@@ -22,7 +22,7 @@ from app.attendance_service import (
     reopen_month,
     roster_for_month,
     seed_month_records,
-    summarize_month,
+    summarize_month_batch,
     validate_month,
 )
 from app.auth import require_role
@@ -142,8 +142,9 @@ def _save_grid(session, roster, class_days, edited: pd.DataFrame, user_id) -> No
 
 def _summary_table(session, roster, class_days) -> None:
     rows = []
+    summaries = summarize_month_batch(session, roster, class_days)
     for enrollment, learner, window in roster:
-        summary = summarize_month(session, enrollment, window, class_days)
+        summary = summaries[enrollment.id]
         rows.append(
             {
                 "Learner": f"{learner.last_name}, {learner.first_name}",
