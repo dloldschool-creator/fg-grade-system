@@ -13,7 +13,7 @@ from app.admin_pages._helpers import (
 )
 from app.auth import require_role
 from app.display_time import format_time
-from app.grading_service import recompute_enrollment_grades
+from app.grading_service import recompute_enrollment_grades, recompute_enrollment_grades_batch
 from app.report_card import build_learning_area_rows, load_report_context
 from app.models.enums import AveragingMethod, CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
 from app.models.grades import (
@@ -383,8 +383,7 @@ def render() -> None:
 
         if not current_user.is_read_only():
             if st.button("Recompute all in this section"):
-                for enrollment in enrollments:
-                    recompute_enrollment_grades(session, enrollment.id)
+                recompute_enrollment_grades_batch(session, [e.id for e in enrollments])
                 flash("success", f"Recomputed {len(enrollments)} learner(s).")
                 st.rerun()
 

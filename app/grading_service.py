@@ -14,6 +14,7 @@ with no DO 017 policy version resolves to the pre-DO-017 rules and computes
 exactly what it always did (CLAUDE.md rule 6).
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -100,28 +101,218 @@ def _remark(final_grade, passing_grade) -> SubjectRemark:
     return SubjectRemark(determine_pass_fail(final_grade, passing_grade))
 
 
-def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
-    enrollment = session.get(Enrollment, enrollment_id)
-    if enrollment is None:
+@dataclass
+class _RecomputeContext:
+    """Everything `_recompute_one` needs, preloaded for a whole batch of
+    enrollments in a fixed number of queries — see
+    `recompute_enrollment_grades_batch`. Grouped by `(section_id,
+    school_year_id)` / `grade_level_id` rather than assumed single-valued,
+    because a batch built from an import file can in principle span more
+    than one section; every real call site today passes a single
+    section's roster, so in practice each of these dicts has one entry."""
+
+    offerings_by_section_year: dict
+    terms_by_school_year: dict
+    rules_by_school_year_grade: dict
+    units_by_offering: dict
+    combined_areas_by_grade_level: dict
+    combined_components_by_area: dict
+    versions_by_id: dict
+    active_version_by_school_year: dict
+    active_version_overall: object
+    term_grades_by_enrollment: dict
+    subject_final_grades: dict
+    combined_results: dict
+    term_summaries: dict
+    annual_summaries: dict
+
+
+def _resolve_passing_grade_ctx(context: _RecomputeContext, school_year_id, offering) -> Decimal:
+    """Same resolution as `_resolve_passing_grade`, against the batch's
+    preloaded policy versions instead of a query per call."""
+    if offering is not None and offering.grading_policy_version_id is not None:
+        version = context.versions_by_id.get(offering.grading_policy_version_id)
+        if version is not None:
+            return Decimal(version.passing_grade)
+    version = context.active_version_by_school_year.get(school_year_id) or context.active_version_overall
+    return Decimal(version.passing_grade) if version else DEFAULT_PASSING_GRADE
+
+
+def _load_recompute_context(session: Session, enrollments: list[Enrollment]) -> _RecomputeContext:
+    section_ids = {e.section_id for e in enrollments}
+    school_year_ids = {e.school_year_id for e in enrollments}
+    grade_level_ids = {e.grade_level_id for e in enrollments}
+    enrollment_ids = [e.id for e in enrollments]
+
+    # Filtered on both IN-lists at once rather than per (section, year) pair
+    # — a real batch is one section, so this stays one query; a batch
+    # spanning several sections may load a few unused combinations, which
+    # is harmless since lookups below key on the actual pair observed.
+    all_offerings = (
+        session.query(SectionSubjectOffering)
+        .filter(
+            SectionSubjectOffering.section_id.in_(section_ids),
+            SectionSubjectOffering.school_year_id.in_(school_year_ids),
+        )
+        .all()
+    )
+    offerings_by_section_year: dict = {}
+    for offering in all_offerings:
+        offerings_by_section_year.setdefault(
+            (offering.section_id, offering.school_year_id), []
+        ).append(offering)
+
+    terms_by_school_year: dict = {}
+    for term in session.query(Term).filter(Term.school_year_id.in_(school_year_ids)).all():
+        terms_by_school_year.setdefault(term.school_year_id, {})[term.id] = term
+
+    # resolve_averaging_rules/load_offering_units already batch internally
+    # (app/curriculum_policy.py); called once per distinct pair / once for
+    # the whole offering list, not once per subject.
+    rules_by_school_year_grade = {
+        (school_year_id, grade_level_id): resolve_averaging_rules(session, school_year_id, grade_level_id)
+        for school_year_id in school_year_ids
+        for grade_level_id in grade_level_ids
+    }
+    units_by_offering = load_offering_units(session, all_offerings)
+
+    combined_areas_by_grade_level: dict = {}
+    for area in (
+        session.query(CombinedLearningArea)
+        .filter(CombinedLearningArea.grade_level_id.in_(grade_level_ids))
+        .all()
+    ):
+        combined_areas_by_grade_level.setdefault(area.grade_level_id, []).append(area)
+
+    area_ids = [a.id for areas in combined_areas_by_grade_level.values() for a in areas]
+    combined_components_by_area: dict = {}
+    if area_ids:
+        for component in (
+            session.query(CombinedLearningAreaComponent)
+            .filter(CombinedLearningAreaComponent.combined_learning_area_id.in_(area_ids))
+            .order_by(CombinedLearningAreaComponent.display_order)
+            .all()
+        ):
+            combined_components_by_area.setdefault(
+                component.combined_learning_area_id, []
+            ).append(component)
+
+    # Passing-grade resolution, preloaded rather than re-queried per
+    # subject/area/term (see `_resolve_passing_grade_ctx`).
+    override_ids = {o.grading_policy_version_id for o in all_offerings if o.grading_policy_version_id}
+    versions_by_id = {
+        v.id: v
+        for v in (
+            session.query(GradingPolicyVersion).filter(GradingPolicyVersion.id.in_(override_ids)).all()
+            if override_ids
+            else []
+        )
+    }
+    active_versions = session.query(GradingPolicyVersion).filter_by(status=PolicyVersionStatus.ACTIVE).all()
+    active_version_by_school_year: dict = {}
+    for version in active_versions:
+        current = active_version_by_school_year.get(version.effective_school_year_id)
+        if current is None or version.version_number > current.version_number:
+            active_version_by_school_year[version.effective_school_year_id] = version
+    active_version_overall = max(active_versions, key=lambda v: v.version_number, default=None)
+
+    term_grades_by_enrollment: dict = {}
+    for tg in session.query(TermGrade).filter(TermGrade.enrollment_id.in_(enrollment_ids)).all():
+        term_grades_by_enrollment.setdefault(tg.enrollment_id, {})[
+            (tg.section_subject_offering_id, tg.term_id)
+        ] = tg
+
+    subject_final_grades = {
+        (r.enrollment_id, r.subject_id): r
+        for r in session.query(SubjectFinalGrade)
+        .filter(SubjectFinalGrade.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+    combined_results = {
+        (r.enrollment_id, r.combined_learning_area_id): r
+        for r in session.query(CombinedLearningAreaResult)
+        .filter(CombinedLearningAreaResult.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+    term_summaries = {
+        (r.enrollment_id, r.term_id): r
+        for r in session.query(TermGradeSummary)
+        .filter(TermGradeSummary.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+    annual_summaries = {
+        r.enrollment_id: r
+        for r in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+
+    return _RecomputeContext(
+        offerings_by_section_year=offerings_by_section_year,
+        terms_by_school_year=terms_by_school_year,
+        rules_by_school_year_grade=rules_by_school_year_grade,
+        units_by_offering=units_by_offering,
+        combined_areas_by_grade_level=combined_areas_by_grade_level,
+        combined_components_by_area=combined_components_by_area,
+        versions_by_id=versions_by_id,
+        active_version_by_school_year=active_version_by_school_year,
+        active_version_overall=active_version_overall,
+        term_grades_by_enrollment=term_grades_by_enrollment,
+        subject_final_grades=subject_final_grades,
+        combined_results=combined_results,
+        term_summaries=term_summaries,
+        annual_summaries=annual_summaries,
+    )
+
+
+def recompute_enrollment_grades_batch(session: Session, enrollment_ids: list) -> None:
+    """Recomputes the derived grade tables for a whole batch of enrollments
+    in a fixed number of queries, instead of `recompute_enrollment_grades`'s
+    ~25-40 queries **per enrollment**. Same math, same writes — only the
+    data loading is batched, the same way `report_card.load_report_context`
+    batches a roster for the report card and `sf9_report.load_sf9_context`
+    batches one for SF9.
+
+    Commits once for the whole batch (still separately from the caller's
+    own transaction, since the caller may have already committed the
+    `term_grades` change this is reacting to — see
+    `recompute_enrollment_grades`'s docstring)."""
+    enrollment_ids = list(dict.fromkeys(enrollment_ids))
+    if not enrollment_ids:
+        return
+    enrollments = session.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).all()
+    if not enrollments:
         return
 
     now = datetime.now(timezone.utc)
+    context = _load_recompute_context(session, enrollments)
+    for enrollment in enrollments:
+        _recompute_one(session, enrollment, context, now)
+    session.commit()
 
-    offerings = (
-        session.query(SectionSubjectOffering)
-        .filter_by(section_id=enrollment.section_id, school_year_id=enrollment.school_year_id)
-        .all()
-    )
-    terms = {t.id: t for t in session.query(Term).filter_by(school_year_id=enrollment.school_year_id).all()}
 
-    # The averaging rules in force for this learner's year and grade level,
-    # and the units every offering carries. Both are resolved once per
-    # recompute — two extra queries for the whole enrollment, not one per
-    # subject.
-    rules = resolve_averaging_rules(
-        session, enrollment.school_year_id, enrollment.grade_level_id
+def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
+    """Recomputes one enrollment. A thin wrapper over
+    `recompute_enrollment_grades_batch` — kept as the public single-
+    enrollment entry point so existing callers and the `WRITING_CALLS`
+    read-only-role check (`tests/test_read_only_role.py`) don't need to
+    change. Prefer the batch function directly when recomputing more than
+    one enrollment (Gradebook Save/Submit, Grade Summary's "Recompute all",
+    a term-grade import) — calling this in a loop is the N+1 the batch
+    function exists to avoid."""
+    recompute_enrollment_grades_batch(session, [enrollment_id])
+
+
+def _recompute_one(session: Session, enrollment: Enrollment, context: _RecomputeContext, now) -> None:
+    enrollment_id = enrollment.id
+
+    offerings = context.offerings_by_section_year.get(
+        (enrollment.section_id, enrollment.school_year_id), []
     )
-    units_by_offering = load_offering_units(session, offerings)
+    terms = context.terms_by_school_year.get(enrollment.school_year_id, {})
+    rules = context.rules_by_school_year_grade[(enrollment.school_year_id, enrollment.grade_level_id)]
+    units_by_offering = context.units_by_offering
+    term_grades = context.term_grades_by_enrollment.get(enrollment_id, {})
 
     # subject_id -> {term_number: offering}
     offerings_by_subject: dict = {}
@@ -130,11 +321,6 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
         if term is None:
             continue
         offerings_by_subject.setdefault(offering.subject_id, {})[term.term_number] = offering
-
-    term_grades = {
-        (tg.section_subject_offering_id, tg.term_id): tg
-        for tg in session.query(TermGrade).filter_by(enrollment_id=enrollment_id).all()
-    }
 
     # subject_id -> computed final grade (Decimal | None)
     subject_finals: dict = {}
@@ -168,15 +354,9 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
         )
 
         any_offering = next(iter(term_offerings.values()))
-        passing_grade = _resolve_passing_grade(session, enrollment.school_year_id, any_offering)
+        passing_grade = _resolve_passing_grade_ctx(context, enrollment.school_year_id, any_offering)
 
-        record = (
-            session.query(SubjectFinalGrade)
-            .filter_by(
-                enrollment_id=enrollment_id, subject_id=subject_id, school_year_id=enrollment.school_year_id
-            )
-            .one_or_none()
-        )
+        record = context.subject_final_grades.get((enrollment_id, subject_id))
         if record is None:
             record = SubjectFinalGrade(
                 enrollment_id=enrollment_id, subject_id=subject_id, school_year_id=enrollment.school_year_id
@@ -202,18 +382,9 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
     combined_area_term_grades: dict = {}
     # component subject_id -> area_id, for the same substitution.
     component_to_area: dict = {}
-    combined_areas = (
-        session.query(CombinedLearningArea)
-        .filter_by(grade_level_id=enrollment.grade_level_id)
-        .all()
-    )
+    combined_areas = context.combined_areas_by_grade_level.get(enrollment.grade_level_id, [])
     for area in combined_areas:
-        components = (
-            session.query(CombinedLearningAreaComponent)
-            .filter_by(combined_learning_area_id=area.id)
-            .order_by(CombinedLearningAreaComponent.display_order)
-            .all()
-        )
+        components = context.combined_components_by_area.get(area.id, [])
         if len(components) != 2:
             continue  # not fully configured — skip rather than guess
         comp1_id, comp2_id = components[0].subject_id, components[1].subject_id
@@ -264,17 +435,9 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
         combined_area_units[area.id] = per_term * Decimal(len(pair_terms))
 
         any_offering = next(iter(offerings_by_subject[comp1_id].values()))
-        passing_grade = _resolve_passing_grade(session, enrollment.school_year_id, any_offering)
+        passing_grade = _resolve_passing_grade_ctx(context, enrollment.school_year_id, any_offering)
 
-        result = (
-            session.query(CombinedLearningAreaResult)
-            .filter_by(
-                enrollment_id=enrollment_id,
-                combined_learning_area_id=area.id,
-                school_year_id=enrollment.school_year_id,
-            )
-            .one_or_none()
-        )
+        result = context.combined_results.get((enrollment_id, area.id))
         if result is None:
             result = CombinedLearningAreaResult(
                 enrollment_id=enrollment_id,
@@ -304,7 +467,7 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
     # `combine_language_pair_in_term_average` switches to that reading, and
     # `app/report_card.build_term_subject_rows` follows the same switch so the
     # printed term card always itemises exactly what its average is made of.
-    default_passing = _resolve_passing_grade(session, enrollment.school_year_id, None)
+    default_passing = _resolve_passing_grade_ctx(context, enrollment.school_year_id, None)
     for term in terms.values():
         grades_this_term: list = []
         entries_this_term: list = []
@@ -344,11 +507,7 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
             else CompletionStatus.INCOMPLETE
         )
 
-        term_summary = (
-            session.query(TermGradeSummary)
-            .filter_by(enrollment_id=enrollment_id, term_id=term.id)
-            .one_or_none()
-        )
+        term_summary = context.term_summaries.get((enrollment_id, term.id))
         if term_summary is None:
             term_summary = TermGradeSummary(
                 enrollment_id=enrollment_id,
@@ -406,7 +565,7 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
     lowest_final_grade = min(non_null_finals) if completion_status == CompletionStatus.COMPLETE else None
     failed_subject_count = sum(1 for f in non_null_finals if f < default_passing)
 
-    summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment_id).one_or_none()
+    summary = context.annual_summaries.get(enrollment_id)
     if summary is None:
         summary = AnnualGradeSummary(enrollment_id=enrollment_id, school_year_id=enrollment.school_year_id)
         session.add(summary)
@@ -419,5 +578,3 @@ def recompute_enrollment_grades(session: Session, enrollment_id) -> None:
     summary.failed_subject_count = failed_subject_count
     summary.completion_status = completion_status
     summary.computed_at = now
-
-    session.commit()

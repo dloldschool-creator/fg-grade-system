@@ -78,6 +78,7 @@ PURELY_READ_ONLY = ["dashboard", "insights", "sf9", "sf2", "sf4", "term_cards"]
 # a change to a learner's data.
 WRITING_CALLS = {
     "recompute_enrollment_grades",
+    "recompute_enrollment_grades_batch",
     "capture_academic_record",
     "set_award_override",
     "clear_award_override",

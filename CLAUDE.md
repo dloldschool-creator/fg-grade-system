@@ -672,6 +672,28 @@ the components' sum, or the languages are weighted twice.
   per-learner panel anywhere, load its data above the loop.
 - `tests/test_query_cost.py` asserts this shape and stays meaningful on a
   fast local database, where the bug is otherwise invisible.
+- **Gradebook Save/Submit and Grade Summary's "Recompute all" called
+  `recompute_enrollment_grades` once per touched learner** (found
+  2026-09-04, reported as "saving grades takes 60+ seconds"). That
+  function alone is ~25-40 queries and its own `session.commit()` — 30
+  touched learners was ~30×30 ≈ 900+ round trips. `recompute_enrollment_grades_batch()`
+  loads one `_RecomputeContext` for the whole batch (same split as
+  `load_report_context`/`load_sf9_context`) and commits once; the maths
+  in `_recompute_one` is untouched, only the data loading moved.
+  `recompute_enrollment_grades(session, enrollment_id)` still exists as a
+  1-element wrapper for single-learner callers (Grade Summary's per-learner
+  Recompute button) — call the batch function directly for anything that
+  loops. Same fix in `app/import_specs.py`'s term-grade import.
+- **`attendance_service.roster_for_month` called `active_window_for` (a
+  `LearnerMovement` query) and `session.get(Learner, ...)` once per
+  enrollment** — 2×N round trips, and it's called several times per
+  attendance page action (seed, grid, save, validate), which is what made
+  preparing/refreshing a month's sheet slow. Batched the same way
+  `analytics_service.attendance_risk()` already did (see the Insights
+  section above) — movements via one `enrollment_id.in_(...)` query,
+  windows built in Python with `compute_active_window`. No signature or
+  behavior change, so SF2, `export_service`, `seed_month_records` and
+  `validate_month` all benefit for free.
 - **Analytics has a second cost axis: row volume.** Everything above is
   about round trips. `app/analytics_service.py` also has to not move
   ~32,000 `term_grades` into Python, so it aggregates in Postgres and

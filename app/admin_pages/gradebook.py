@@ -8,7 +8,7 @@ from app import audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes
 from app.auth import require_role
 from app.grading_engine import round_half_up
-from app.grading_service import recompute_enrollment_grades
+from app.grading_service import recompute_enrollment_grades_batch
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeEncodingStatus, GradeWorkflowStatus
 from app.models.grades import TermGrade
@@ -271,8 +271,7 @@ def render() -> None:
                                 new=new,
                             )
                     session.commit()
-                    for enrollment_id in touched_enrollment_ids:
-                        recompute_enrollment_grades(session, enrollment_id)
+                    recompute_enrollment_grades_batch(session, touched_enrollment_ids)
                     message = f"Saved ({changed} updated)." if changed else "No changes to save."
                     if reverted:
                         message += f" {reverted} reverted to DRAFT for re-submission."
@@ -308,8 +307,7 @@ def render() -> None:
                             },
                         )
                 session.commit()
-                for enrollment_id in touched_enrollment_ids:
-                    recompute_enrollment_grades(session, enrollment_id)
+                recompute_enrollment_grades_batch(session, touched_enrollment_ids)
                 flash(
                     "success",
                     f"Submitted {submitted_count} grade(s). They're locked here until an "

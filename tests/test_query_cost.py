@@ -172,6 +172,81 @@ def test_sf4_costs_a_fixed_number_of_queries_for_the_whole_school(session):
     )
 
 
+def test_roster_for_month_costs_a_fixed_number_of_queries(session, roster):
+    """`roster_for_month` must not scale with the roster. It used to call
+    `active_window_for` (a `LearnerMovement` query) and
+    `session.get(Learner, ...)` once per enrollment — 2×N round trips,
+    and it's called several times per attendance page action (seeding,
+    the grid, saving, validating), which is what made preparing/
+    refreshing a month's sheet take 60+ seconds. Batched the same way
+    `analytics_service.attendance_risk()` already does (see CLAUDE.md's
+    Insights section)."""
+    from app.attendance_service import roster_for_month
+    from app.models.organization import SchoolYear
+
+    section_id = roster[0].section_id
+    school_year_id = roster[0].school_year_id
+    school_year = session.get(SchoolYear, school_year_id)
+
+    with QueryCounter() as counter:
+        roster_for_month(
+            session, section_id, school_year_id,
+            school_year.start_date.year, school_year.start_date.month,
+        )
+    assert counter.count <= 4, (
+        f"{counter.count} queries for a {len(roster)}-learner roster; "
+        "something inside roster_for_month is querying per enrollment"
+    )
+
+
+def test_recompute_context_costs_a_fixed_number_of_queries(session, roster):
+    """`_load_recompute_context` (the batch step behind
+    `recompute_enrollment_grades_batch`) must not scale with how many
+    enrollments are being recomputed — the whole point of batching Save/
+    Submit's recompute instead of calling it once per learner."""
+    from app.grading_service import _load_recompute_context
+
+    with QueryCounter() as whole_section:
+        _load_recompute_context(session, roster)
+    with QueryCounter() as single:
+        _load_recompute_context(session, [roster[0]])
+
+    assert whole_section.count <= single.count, (
+        f"{len(roster)} enrollments cost {whole_section.count} queries to load "
+        f"a recompute context but one costs {single.count} — the batching isn't holding"
+    )
+
+
+def test_recompute_one_issues_no_queries_of_its_own(session, roster):
+    """The property that matters: once `_load_recompute_context` has run,
+    computing (not committing) each learner's derived grades is pure
+    lookups against the preloaded context — no `session.query`/`session.get`
+    calls. Read the AST rather than running it, since `_recompute_one`
+    also writes rows via `session.add`, and this suite must never commit
+    against the live database (see the module docstring)."""
+    import ast
+    import inspect
+
+    from app import grading_service
+
+    source = inspect.getsource(grading_service._recompute_one)
+    tree = ast.parse(source)
+    calls = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "session"
+        and node.func.attr in ("query", "get", "commit")
+    ]
+    assert not calls, (
+        f"_recompute_one calls session.{calls} — it should only read from the "
+        "preloaded _RecomputeContext and session.add() new rows; a query or "
+        "commit here is the per-learner N+1 (or an early commit) coming back"
+    )
+
+
 def test_connection_pool_is_sized_for_concurrent_teachers():
     """~40 teachers share this pool, and Streamlit runs each session in
     its own thread. The old 5+10 default queued requests as soon as a

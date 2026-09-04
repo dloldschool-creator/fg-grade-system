@@ -182,18 +182,51 @@ def roster_for_month(
     Uses `appears_in_month`, not "is currently active": a learner who
     transferred out mid-month still belongs on that month's sheet with a
     remark, and only drops off the following month (§32, spec Test D).
+
+    Batches movements and learners across the whole roster instead of
+    calling `active_window_for`/`session.get(Learner, ...)` per enrollment
+    — the same fix `analytics_service.attendance_risk()` already applies,
+    and this function is called several times per page action (seeding,
+    the grid, saving, validating), so the per-enrollment version compounds
+    fast. See CLAUDE.md's Insights section for why `active_window_for` is
+    avoided in a roster loop.
     """
     enrollments = (
         session.query(Enrollment)
         .filter_by(section_id=section_id, school_year_id=school_year_id)
         .all()
     )
+    if not enrollments:
+        return []
+
+    enrollment_ids = [e.id for e in enrollments]
+    movements: dict = {}
+    for movement in (
+        session.query(LearnerMovement)
+        .filter(LearnerMovement.enrollment_id.in_(enrollment_ids))
+        .all()
+    ):
+        movements.setdefault(movement.enrollment_id, []).append(movement)
+
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner)
+        .filter(Learner.id.in_([e.learner_id for e in enrollments]))
+        .all()
+    }
+
+    school_year = session.get(SchoolYear, school_year_id)
+    default_start = school_year.start_date if school_year else None
+
     rows = []
     for enrollment in enrollments:
-        window = active_window_for(session, enrollment)
+        window = compute_active_window(
+            [Movement(m.movement_type, m.effective_date) for m in movements.get(enrollment.id, [])],
+            default_start=default_start,
+        )
         if not appears_in_month(window, year, month):
             continue
-        learner = session.get(Learner, enrollment.learner_id)
+        learner = learners.get(enrollment.learner_id)
         rows.append((enrollment, learner, window))
     # Not `r[1].sex.value` — the stored strings are "MALE" and "FEMALE",
     # so sorting on them alphabetically put FEMALE first and quietly

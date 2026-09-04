@@ -22,7 +22,7 @@ from app.import_pipeline import (
     parse_grade,
     parse_lrn,
 )
-from app.grading_service import recompute_enrollment_grades
+from app.grading_service import recompute_enrollment_grades_batch
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeWorkflowStatus, ImportJobType, Sex
 from app.models.grades import TermGrade
@@ -479,16 +479,18 @@ def recompute_after_term_grades(session, parsed: list[dict], progress=None) -> s
     state rather than an error.
 
     It runs **after** the import's own transaction because
-    `recompute_enrollment_grades` commits internally. It is also the slow
-    part: each learner costs a handful of round trips, so a file covering
-    one section is seconds and a file covering the whole school is
-    minutes. That is why the page advises importing a section at a time.
+    `recompute_enrollment_grades_batch` commits internally. Batched into
+    one call for the whole file rather than once per learner — that used
+    to cost a handful of round trips *per learner* (a file covering the
+    whole school took minutes), which is why the page still advises
+    importing a section at a time even though this step is now a fixed
+    cost regardless of file size.
     """
     enrollment_ids = list(dict.fromkeys(row["enrollment_id"] for row in parsed))
-    for index, enrollment_id in enumerate(enrollment_ids, start=1):
-        recompute_enrollment_grades(session, enrollment_id)
+    if enrollment_ids:
+        recompute_enrollment_grades_batch(session, enrollment_ids)
         if progress:
-            progress(index, len(enrollment_ids))
+            progress(len(enrollment_ids), len(enrollment_ids))
     return f"Averages recomputed for {len(enrollment_ids)} learner(s)."
 
 
