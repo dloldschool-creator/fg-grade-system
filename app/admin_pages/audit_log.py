@@ -6,10 +6,11 @@ Read-only apart from one deliberate, heavily guarded exception: the
 and the archive tool can only ever delete entries older than
 `audit_archive_service.MIN_AGE_DAYS`, only after the admin has downloaded
 the exact rows being deleted, and only after typing a confirmation phrase
-naming the row count. It exists because the table above has no pagination
-and only ever shows the newest `PAGE_SIZE` rows — at 543 entries, older
-ones were already unreachable on screen even though nothing had deleted
-them (see the archive module's docstring for the full reasoning).
+naming the row count. The table above is paginated `PAGE_SIZE` rows at a
+time, so every entry is reachable on screen — archiving is not what makes
+old rows visible any more (it originally was; see the archive module's
+docstring). It still exists so a very large log doesn't turn one query on
+this page into hundreds of pages to click through.
 """
 
 import os
@@ -28,6 +29,13 @@ from app.models.rbac import User
 
 PAGE_SIZE = 100
 ANY = "— any —"
+
+# Session-state keys for the viewer's pagination. The page number is kept
+# separately from the filter selectboxes (which Streamlit already persists
+# on its own) so that changing a filter can deliberately reset it — landing
+# on page 1 of a narrowed result set rather than a now out-of-range page.
+_PAGE_KEY = "audit_log_page"
+_PAGE_FILTERS_KEY = "audit_log_page_filters"
 
 # Session-state keys for the prepared export (a temp-file path, never the
 # bytes themselves — see _store below, same reasoning as backup.py: holding
@@ -129,7 +137,7 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
     st.subheader("Archive old entries")
     st.caption(
         "For a very large log, not for routine cleanup: entries can be exported and "
-        "permanently deleted, oldest first. Nothing younger than "
+        "permanently deleted, oldest first. Nothing newer than "
         f"{audit_archive_service.MIN_AGE_DAYS} days can ever be selected, and deleting "
         "always requires downloading the exact rows first."
     )
@@ -257,15 +265,33 @@ def render() -> None:
             query = query.filter(AuditLog.user_id == user_choice)
 
         total = query.count()
-        entries = query.order_by(AuditLog.created_at.desc()).limit(PAGE_SIZE).all()
+        total_pages = max(1, -(-total // PAGE_SIZE))  # ceil division
+
+        # A filter change makes the previously selected page meaningless
+        # (and possibly out of range), so reset to page 1 whenever the
+        # filter combination differs from the one the stored page was
+        # chosen under.
+        filter_signature = (group_choice, action_choice, user_choice)
+        if st.session_state.get(_PAGE_FILTERS_KEY) != filter_signature:
+            st.session_state[_PAGE_FILTERS_KEY] = filter_signature
+            st.session_state[_PAGE_KEY] = 1
+        page = min(max(st.session_state.get(_PAGE_KEY, 1), 1), total_pages)
+        st.session_state[_PAGE_KEY] = page
+
+        entries = (
+            query.order_by(AuditLog.created_at.desc())
+            .offset((page - 1) * PAGE_SIZE)
+            .limit(PAGE_SIZE)
+            .all()
+        )
 
         if not entries:
             st.info("No entries match.")
         else:
+            first = (page - 1) * PAGE_SIZE + 1
             st.caption(
-                f"Showing the most recent {len(entries)} of {total} matching entry(s)."
-                if total > len(entries)
-                else f"{total} matching entry(s)."
+                f"Showing {first}–{first + len(entries) - 1} of {total} matching "
+                f"entry(s) — page {page} of {total_pages}."
             )
             st.dataframe(
                 pd.DataFrame(
@@ -292,6 +318,23 @@ def render() -> None:
                 hide_index=True,
                 width="stretch",
             )
+
+            if total_pages > 1:
+                col_prev, col_label, col_next = st.columns([1, 2, 1])
+                with col_prev:
+                    if st.button("← Previous", disabled=page <= 1, width="stretch"):
+                        st.session_state[_PAGE_KEY] = page - 1
+                        st.rerun()
+                with col_label:
+                    st.markdown(
+                        f"<div style='text-align:center; padding-top: 0.4rem'>"
+                        f"Page {page} of {total_pages}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with col_next:
+                    if st.button("Next →", disabled=page >= total_pages, width="stretch"):
+                        st.session_state[_PAGE_KEY] = page + 1
+                        st.rerun()
 
         grand_total = session.query(AuditLog).count()
         _render_archive_section(session, current_user, grand_total)

@@ -912,10 +912,11 @@ def _render_difficulty(stats, rows) -> None:
         )
 
     st.caption(
-        "Ranked by the share of encoded grades below the passing mark, not "
-        "by the average — a subject can sit at a comfortable average and "
-        "still have a group of learners failing. Each average covers one "
-        "subject only, where every learner carries the same weight for it."
+        "Ranked by the percentage of failing grades, not by the subject "
+        "average—a subject with a passing average can still have a "
+        "significant number of struggling learners. Each average covers "
+        "one subject only, where every learner carries the same weight "
+        "for it."
     )
 
 
@@ -1142,7 +1143,7 @@ def render() -> None:
         "SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD", "ADVISER", "SUBJECT_TEACHER"
     )
     st.title("Insights")
-    st.caption("Nothing on this page changes any data.")
+    st.caption("This page is for viewing data only.")
     render_flashes()
 
     with get_session() as session:

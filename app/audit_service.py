@@ -171,20 +171,43 @@ def record(
     return entry
 
 
+def _is_loopback(ip: str) -> bool:
+    """Whether `ip` names the machine itself rather than a real visitor —
+    including the IPv4-mapped-into-IPv6 form (`::ffff:127.0.0.1`) that
+    shows up when the local hop speaks IPv6."""
+    return ip in {"127.0.0.1", "::1"} or ip.startswith("::ffff:127.")
+
+
 def _request_metadata() -> tuple[str | None, str | None]:
     """IP and user agent when running inside a Streamlit request (§50's
     "where appropriate"). Returns (None, None) from a script, a test or a
     background job, where there is no request to describe — that's a
-    normal state, not a failure."""
+    normal state, not a failure.
+
+    **Every request on Streamlit Community Cloud arrives at the app
+    through a local reverse proxy**, so `context.ip_address` — the
+    address of the immediate TCP peer — is always that proxy's own
+    loopback address, not the visitor's. `::ffff:127.0.0.1` logged for
+    every user is that, not a bug in how the value is read. The real
+    client address is what the *outer* edge proxy recorded before
+    handing off to that local hop, and it survives in the standard
+    `X-Forwarded-For` header — so that's the fallback when the directly
+    reported address turns out to be the loopback.
+    """
     try:
         import streamlit as st
 
         context = getattr(st, "context", None)
         if context is None:
             return None, None
-        ip_address = getattr(context, "ip_address", None)
         headers = getattr(context, "headers", None) or {}
         user_agent = headers.get("User-Agent") or headers.get("user-agent")
+        ip_address = getattr(context, "ip_address", None)
+        if ip_address is None or _is_loopback(ip_address):
+            forwarded = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for")
+            if forwarded:
+                # The header is a comma-separated hop chain, client first.
+                ip_address = forwarded.split(",")[0].strip() or ip_address
         return ip_address, user_agent
     except Exception:
         # Audit logging must never be the reason a legitimate change

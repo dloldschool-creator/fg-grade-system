@@ -254,7 +254,7 @@ def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
     st.title("School Dashboard")
     st.caption(
-        "Nothing on this page changes any data."
+        "This page is for viewing data only."
     )
     render_flashes()
 

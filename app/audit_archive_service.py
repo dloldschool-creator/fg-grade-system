@@ -2,10 +2,13 @@
 
 `app/audit_service.py` is deliberately append-only: no code anywhere updates
 or deletes a row, because §50 requires that normal users can't erase audit
-history. This module is the one deliberate exception to that, added because
-the viewer (`app/admin_pages/audit_log.py`) only ever shows the newest
-`PAGE_SIZE` rows and has no pagination — at 543 entries, older ones were
-already unreachable on screen even though nothing had deleted them.
+history. This module is the one deliberate exception to that, added when
+the viewer (`app/admin_pages/audit_log.py`) only ever showed the newest
+`PAGE_SIZE` rows with no pagination — at 543 entries, older ones were
+already unreachable on screen even though nothing had deleted them. The
+viewer is paginated now, so every entry is reachable; this module still
+exists for the case pagination doesn't help — a log grown large enough
+that the table itself becomes the cost, not just reaching the old rows.
 
 Three things keep this from weakening §50's guarantee rather than just
 moving it:

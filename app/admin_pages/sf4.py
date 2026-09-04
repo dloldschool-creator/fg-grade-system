@@ -17,7 +17,7 @@ from app.attendance_service import class_days_in_month, months_with_class_days
 from app.auth import require_role
 from app.excel_template import workbook_to_bytes
 from app.models.organization import SchoolYear
-from app.sf4_report import MOVEMENT_COLUMNS, build_sf4_workbook
+from app.sf4_report import GRADE_BLOCKS, MOVEMENT_COLUMNS, build_sf4_workbook
 
 
 def _preview_frame(rows, class_day_count: int) -> pd.DataFrame:
@@ -105,29 +105,39 @@ def render() -> None:
 
         st.divider()
         st.subheader("Preview")
-        preview = []
-        for row_number in list(range(12, 23)) + list(range(24, 35)):
-            track = worksheet.cell(row_number, 1).value
-            if not track and not worksheet.cell(row_number, 2).value:
-                continue
-            preview.append(
-                {
-                    "Track": track,
-                    "Strand": worksheet.cell(row_number, 2).value,
-                    "Registered M": worksheet.cell(row_number, 3).value,
-                    "Registered F": worksheet.cell(row_number, 4).value,
-                    "Registered T": worksheet.cell(row_number, 5).value,
-                    "Daily average": worksheet.cell(row_number, 8).value,
-                    "% for month": worksheet.cell(row_number, 11).value,
-                    "Dropped": worksheet.cell(row_number, 15).value,
-                    "Transferred out": worksheet.cell(row_number, 24).value,
-                    "Transferred in": worksheet.cell(row_number, 33).value,
-                    "Shifted out": worksheet.cell(row_number, 42).value,
-                    "Shifted in": worksheet.cell(row_number, 51).value,
-                }
-            )
-        if preview:
-            st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
+        # One table per grade level rather than one flat list — the form
+        # itself blocks them apart (rows 12-22 Grade 11, 24-34 Grade 12,
+        # each with its own TOTAL row), and a Track/Strand can repeat
+        # across grade levels, which read as duplicates in a merged table.
+        any_rows = False
+        for grade_number, (first_row, last_row, _total_row) in sorted(GRADE_BLOCKS.items()):
+            preview = []
+            for row_number in range(first_row, last_row + 1):
+                track = worksheet.cell(row_number, 1).value
+                if not track and not worksheet.cell(row_number, 2).value:
+                    continue
+                preview.append(
+                    {
+                        "Track": track,
+                        "Strand": worksheet.cell(row_number, 2).value,
+                        "Registered M": worksheet.cell(row_number, 3).value,
+                        "Registered F": worksheet.cell(row_number, 4).value,
+                        "Registered T": worksheet.cell(row_number, 5).value,
+                        "Daily average": worksheet.cell(row_number, 8).value,
+                        "% for month": worksheet.cell(row_number, 11).value,
+                        "Dropped": worksheet.cell(row_number, 15).value,
+                        "Transferred out": worksheet.cell(row_number, 24).value,
+                        "Transferred in": worksheet.cell(row_number, 33).value,
+                        "Shifted out": worksheet.cell(row_number, 42).value,
+                        "Shifted in": worksheet.cell(row_number, 51).value,
+                    }
+                )
+            if preview:
+                any_rows = True
+                st.markdown(f"**Grade {grade_number}**")
+                st.dataframe(pd.DataFrame(preview), hide_index=True, width="stretch")
+
+        if any_rows:
             st.caption(
                 "Movement columns show this month's figures; the form itself also "
                 "carries the running totals before and after the month."
