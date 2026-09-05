@@ -292,7 +292,7 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
     )
     view = st.radio("View", VIEW_OPTIONS, horizontal=True, key="class_summary_view")
 
-    subjects = _section_subjects(session, section_id, school_year_id)
+    all_subjects = _section_subjects(session, section_id, school_year_id)
     enrollment_ids = [e.id for e in enrollments]
     summaries = {
         s.enrollment_id: s
@@ -310,6 +310,19 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
         ).all()
     }
 
+    # A specific term only lists subjects actually offered that term (§39:
+    # "show only subjects active during the selected term" — the same rule
+    # `build_term_subject_rows` applies to the term card). Final is the
+    # annual view, so it keeps every subject the section offers all year.
+    if view == "Final":
+        subjects = all_subjects
+    else:
+        term_number = VIEW_OPTIONS.index(view) + 1
+        subjects = [
+            s for s in all_subjects
+            if term_number in context.offerings_by_subject.get(s.id, {})
+        ]
+
     rows = []
     for enrollment in enrollments:
         learner = learners.get(enrollment.learner_id)
@@ -319,7 +332,6 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
                 final = context.finals.get((enrollment.id, subject.id))
                 row[subject.short_name] = _fmt(final.final_grade) if final else DASH
         else:
-            term_number = VIEW_OPTIONS.index(view) + 1
             for subject in subjects:
                 offering_id = context.offerings_by_subject.get(subject.id, {}).get(term_number)
                 row[subject.short_name] = _fmt(
