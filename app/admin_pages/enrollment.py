@@ -244,13 +244,15 @@ def _roster_tab(session, adviser_user_id, current_user):
         with st.expander(
             f"{learner.last_name}, {learner.first_name} — {enrollment.enrollment_status.value}"
         ):
+            # Read-only by design (2026-09-05): an editable dropdown here
+            # used to set enrollment_status directly with no date, reason,
+            # or history row — a second path to the same field as "Log
+            # movement" below that skipped §27's history requirement, and
+            # would silently leave SF9's exit-status line blank since that
+            # reads LearnerMovement, not this field. "Log movement" is the
+            # only way to change it now, and already keeps it in sync.
+            st.caption(f"Enrollment status: **{enrollment.enrollment_status.value}** — changed only by logging a movement below.")
             with st.form(f"edit_enrollment_{enrollment.id}"):
-                status = st.selectbox(
-                    "Enrollment status",
-                    options=[s.value for s in EnrollmentStatus],
-                    index=[s.value for s in EnrollmentStatus].index(enrollment.enrollment_status.value),
-                    key=f"enr_status_{enrollment.id}",
-                )
                 derogatory = st.checkbox(
                     "Derogatory record", value=enrollment.derogatory_record, key=f"enr_derog_{enrollment.id}"
                 )
@@ -263,7 +265,6 @@ def _roster_tab(session, adviser_user_id, current_user):
                 t3 = col3.text_area("Term 3 adviser comment", value=enrollment.term3_adviser_comment or "", key=f"enr_t3_{enrollment.id}")
 
                 if st.form_submit_button("Save"):
-                    enrollment.enrollment_status = EnrollmentStatus(status)
                     enrollment.derogatory_record = derogatory
                     enrollment.general_remarks = general_remarks or None
                     enrollment.term1_adviser_comment = t1 or None
