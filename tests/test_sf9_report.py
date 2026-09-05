@@ -46,18 +46,19 @@ def _row(name, terms, final, remark, component=False) -> LearningAreaRow:
     )
 
 
-def _filled_sheet(rows):
+def _filled_sheet(rows, exit_line=None):
     workbook = openpyxl.load_workbook(TEMPLATE_PATH)
     worksheet = workbook[SHEET_NAME]
     strip_external_formulas(worksheet)
     anchors = anchor_map(worksheet)
-    _fill_learning_areas(worksheet, anchors, rows)
+    _fill_learning_areas(worksheet, anchors, rows, exit_line)
 
     def read(offset, column):
         row = LEARNING_AREA_FIRST_ROW + offset
         target = anchors.get((row, column), (row, column))
         return worksheet.cell(*target).value
 
+    read.worksheet = worksheet
     return read
 
 
@@ -127,6 +128,106 @@ def test_a_missing_term_grade_prints_blank_not_zero():
     assert read(0, COL_TERM[1]) == 94
     assert read(0, COL_TERM[2]) is None
     assert read(0, COL_TERM[3]) is None
+
+
+# --- Exit status (§35 amendment, 2026-09-05) --------------------------------
+
+
+def test_exit_line_replaces_every_rows_own_remark_with_one_merged_cell():
+    """A learner who dropped out mid-year has every remaining subject's
+    Final Grade genuinely None — printing INCOMPLETE on each of them would
+    be true but not what happened. The Remarks column instead collapses
+    into one cell naming the actual status."""
+    read = _filled_sheet(
+        [
+            _row("Subject A", {1: D(88)}, D(88), "PASSED"),
+            _row("Subject B", {1: D(75)}, D(75), "PASSED"),
+            _row("Subject C", {1: None}, None, "INCOMPLETE"),
+        ],
+        exit_line="Dropped as of 08/30/2026 due to Child labor, work",
+    )
+    assert read(0, COL_REMARKS) == "Dropped as of 08/30/2026 due to Child labor, work"
+    # Each row's own PASSED/PASSED/INCOMPLETE never gets written — the
+    # merge is the only remark and it belongs to the anchor cell alone.
+    assert read(1, COL_REMARKS) is None
+    assert read(2, COL_REMARKS) is None
+
+
+def test_exit_line_merge_spans_exactly_the_printed_rows():
+    read = _filled_sheet(
+        [
+            _row("Subject A", {1: D(88)}, D(88), "PASSED"),
+            _row("Subject B", {1: D(75)}, D(75), "PASSED"),
+        ],
+        exit_line="Dropped as of 08/30/2026 due to Illness",
+    )
+    ranges = [
+        m for m in read.worksheet.merged_cells.ranges
+        if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
+    ]
+    assert len(ranges) == 1
+    assert ranges[0].max_row == LEARNING_AREA_FIRST_ROW + 1  # exactly 2 rows, not the full block
+    assert ranges[0].max_col == COL_REMARKS + 1  # the template's own L:M width
+
+
+def test_exit_line_with_a_single_printed_row_uses_the_templates_own_merge():
+    """One subject means the template's per-row L:M merge already is the
+    cell wanted — nothing to unmerge or rebuild."""
+    read = _filled_sheet(
+        [_row("Only Subject", {1: D(88)}, D(88), "PASSED")],
+        exit_line="NLS as of 08/30/2026",
+    )
+    assert read(0, COL_REMARKS) == "NLS as of 08/30/2026"
+    ranges = [
+        m for m in read.worksheet.merged_cells.ranges
+        if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
+    ]
+    assert len(ranges) == 1
+    assert ranges[0].max_row == LEARNING_AREA_FIRST_ROW
+
+
+def test_exit_line_does_not_touch_the_general_average_remark_row():
+    """§35 amendment: the merge stops at the last printed subject row — row
+    32 (General Average) keeps its own separate Remarks cell, computed
+    elsewhere and untouched by this."""
+    read = _filled_sheet(
+        [_row("Subject A", {1: D(88)}, D(88), "PASSED")],
+        exit_line="Dropped as of 08/30/2026 due to Child labor, work",
+    )
+    ga_ranges = [m for m in read.worksheet.merged_cells.ranges if m.min_row == 32 and m.min_col == COL_REMARKS]
+    assert len(ga_ranges) == 1
+    assert ga_ranges[0].max_row == 32, "the General Average remark merge must not be swallowed"
+
+
+def test_no_exit_line_leaves_the_templates_own_per_row_merges_alone():
+    read = _filled_sheet([_row("Subject A", {1: D(88)}, D(88), "PASSED")])
+    ranges = [
+        m for m in read.worksheet.merged_cells.ranges
+        if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
+    ]
+    assert len(ranges) == 1
+    assert ranges[0].max_row == LEARNING_AREA_FIRST_ROW
+
+
+def test_exit_line_survives_a_save_and_reload_round_trip():
+    """The dynamic unmerge/remerge must produce a file Excel (and openpyxl)
+    can reopen cleanly, not just an in-memory object that looks right."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+    strip_external_formulas(worksheet)
+    _fill_learning_areas(
+        worksheet, anchor_map(worksheet),
+        [
+            _row("Subject A", {1: D(88)}, D(88), "PASSED"),
+            _row("Subject B", {1: D(75)}, D(75), "PASSED"),
+        ],
+        "Dropped as of 08/30/2026 due to Child labor, work",
+    )
+    saved = workbook_to_bytes(workbook)
+    reloaded = openpyxl.load_workbook(io.BytesIO(saved))[SHEET_NAME]
+    assert reloaded.cell(LEARNING_AREA_FIRST_ROW, COL_REMARKS).value == (
+        "Dropped as of 08/30/2026 due to Child labor, work"
+    )
 
 
 # --- Identity fields -------------------------------------------------------

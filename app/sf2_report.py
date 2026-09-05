@@ -44,6 +44,7 @@ from app.attendance_service import (
     roster_for_month,
     summarize_month_batch,
 )
+from app.enrollment_status import movement_label
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
@@ -142,17 +143,6 @@ PRINTED_CODES = {
     AttendanceStatus.CUTTING: "T-C",
 }
 
-MOVEMENT_REMARKS = {
-    EnrollmentStatus.TRANSFERRED_OUT: "Transferred Out",
-    EnrollmentStatus.TRANSFERRED_IN: "Transferred In",
-    EnrollmentStatus.NLS: "NLS",
-    EnrollmentStatus.DROPPED: "Dropped",
-    EnrollmentStatus.SHIFTED_OUT: "Shifted Out",
-    EnrollmentStatus.SHIFTED_IN: "Shifted In",
-    EnrollmentStatus.LATE_ENROLLMENT: "Late Enrollment",
-}
-
-
 # --- Pure helpers (unit-tested; no DB, no workbook) -----------------------
 
 
@@ -187,8 +177,7 @@ def printed_code(status: AttendanceStatus | None) -> str:
 
 
 def movement_remark(movement_type: EnrollmentStatus, effective: date) -> str:
-    label = MOVEMENT_REMARKS.get(movement_type, movement_type.value.replace("_", " ").title())
-    return f"{label} {effective:%m/%d/%Y}"
+    return f"{movement_label(movement_type)} {effective:%m/%d/%Y}"
 
 
 def first_friday_on_or_after(start: date) -> date:

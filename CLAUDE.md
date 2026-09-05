@@ -578,6 +578,18 @@ the components' sum, or the languages are weighted twice.
 - **`fitToWidth`/`fitToHeight` are page counts, and 0 means "as many as
   needed".** Test page fitting with a full roster, never the seeded
   3-learner section.
+- **Merging a *new* range over cells the template already merges needs the
+  old merges undone first** — openpyxl refuses to merge a range that
+  overlaps an existing one. SF9's Remarks column ships pre-merged per row
+  (`L20:M20`, `L21:M21`, ...); collapsing several rows into one exit-status
+  cell (§35 amendment, 2026-09-05 — `sf9_report._merge_exit_status`) calls
+  `unmerge_cells()` on each row's own merge before `merge_cells()` on the
+  bigger range. Confirmed empirically that `merge_cells()` clears the
+  covered (non-anchor) cells' values on its own — no separate blanking
+  step needed, just don't write anything to the anchor before merging or
+  it'll be discarded too. This is a one-off dynamic merge outside the
+  `write()`/anchor-map machinery above (which is for the template's own
+  *static* merges); write the anchor's `.value` directly afterward.
 
 **Streamlit**
 

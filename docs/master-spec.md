@@ -1447,6 +1447,21 @@ Blank unused rows may remain visually blank to preserve the official template.
 
 based on the configured passing grade.
 
+> **Amended 2026-09-05** (decided with the school) to cover a learner who
+> leaves before the year's grades are complete. For a learner with a
+> DROPPED, NLS, or TRANSFERRED OUT movement on file (Section 27), every
+> per-subject PASSED/FAILED/INCOMPLETE remark is replaced by one merged
+> cell, spanning only the subject rows actually printed, reading
+> `<Status> as of <effective date> due to <reason>` — e.g. "Dropped as of
+> 08/30/2026 due to Child labor, work." The status, date and reason come
+> from that same movement record, so this line and SF2's own Remarks
+> column always describe the identical event. This is display only: the
+> General Average row's own Remarks cell is untouched and still follows
+> the PASSED/FAILED rule above (reading blank when the record is
+> incomplete, per Section 19's NULL rule), and nothing about how a Final
+> Grade is computed changes. When more than one such movement is on file,
+> the most recent by effective date is the one shown.
+
 ## Attendance
 
 Populate the SF9 attendance portion from finalized attendance data.
