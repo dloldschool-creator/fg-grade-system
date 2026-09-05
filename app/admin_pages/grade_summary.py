@@ -46,17 +46,76 @@ def _fmt_units(value):
     return str(int(value)) if value == int(value) else str(value.normalize())
 
 
-def _finalization_section(session, current_user, enrollment: Enrollment) -> None:
+def _finalize_enrollment(session, current_user, enrollment: Enrollment, summary, now) -> int:
+    """The actual write side of finalizing one enrollment — shared by the
+    single Finalize button and the section-wide "Finalize all eligible"
+    action so the two can never drift apart. Returns the number of term
+    grades finalized (for the audit entry and the caller's tally)."""
+    session.add(
+        GradeFinalizationRecord(
+            scope_type=FinalizationScopeType.ANNUAL_ENROLLMENT,
+            enrollment_id=enrollment.id,
+            finalized_by_user_id=current_user.id,
+            finalized_at=now,
+            status=FinalizationRecordStatus.FINALIZED,
+        )
+    )
+    term_grades = session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
+    for tg in term_grades:
+        tg.status = GradeWorkflowStatus.FINALIZED
+        tg.finalized_by_user_id = current_user.id
+        tg.finalized_at = now
+        tg.version += 1
+    # Freeze the permanent academic record (§38). Everything it shows is
+    # copied now, so renaming a subject or editing the grading policy in a
+    # later year can't rewrite this one.
+    capture_academic_record(session, enrollment.id, current_user.id)
+    audit_service.record(
+        session,
+        action=audit_service.GRADE_FINALIZED,
+        object_type="enrollments",
+        object_id=enrollment.id,
+        user_id=current_user.id,
+        new={
+            "general_average": summary.general_average if summary else None,
+            "term_grades_finalized": len(term_grades),
+        },
+    )
+    return len(term_grades)
+
+
+def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> tuple[int, int, int]:
+    """Finalizes every enrollment in the batch whose annual record is
+    COMPLETE and not already finalized. Returns (finalized, incomplete,
+    already_finalized) so the caller can report what happened to each.
+
+    `panel["annual"]` and `panel["finalization"]` are already loaded flat
+    for the whole section (see `_panel_data`), so deciding who's eligible
+    costs nothing here — only `_finalize_enrollment`'s per-learner
+    academic-record freeze (§38) still runs once per learner, because each
+    one really does get its own snapshot.
+    """
+    finalized = incomplete = already = 0
+    now = datetime.now(timezone.utc)
+    for enrollment in enrollments:
+        latest_record = panel["finalization"].get(enrollment.id)
+        if latest_record is not None and latest_record.status == FinalizationRecordStatus.FINALIZED:
+            already += 1
+            continue
+        summary = panel["annual"].get(enrollment.id)
+        if summary is None or summary.completion_status != CompletionStatus.COMPLETE:
+            incomplete += 1
+            continue
+        _finalize_enrollment(session, current_user, enrollment, summary, now)
+        finalized += 1
+    return finalized, incomplete, already
+
+
+def _finalization_section(session, current_user, enrollment: Enrollment, summary, latest_record) -> None:
     st.subheader("Finalization")
     # A School Head reviews finalized records (§3E) but never finalizes or
     # reopens one, so the state is shown and the controls are not drawn.
     read_only = current_user.is_read_only()
-    latest_record = (
-        session.query(GradeFinalizationRecord)
-        .filter_by(scope_type=FinalizationScopeType.ANNUAL_ENROLLMENT, enrollment_id=enrollment.id)
-        .order_by(GradeFinalizationRecord.created_at.desc())
-        .first()
-    )
     is_finalized = latest_record is not None and latest_record.status == FinalizationRecordStatus.FINALIZED
 
     if is_finalized:
@@ -110,7 +169,6 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
                         st.rerun()
         return
 
-    summary = session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
     if read_only:
         st.caption("Not finalized yet. Finalizing is done by the registrar or adviser.")
         return
@@ -122,37 +180,7 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
             "missing grades and Recompute above first."
         )
     if st.button("Finalize", key=f"finalize_{enrollment.id}", disabled=not can_finalize):
-        now = datetime.now(timezone.utc)
-        session.add(
-            GradeFinalizationRecord(
-                scope_type=FinalizationScopeType.ANNUAL_ENROLLMENT,
-                enrollment_id=enrollment.id,
-                finalized_by_user_id=current_user.id,
-                finalized_at=now,
-                status=FinalizationRecordStatus.FINALIZED,
-            )
-        )
-        term_grades = session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
-        for tg in term_grades:
-            tg.status = GradeWorkflowStatus.FINALIZED
-            tg.finalized_by_user_id = current_user.id
-            tg.finalized_at = now
-            tg.version += 1
-        # Freeze the permanent academic record (§38). Everything it shows
-        # is copied now, so renaming a subject or editing the grading
-        # policy in a later year can't rewrite this one.
-        capture_academic_record(session, enrollment.id, current_user.id)
-        audit_service.record(
-            session,
-            action=audit_service.GRADE_FINALIZED,
-            object_type="enrollments",
-            object_id=enrollment.id,
-            user_id=current_user.id,
-            new={
-                "general_average": summary.general_average,
-                "term_grades_finalized": len(term_grades),
-            },
-        )
+        _finalize_enrollment(session, current_user, enrollment, summary, datetime.now(timezone.utc))
         try_commit(
             session,
             "Finalized — grades are read-only until an audited reopen, and the "
@@ -162,13 +190,14 @@ def _finalization_section(session, current_user, enrollment: Enrollment) -> None
 
 
 def _panel_data(session, enrollments, school_year_id) -> dict:
-    """The three lookups each learner's panel used to make for itself.
+    """The lookups each learner's panel used to make for itself.
 
     `load_report_context` already spared the subject table its queries,
-    but the two metric rows above it were still one query per learner
-    each — and Streamlit runs an expander's body whether or not it is
-    open, so a collapsed section still paid for all of them on every
-    rerun. Three queries flat, instead of three per learner.
+    but the metric rows above it — plus the finalization-status check
+    below the subject table — were still one query per learner each, and
+    Streamlit runs an expander's body whether or not it is open, so a
+    collapsed section still paid for all of them on every rerun. Four
+    queries flat, instead of four per learner.
     """
     ids = [e.id for e in enrollments]
     annual = {
@@ -191,7 +220,25 @@ def _panel_data(session, enrollments, school_year_id) -> dict:
         t.id: t.name
         for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
     }
-    return {"annual": annual, "terms": per_term, "term_names": term_names}
+    # Latest ANNUAL_ENROLLMENT finalization record per learner, newest
+    # first so the first one kept per enrollment_id is the latest.
+    finalization: dict = {}
+    for record in (
+        session.query(GradeFinalizationRecord)
+        .filter(
+            GradeFinalizationRecord.scope_type == FinalizationScopeType.ANNUAL_ENROLLMENT,
+            GradeFinalizationRecord.enrollment_id.in_(ids),
+        )
+        .order_by(GradeFinalizationRecord.created_at.desc())
+        .all()
+    ):
+        finalization.setdefault(record.enrollment_id, record)
+    return {
+        "annual": annual,
+        "terms": per_term,
+        "term_names": term_names,
+        "finalization": finalization,
+    }
 
 
 def _learner_detail(session, current_user, enrollment: Enrollment, context=None, panel=None):
@@ -260,7 +307,9 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
             st.rerun()
 
     st.divider()
-    _finalization_section(session, current_user, enrollment)
+    _finalization_section(
+        session, current_user, enrollment, summary, panel["finalization"].get(enrollment.id)
+    )
 
 
 def _section_subjects(session, section_id, school_year_id) -> list[Subject]:
@@ -284,7 +333,7 @@ def _section_subjects(session, section_id, school_year_id) -> list[Subject]:
 VIEW_OPTIONS = ["Term 1", "Term 2", "Term 3", "Final"]
 
 
-def _class_summary(session, enrollments: list[Enrollment], section_id, school_year_id) -> None:
+def _class_summary(session, enrollments: list[Enrollment], section_id, school_year_id, panel) -> None:
     st.subheader("Class summary")
     st.caption(
         "One column per subject. Pick a learner below to see their report-card "
@@ -293,13 +342,7 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
     view = st.radio("View", VIEW_OPTIONS, horizontal=True, key="class_summary_view")
 
     all_subjects = _section_subjects(session, section_id, school_year_id)
-    enrollment_ids = [e.id for e in enrollments]
-    summaries = {
-        s.enrollment_id: s
-        for s in session.query(AnnualGradeSummary)
-        .filter(AnnualGradeSummary.enrollment_id.in_(enrollment_ids))
-        .all()
-    }
+    summaries = panel["annual"]
     # One context for the whole roster, and one query for every learner
     # name — the database is ~85ms away, so anything issued per learner
     # dominates the page.
@@ -393,13 +436,40 @@ def render() -> None:
             st.info("No learners enrolled in this section yet.")
             return
 
-        if not current_user.is_read_only():
-            if st.button("Recompute all in this section"):
-                recompute_enrollment_grades_batch(session, [e.id for e in enrollments])
-                flash("success", f"Recomputed {len(enrollments)} learner(s).")
-                st.rerun()
+        # Loaded once, up front, so both bulk buttons below and every
+        # learner's panel further down (§38's finalization status included)
+        # read from the same flat, section-wide lookup instead of a query
+        # each.
+        panel = _panel_data(session, enrollments, sy_choice)
 
-        _class_summary(session, enrollments, section_choice, sy_choice)
+        if not current_user.is_read_only():
+            col_recompute, col_finalize = st.columns(2)
+            with col_recompute:
+                if st.button("Recompute all in this section"):
+                    recompute_enrollment_grades_batch(session, [e.id for e in enrollments])
+                    flash("success", f"Recomputed {len(enrollments)} learner(s).")
+                    st.rerun()
+            with col_finalize:
+                if st.button("Finalize all eligible in this section"):
+                    finalized, incomplete, already = finalize_eligible_enrollments(
+                        session, current_user, enrollments, panel
+                    )
+                    if finalized:
+                        try_commit(session, f"Finalized {finalized} learner(s).")
+                    parts = [f"Finalized {finalized} learner(s)."]
+                    if incomplete:
+                        parts.append(f"{incomplete} not yet complete.")
+                    if already:
+                        parts.append(f"{already} already finalized.")
+                    flash("success" if finalized else "info", " ".join(parts))
+                    st.rerun()
+            st.caption(
+                "Finalize all eligible locks the whole year (all terms) for every learner "
+                "whose annual record already reads COMPLETE — same rule as the per-learner "
+                "Finalize button below, just applied to the section at once."
+            )
+
+        _class_summary(session, enrollments, section_choice, sy_choice, panel)
 
         st.divider()
         st.subheader("Per-learner detail")
@@ -408,7 +478,6 @@ def render() -> None:
         # each, which at ~85ms per round trip is the difference between an
         # instant page and a forty-second one for a full section.
         detail_context = load_report_context(session, enrollments)
-        panel = _panel_data(session, enrollments, sy_choice)
         learners = {
             l.id: l
             for l in session.query(Learner)
