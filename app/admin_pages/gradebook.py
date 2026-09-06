@@ -241,6 +241,7 @@ def render() -> None:
                         previous = {
                             "official_grade": existing.official_grade,
                             "status": existing.status,
+                            "section": section.name,
                         }
                         existing.official_grade = grade_value
                         if existing.status == GradeWorkflowStatus.SUBMITTED:
@@ -300,7 +301,7 @@ def render() -> None:
                             object_type="term_grades",
                             object_id=existing.id,
                             user_id=current_user.id,
-                            previous={"status": GradeWorkflowStatus.DRAFT},
+                            previous={"status": GradeWorkflowStatus.DRAFT, "section": section.name},
                             new={
                                 "status": GradeWorkflowStatus.SUBMITTED,
                                 "official_grade": existing.official_grade,

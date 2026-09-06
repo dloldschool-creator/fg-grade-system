@@ -15,6 +15,7 @@ this page into hundreds of pages to click through.
 
 import os
 import tempfile
+import uuid
 from datetime import datetime, time, timedelta, timezone
 
 import pandas as pd
@@ -69,6 +70,7 @@ ACTION_GROUPS = {
     ],
     "Configuration": [
         audit_service.SUBJECT_OFFERING_CHANGED,
+        audit_service.SUBJECT_UNITS_CHANGED,
         audit_service.CALENDAR_DAY_CHANGED,
     ],
     # Its own group: "who can get into this system, and who gave them the
@@ -78,6 +80,14 @@ ACTION_GROUPS = {
         audit_service.USER_CREATED,
         audit_service.USER_ROLES_CHANGED,
         audit_service.USER_PASSWORD_RESET,
+    ],
+    # Who may encode grades for a section is an access grant (see
+    # teacher_assignment_service.py's module docstring) — its own group
+    # for the same reason Accounts is: asked on its own, not while
+    # looking through subject-catalog edits.
+    "Teaching Assignments": [
+        audit_service.TEACHER_ASSIGNED,
+        audit_service.TEACHER_UNASSIGNED,
     ],
     "Awards": [audit_service.AWARD_OVERRIDDEN, audit_service.AWARD_OVERRIDE_CLEARED],
     "Data": [
@@ -89,14 +99,36 @@ ACTION_GROUPS = {
 ALL_ACTIONS = [action for actions in ACTION_GROUPS.values() for action in actions]
 
 
-def _format_value(value) -> str:
+def _resolve_user(raw, users: dict) -> str:
+    """A user id stored inside a previous/new payload (e.g.
+    `teacher_user_id`) reads as a bare UUID in the table; show the name
+    the rest of the page already shows for the `Who` column instead."""
+    try:
+        user = users.get(uuid.UUID(str(raw)))
+    except (ValueError, TypeError):
+        return str(raw)
+    return user.full_name if user else "(deleted user)"
+
+
+def _format_value(value, users: dict | None = None) -> str:
     """A JSONB blob is unreadable in a table cell; flatten it to
-    `field: value` pairs."""
+    `field: value` pairs. Any field ending in `_user_id`/`_user_ids` — the
+    shape `teacher_assignment_service.py` writes — is resolved to the
+    user's name rather than left as a bare UUID."""
     if not value:
         return ""
     if not isinstance(value, dict):
         return str(value)
-    return ", ".join(f"{k}: {v}" for k, v in value.items())
+    users = users or {}
+
+    def render(k, v):
+        if k.endswith("_user_ids") and isinstance(v, (list, tuple)):
+            v = [_resolve_user(item, users) for item in v]
+        elif k.endswith("_user_id") and v is not None:
+            v = _resolve_user(v, users)
+        return f"{k}: {v}"
+
+    return ", ".join(render(k, v) for k, v in value.items())
 
 
 def _store_export(data: bytes, before: datetime, count: int) -> None:
@@ -307,10 +339,17 @@ def render() -> None:
                             ),
                             "Action": entry.action,
                             "Object": entry.object_type,
-                            "Was": _format_value(entry.previous_value),
-                            "Became": _format_value(entry.new_value),
+                            "Was": _format_value(entry.previous_value, users),
+                            "Became": _format_value(entry.new_value, users),
                             "Reason": entry.reason or "",
-                            "IP": entry.ip_address or "",
+                            # IP is hidden here, not removed: on Streamlit
+                            # Community Cloud, _request_metadata()'s
+                            # X-Forwarded-For fallback surfaces the
+                            # platform's own internal (10.x) network, not
+                            # the visitor's real address, so it currently
+                            # reads as noise rather than evidence. The
+                            # column is still in AuditLog.ip_address if
+                            # this ever becomes reliable on another host.
                         }
                         for entry in entries
                     ]
@@ -320,7 +359,7 @@ def render() -> None:
             )
 
             if total_pages > 1:
-                col_prev, col_label, col_next = st.columns([1, 2, 1])
+                col_prev, col_label, col_next, col_jump = st.columns([1, 2, 1, 1.4])
                 with col_prev:
                     if st.button("← Previous", disabled=page <= 1, width="stretch"):
                         st.session_state[_PAGE_KEY] = page - 1
@@ -335,6 +374,20 @@ def render() -> None:
                     if st.button("Next →", disabled=page >= total_pages, width="stretch"):
                         st.session_state[_PAGE_KEY] = page + 1
                         st.rerun()
+                with col_jump:
+                    with st.form("audit_log_jump", border=False):
+                        jump_col, go_col = st.columns([2, 1])
+                        target = jump_col.number_input(
+                            "Go to page",
+                            min_value=1,
+                            max_value=total_pages,
+                            value=page,
+                            step=1,
+                            label_visibility="collapsed",
+                        )
+                        if go_col.form_submit_button("Go") and target != page:
+                            st.session_state[_PAGE_KEY] = int(target)
+                            st.rerun()
 
         grand_total = session.query(AuditLog).count()
         _render_archive_section(session, current_user, grand_total)

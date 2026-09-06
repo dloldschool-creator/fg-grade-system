@@ -20,6 +20,7 @@ rows — is counted in Postgres and never crosses the wire; see
 """
 
 import calendar as _calendar
+from datetime import date as _date
 
 import altair as alt
 import pandas as pd
@@ -672,14 +673,23 @@ def _render_attendance_section(school_year_id: str, scope_ids) -> None:
     labels = {
         (year, month): f"{_calendar.month_name[month]} {year}" for year, month in months
     }
-    # Latest month first: the question is almost always about the month
-    # just gone, not the one the year opened with.
-    options = list(reversed(months))
+    # Oldest first, the way a calendar reads. The default below is picked
+    # by today's actual date rather than by list position — the calendar
+    # is generated for the whole school year up front, so the
+    # chronologically last month in `months` is often a future one (the
+    # year's closing month), not "the month that just happened".
+    options = list(months)
     _forget_stale("insights_month", options)
+    today = _date.today()
+    default_index = next(
+        (i for i, ym in enumerate(options) if ym == (today.year, today.month)),
+        len(options) - 1,  # today's month isn't on the calendar yet — fall back to the latest one
+    )
     chosen = st.selectbox(
         "Month",
         options=options,
         format_func=lambda v: labels[v],
+        index=default_index,
         key="insights_month",
     )
     year, month = chosen
