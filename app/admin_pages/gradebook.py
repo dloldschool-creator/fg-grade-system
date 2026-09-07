@@ -5,7 +5,7 @@ import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes
+from app.admin_pages._helpers import clear_text_fields, flash, generation_key, get_session, render_flashes
 from app.auth import require_role
 from app.grading_engine import round_half_up
 from app.grading_service import recompute_enrollment_grades_batch
@@ -155,8 +155,22 @@ def render() -> None:
             .all()
         }
 
+        # For the audit trail below — GRADE_CHANGED and GRADE_SUBMITTED read
+        # naturally as "who" (teacher) and "what" (grade), but not "whose
+        # record", since object_id is the term_grades row, not the learner.
+        learner_names = {
+            e.id: f"{learners[e.learner_id].last_name}, {learners[e.learner_id].first_name}"
+            for e in roster
+            if e.learner_id in learners
+        }
+
         st.subheader(f"{subject.official_name} — {term.name}")
         st.caption("Leave a grade blank if it isn't ready yet. Never type 0 to mean that.")
+        st.caption(
+            "Already encoded and need it blank again — dropped, transferred, or "
+            "entered in error? Tick **Blank** next to it and say why; the number "
+            "box alone can't be cleared once it has a value."
+        )
 
         st.caption(
             "You can still edit a grade after submitting — doing so puts it back to "
@@ -173,13 +187,13 @@ def render() -> None:
                     GradeWorkflowStatus.VERIFIED,
                     GradeWorkflowStatus.FINALIZED,
                 }
-                col1, col2, col3 = st.columns([4, 2, 2])
+                col1, col2, col3, col4, col5 = st.columns([3, 1.6, 1.1, 2.4, 1.6])
                 col1.write(f"{learner.last_name}, {learner.first_name}" if learner else "?")
                 if locked:
                     col2.write(
                         f"{int(existing.official_grade)}" if existing.official_grade is not None else "—"
                     )
-                    col3.caption(existing.status.value)
+                    col5.caption(existing.status.value)
                 else:
                     # 60-100 mirrors the seeded default grading policy's
                     # min/max (app/seed.py) — not resolved per-offering
@@ -196,30 +210,103 @@ def render() -> None:
                     # whole numbers (§18 and friends all ROUND()); typed
                     # values still get explicitly re-rounded at save time
                     # below rather than trusting the widget alone.
-                    grade_inputs[enrollment.id] = col2.number_input(
+                    # generation_key here too, not just on the checkbox
+                    # below: a cleared grade must render as a genuinely
+                    # blank box next time, not the last-typed number the
+                    # widget would otherwise keep showing from its own
+                    # frontend state (see the note on the checkbox key).
+                    number_value = col2.number_input(
                         "Grade",
                         min_value=60.0,
                         max_value=100.0,
                         value=float(existing.official_grade) if existing and existing.official_grade is not None else None,
                         step=1.0,
                         format="%.0f",
-                        key=f"grade_{offering.id}_{enrollment.id}",
+                        key=generation_key(f"gradebook_{offering.id}", f"grade_{enrollment.id}"),
                         label_visibility="collapsed",
                     )
-                    col3.caption(existing.status.value.lower() if existing else "not yet encoded")
+                    has_grade = existing is not None and existing.official_grade is not None
+                    # A number_input rendered with a real starting value can
+                    # never be typed back to blank — Streamlit only makes a
+                    # widget clearable when it *first* renders with
+                    # value=None (see NumberInputSerde.deserialize: an empty
+                    # submission falls back to the widget's original default
+                    # rather than None). So a learner who drops out, transfers,
+                    # or was graded in error has no way back to "not yet
+                    # encoded" through the box itself — this checkbox is the
+                    # only path, and it wins over whatever the box shows.
+                    # generation_key, not a bare f-string: a checkbox inside
+                    # st.form keeps its checked state in the *frontend* too,
+                    # so popping session_state alone leaves the box still
+                    # showing ticked after the rerun (the same trap
+                    # clear_text_fields exists for). A fresh key after a
+                    # successful clear is the only reset that reaches the
+                    # browser — see the reset below, after commit.
+                    clear = (
+                        col3.checkbox(
+                            "Blank",
+                            key=generation_key(f"gradebook_{offering.id}", f"clear_{enrollment.id}"),
+                            help="Clear this grade back to not-yet-encoded.",
+                        )
+                        if has_grade
+                        else False
+                    )
+                    # Always rendered (not only once ticked): a checkbox
+                    # inside st.form doesn't trigger a rerun on its own, so
+                    # there is no live moment to reveal this field after the
+                    # tick — it has to already be there for Save to read.
+                    # Required only if the tick is on; enforced at Save,
+                    # below, so the empty case can point back at the learner
+                    # by name instead of failing silently.
+                    reason = (
+                        col4.text_input(
+                            "Reason",
+                            key=generation_key(f"gradebook_{offering.id}", f"reason_{enrollment.id}"),
+                            placeholder="Reason for blanking (required if ticked)",
+                            label_visibility="collapsed",
+                        )
+                        if has_grade
+                        else ""
+                    )
+                    grade_inputs[enrollment.id] = (number_value, clear, reason)
+                    col5.caption(existing.status.value.lower() if existing else "not yet encoded")
 
             save = st.form_submit_button("Save grades")
             submit = st.form_submit_button("Submit all draft grades")
 
             if save:
+                # §50: blanking is the one edit here with no other trace of
+                # *why* — a typed-over grade still has the old number in the
+                # audit log, but a blank tells you nothing on its own about
+                # whether it's a dropout, a transfer, or a typo undone. Checked
+                # before anything is written, so a missing reason blocks the
+                # whole save rather than silently skipping just that row.
+                missing_reason = [
+                    learner_names.get(enrollment_id, "?")
+                    for enrollment_id, (_raw_value, clear, reason) in grade_inputs.items()
+                    if clear and not (reason or "").strip()
+                ]
+                if missing_reason:
+                    flash(
+                        "error",
+                        "Ticked Blank but no reason given for: "
+                        + ", ".join(missing_reason)
+                        + ". Fill in why before saving.",
+                    )
+                    st.rerun()
+
                 changed = 0
                 reverted = 0
                 touched_enrollment_ids = []
-                # (row, action, previous, new) — recorded after one flush
-                # below, since a brand-new row has no id until then.
+                # (row, action, previous, new, reason) — recorded after one
+                # flush below, since a brand-new row has no id until then.
                 pending_audits = []
-                for enrollment_id, raw_value in grade_inputs.items():
-                    grade_value = _round_grade(raw_value)
+                for enrollment_id, (raw_value, clear, reason) in grade_inputs.items():
+                    # The checkbox wins over the box: it's the only way to
+                    # actually reach None once a grade has been typed in,
+                    # so a ticked box means blank no matter what the
+                    # (unclearable) number_input still displays.
+                    grade_value = None if clear else _round_grade(raw_value)
                     existing = existing_grades.get(enrollment_id)
                     if existing is None:
                         if grade_value is None:
@@ -233,7 +320,7 @@ def render() -> None:
                         )
                         session.add(created)
                         pending_audits.append(
-                            (created, audit_service.GRADE_CREATED, None, {"official_grade": grade_value})
+                            (created, audit_service.GRADE_CREATED, None, {"official_grade": grade_value}, None)
                         )
                         changed += 1
                         touched_enrollment_ids.append(enrollment_id)
@@ -242,6 +329,7 @@ def render() -> None:
                             "official_grade": existing.official_grade,
                             "status": existing.status,
                             "section": section.name,
+                            "learner": learner_names.get(enrollment_id),
                         }
                         existing.official_grade = grade_value
                         if existing.status == GradeWorkflowStatus.SUBMITTED:
@@ -254,6 +342,7 @@ def render() -> None:
                                 audit_service.GRADE_CHANGED,
                                 previous,
                                 {"official_grade": grade_value, "status": existing.status},
+                                reason.strip() if clear else None,
                             )
                         )
                         changed += 1
@@ -261,7 +350,7 @@ def render() -> None:
                 try:
                     if pending_audits:
                         session.flush()
-                        for row, action, previous, new in pending_audits:
+                        for row, action, previous, new, audit_reason in pending_audits:
                             audit_service.record(
                                 session,
                                 action=action,
@@ -270,9 +359,18 @@ def render() -> None:
                                 user_id=current_user.id,
                                 previous=previous,
                                 new=new,
+                                reason=audit_reason,
                             )
                     session.commit()
                     recompute_enrollment_grades_batch(session, touched_enrollment_ids)
+                    if any(clear for _raw_value, clear, _reason in grade_inputs.values()):
+                        # Otherwise a cleared checkbox (and its reason box)
+                        # stays exactly as typed — in the browser, not just
+                        # session_state — after its row goes back to "not yet
+                        # encoded" and stops rendering, and both come back
+                        # pre-filled the moment the teacher types a new grade
+                        # in for that learner, silently re-blanking it again.
+                        clear_text_fields(f"gradebook_{offering.id}")
                     message = f"Saved ({changed} updated)." if changed else "No changes to save."
                     if reverted:
                         message += f" {reverted} reverted to DRAFT for re-submission."
@@ -301,7 +399,11 @@ def render() -> None:
                             object_type="term_grades",
                             object_id=existing.id,
                             user_id=current_user.id,
-                            previous={"status": GradeWorkflowStatus.DRAFT, "section": section.name},
+                            previous={
+                                "status": GradeWorkflowStatus.DRAFT,
+                                "section": section.name,
+                                "learner": learner_names.get(enrollment_id),
+                            },
                             new={
                                 "status": GradeWorkflowStatus.SUBMITTED,
                                 "official_grade": existing.official_grade,
