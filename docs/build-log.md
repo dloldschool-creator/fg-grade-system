@@ -1764,3 +1764,60 @@ current number.
       rule itself against the live sections — the last of which is what
       would notice an adviser's scope quietly becoming the whole school
       again.
+- [x] **A grade typed for one subject showed up in another** (2026-09-08,
+      reported from the live app: "a subject teacher teaches two subjects
+      in COWIE, event management services and effective communication.
+      whatever he enters and save in one subject reflects in the other" —
+      two screenshots of the Gradebook attached).
+      `app/admin_pages/gradebook.py` built each grade/clear/reason widget's
+      key via `generation_key(f"gradebook_{offering.id}", f"grade_{enrollment.id}")`.
+      `generation_key(form, name)` (`app/admin_pages/_helpers.py`) folds
+      `form` into a *generation counter lookup*, not into the returned
+      key — it returns `f"{name}#{generation}"`. So `form` varying by
+      offering did nothing to the actual Streamlit widget key; only `name`
+      does, and `name` was a bare `grade_<enrollment_id>`. A section's
+      roster — and so its enrollment ids — is the same across every
+      subject offered in it, so two different subjects taught by the same
+      teacher in the same section produced the **identical** widget key.
+      Streamlit's rule that a keyed widget's `value=` is honored only on
+      its first render, and every rerun after that reads
+      `session_state[key]` regardless of `value=`, is exactly what makes a
+      shared key show subject A's number inside subject B's box.
+      **Fix is at the call site, not in `generation_key`.** The offering id
+      was folded into `name` itself:
+      `generation_key(f"gradebook_{offering.id}", f"grade_{offering.id}_{enrollment.id}")`,
+      same for the `clear_` and `reason_` keys. A first attempt fixed it
+      the other way — folding `form` into `generation_key`'s own return
+      value — and broke `tests/test_add_form_reset.py`: `text_field()`
+      already embeds `form` into the `name` it passes down, so that change
+      double-prefixed every ordinary form key (`add_thing.add_thing.code#1`).
+      Reverted; `generation_key`'s contract (`form` scopes the generation
+      counter only, `name` must already be unique across every form it
+      could collide with) was correct all along, and is now spelled out in
+      its docstring so the next caller doesn't repeat the mistake. Full
+      suite green (1225 passed, 14 skipped) before push. Deployed at
+      `eed087e`, confirmed live via the app footer.
+      **Audited for actual damage, not just exposure.** Read-only scripts
+      against the live DB (never committed against it) found 9 teachers
+      across 12 teacher+section combos hold 2+ subjects in one section —
+      the exposed shape — of which 5 combos had both subjects open in the
+      same term, the highest-risk subset. Comparing saved `TermGrade`
+      values learner-by-learner, two combos (MISCHER, EDISON) first looked
+      "SUSPICIOUS" on a narrow matching-subset exact-match rate (25% and
+      57%). Pulling the **full** roster's grades for both, not just the
+      matching subset, showed every pair tightly correlated by 1-4 points
+      rather than identical — the ordinary signature of one teacher
+      independently grading similar students in two subjects, not a
+      bleed-over copy. Downgraded from "confirmed corruption" to "no
+      evidence of the bug in saved data": the narrower stat was misleading
+      on its own, and the full comparison is what settled it. The other 3
+      same-term combos (COWIE, MONTESSORI, SKINNER) showed no correlation
+      matching the bug's fingerprint either. The remaining 7 combos, where
+      the teacher's subjects fall in different terms, currently have
+      grades encoded in only one of their 2-3 subjects each — nothing yet
+      to compare, since those offerings are Term 2/3 and haven't opened.
+      **Net: exposure was real and widespread (9 teachers), but no saved
+      grade in the current database shows evidence of having actually
+      bled.** The fix closes it going forward; the 7 not-yet-checkable
+      combos are worth a second pass once their later-term subjects get
+      graded.
