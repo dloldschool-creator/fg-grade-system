@@ -1,12 +1,12 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, UniqueConstraint, func, text
+from sqlalchemy import Boolean, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDPKMixin
-from app.models.enums import AwardResult, AwardScope, PolicyVersionStatus
+from app.models.enums import AwardResult, AwardScope, CertificateLayout, PolicyVersionStatus
 
 
 class AwardPolicy(UUIDPKMixin, Base):
@@ -45,6 +45,20 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
         Boolean, default=False, server_default="false"
     )
     tier_thresholds: Mapped[dict | None] = mapped_column(JSONB)
+    # Certificate rendering, all optional — a version with none of these
+    # set falls back to the long-standing default (one signatory picked
+    # on the Awards page, standard wording, layout below).
+    certificate_layout: Mapped[CertificateLayout] = mapped_column(
+        default=CertificateLayout.ONE_PER_PAGE,
+        server_default=CertificateLayout.ONE_PER_PAGE.value,
+        nullable=False,
+    )
+    certificate_body_template: Mapped[str | None] = mapped_column(Text)
+    # list[{"name": str, "position": str}], up to 3 — in addition to the
+    # class adviser, who always signs and is never part of this list.
+    # Empty/NULL falls back to the single signatory typed on the Awards
+    # page (or School Info's school head for an ANNUAL policy).
+    signatory_overrides: Mapped[list | None] = mapped_column(JSONB)
     status: Mapped[PolicyVersionStatus] = mapped_column(
         default=PolicyVersionStatus.DRAFT, server_default=PolicyVersionStatus.DRAFT.value
     )

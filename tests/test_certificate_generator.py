@@ -1,6 +1,7 @@
 """Tests for app/certificate_generator.py — the wording rules and the
 one-per-page / two-per-page output shapes."""
 
+import io
 import re
 from datetime import date
 from decimal import Decimal
@@ -11,13 +12,17 @@ from reportlab.lib.pagesizes import landscape, letter
 from app.certificate_generator import (
     CertificateData,
     _citation,
+    _draw_certificate,
     certificate_award_name,
     formal_term_name,
     _given_line,
     _ordinal,
     generate_award_certificate,
+    generate_award_certificates_1up,
     generate_award_certificates_2up,
+    render_certificate_body,
 )
+from reportlab.pdfgen import canvas
 
 
 # --- What the award is called on the certificate ---------------------------
@@ -200,3 +205,76 @@ def test_two_up_page_count(count, expected_pages):
 
 def test_two_up_is_empty_pdf_for_no_certificates():
     assert _page_sizes(generate_award_certificates_2up([])) == []
+
+
+@pytest.mark.parametrize(
+    "count, expected_pages", [(0, 0), (1, 1), (2, 2), (5, 5)]
+)
+def test_one_up_batch_gives_every_certificate_its_own_page(count, expected_pages):
+    """The ONE_PER_PAGE counterpart to the 2-up batch function — no
+    pairing, no cut line, one full landscape page per certificate."""
+    pdf = generate_award_certificates_1up([_certificate() for _ in range(count)])
+    sizes = _page_sizes(pdf)
+    assert len(sizes) == expected_pages
+    assert all(size == tuple(round(v) for v in landscape(letter)) for size in sizes)
+
+
+# --- Custom certificate body -------------------------------------------------
+
+
+def test_custom_body_substitutes_the_documented_variables():
+    data = _certificate(term_name="Term 1")
+    template = "for {award_name} — {average_label} {average} — {school_year} at {venue} on {date}."
+    lines = render_certificate_body(template, data)
+    assert lines == [
+        "for WITH HONORS — First Term Average 92 — 2026-2027 at FGNMHS Covered Court "
+        "on 17th of October 2026."
+    ]
+
+
+def test_custom_body_handles_multiple_lines():
+    lines = render_certificate_body("Line one {learner_name}\nLine two", _certificate())
+    assert lines == ["Line one DELA CRUZ, JUAN", "Line two"]
+
+
+def test_custom_body_leaves_an_unknown_placeholder_literal_rather_than_raising():
+    """A typo in an admin-typed template shouldn't take down certificate
+    generation for a whole section."""
+    lines = render_certificate_body("Congrats {nonexistent_field}!", _certificate())
+    assert lines == ["Congrats {nonexistent_field}!"]
+
+
+def test_custom_body_flows_through_a_real_certificate():
+    """End-to-end: a version with a custom body still renders one valid
+    landscape page, same shape as the default wording."""
+    data = _certificate(custom_body_template="Custom wording for {learner_name}.")
+    sizes = _page_sizes(generate_award_certificate(**data.__dict__))
+    assert sizes == [tuple(round(v) for v in landscape(letter))]
+
+
+# --- Signatory overrides -----------------------------------------------------
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3])
+def test_extra_signatories_render_without_error_at_every_allowed_count(n):
+    """Up to 3 override signatories, alongside the adviser who is always
+    drawn separately — draws for 1 through 4 total signature blocks."""
+    overrides = [(f"SIGNATORY {i}", f"Position {i}") for i in range(n)]
+    data = _certificate(extra_signatories=overrides)
+    buffer = io.BytesIO()
+    width, height = landscape(letter)
+    c = canvas.Canvas(buffer, pagesize=(width, height))
+    _draw_certificate(c, data, x=0, y=0, width=width, height=height)
+    c.showPage()
+    c.save()
+    assert buffer.getvalue().startswith(b"%PDF")
+
+
+def test_extra_signatories_replaces_the_school_head_slot_wholesale():
+    """None means "use school_head_name/position" (the long-standing
+    default); a list — even an empty one — means the policy has taken
+    over the signature block entirely."""
+    with_override = _certificate(extra_signatories=[])
+    assert with_override.extra_signatories == []
+    default = _certificate()
+    assert default.extra_signatories is None

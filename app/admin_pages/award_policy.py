@@ -9,8 +9,38 @@ from app.admin_pages._helpers import (
 )
 from app.auth import require_role
 from app.models.awards import AwardPolicy, AwardPolicyVersion
-from app.models.enums import AwardScope, PolicyVersionStatus
+from app.models.enums import AwardScope, CertificateLayout, PolicyVersionStatus
 from app.models.organization import SchoolYear
+
+_GUIDE_MARKDOWN = """
+**Important:** Don't edit a version that has already been used to give out awards — create a new version instead.
+
+Versions aren't editable in place. So, the actual flow to change a threshold (e.g. raising the honors cutoff for next year) is: leave the old version alone, open "Create new version," pick the new/next school year, re-enter all the same settings with your updated numbers, and submit. The old version stays as a historical record of what was used to judge that year's awards.
+
+On the Awards page itself, you'll then pick the school year and the specific version (by policy name + version number) from a dropdown to run eligibility for a section.
+
+**Award Policy** = just the named award itself — e.g. "Academic Excellence" or "Legacy Tiered Honors". A policy row only has a name and description. It holds no rules on its own.
+
+**Award Policy Version** = the actual rules for that award — thresholds, what average it's judged against, requirements — scoped to one school year. Each policy can have several versions over time (v1, v2, v3...), and the version is what the Awards page actually uses when computing eligibility.
+
+**"Add award policy"**
+
+Creates a brand-new named award type. Use this for adding a genuinely new award beyond the two that already exist (Academic Excellence, Legacy Tiered Honors) — just a name + optional description, no rules yet. After adding one, you immediately need to create a version for it (see below) or it can't be used.
+
+**"Create new version for [Policy]"**
+
+This is where you configure the rules, per school year:
+
+* **Effective school year** — which SY this version applies to. The Awards page only offers versions whose school year matches the year you're working in.
+* **Judged against (scope)** — TERM (judged against each term's Term Average, awardable up to 3×/year — the Legacy Honors shape) or ANNUAL (judged once, against the year's General Average — the Academic Excellence shape).
+* **Require complete record / no derogatory record / no failed subject** — checkboxes for eligibility.
+* **Single-tier thresholds** — a flat min average and/or min lowest single grade. Leave both at 0 to skip.
+* **Tiered thresholds** — up to 3 named tiers (e.g. "With Honors", "With High Honors", "With Highest Honors"), each with its own minimum. Filling these in overrides the single-tier fields above.
+* **Certificate layout** — one certificate per page (an official issuance) or two per page (saves paper for classroom-level recognition). The Awards page's batch print picks this up automatically.
+* **Custom certificate body** — optional; replaces the default certificate wording with your own, with variables filled in for you. Leave blank to keep the standard wording.
+* **Signatory overrides** — optional, up to 3, in addition to the class adviser (who always signs and is never one of these 3). Leave blank to keep the single default signatory from School Info.
+* **Status** — DRAFT / ACTIVE / ARCHIVED. This is just a label for bookkeeping — the Awards page's version picker lists every version effective for the chosen school year regardless of status, so an ACTIVE and a DRAFT version for the same year would both show up as selectable options. Don't rely on status alone to hide a half-configured version — use the school year field to keep it out of the picker until you're ready.
+"""
 
 
 def _tier_editor(key_prefix: str, existing: list[dict] | None = None) -> list[dict]:
@@ -42,10 +72,8 @@ def _tier_editor(key_prefix: str, existing: list[dict] | None = None) -> list[di
 def render() -> None:
     require_role("SUPER_ADMIN")
     st.title("Award Policy")
-    st.caption(
-        "Two separate award policies. Don't edit a version that has already been "
-        "used to give out awards — create a new version instead."
-    )
+    with st.expander("Award Policy Guide"):
+        st.markdown(_GUIDE_MARKDOWN)
     render_flashes()
 
     with get_session() as session:
@@ -88,12 +116,21 @@ def render() -> None:
                     if v.min_lowest_final_grade is not None:
                         parts.append(f"lowest grade≥{float(v.min_lowest_final_grade)}")
                     shape = ", ".join(parts) or "no thresholds set"
+                extras = []
+                if v.certificate_layout == CertificateLayout.TWO_PER_PAGE:
+                    extras.append("2 certificates/page")
+                if v.certificate_body_template:
+                    extras.append("custom certificate body")
+                if v.signatory_overrides:
+                    extras.append(f"{len(v.signatory_overrides)} signatory override(s)")
+                extras_suffix = f" — {', '.join(extras)}" if extras else ""
                 st.write(
                     f"**v{v.version_number}** ({v.status.value}) — **{scope_label}** — "
                     f"{'complete record required, ' if v.require_complete_record else ''}"
                     f"{'no derogatory record, ' if v.require_no_derogatory_record else ''}"
                     f"{'no failed subject, ' if v.require_no_failed_subject else ''}"
                     f"{shape} — effective {sy_by_id.get(v.effective_school_year_id).name if v.effective_school_year_id else '—'}"
+                    f"{extras_suffix}"
                 )
 
             with st.expander(f"Create new version for {policy.name}"):
@@ -143,6 +180,48 @@ def render() -> None:
                     st.markdown("**Tiered thresholds** (fill in to make this a tiered policy like Legacy Honors — overrides the single-tier fields above)")
                     tiers = _tier_editor(f"tier_{policy.id}")
 
+                    certificate_layout = st.radio(
+                        "Certificate layout",
+                        options=[CertificateLayout.ONE_PER_PAGE.value, CertificateLayout.TWO_PER_PAGE.value],
+                        format_func=lambda v: (
+                            "One certificate per page (official issuance)"
+                            if v == CertificateLayout.ONE_PER_PAGE.value
+                            else "Two certificates per page (classroom recognition, saves paper)"
+                        ),
+                        index=0,
+                        key=f"layout_{policy.id}",
+                    )
+
+                    st.markdown(
+                        "**Custom certificate body** (optional — leave blank to keep the standard "
+                        "wording). Placeholders filled in for you: `{learner_name}`, `{award_name}`, "
+                        "`{average}`, `{average_label}`, `{date}`, `{school_year}`, `{venue}`."
+                    )
+                    certificate_body_template = st.text_area(
+                        "Custom body text",
+                        key=f"body_{policy.id}",
+                        placeholder=(
+                            "for earning {award_name} with a {average_label} of {average}.\n"
+                            "Given this {date} at {venue}, during School Year {school_year}."
+                        ),
+                    )
+
+                    st.markdown(
+                        "**Signatory overrides** (optional, up to 3 — in addition to the class "
+                        "adviser, who always signs and is never one of these 3). Leave a row's name "
+                        "blank to omit it; if none are filled in, the certificate falls back to the "
+                        "single signatory set on the Awards page."
+                    )
+                    signatory_overrides = []
+                    for i in range(3):
+                        scol1, scol2 = st.columns(2)
+                        sig_name = scol1.text_input(f"Signatory {i + 1} name", key=f"signame_{policy.id}_{i}")
+                        sig_position = scol2.text_input(
+                            f"Signatory {i + 1} position", key=f"sigpos_{policy.id}_{i}"
+                        )
+                        if sig_name:
+                            signatory_overrides.append({"name": sig_name, "position": sig_position})
+
                     status = st.selectbox(
                         "Status", options=[s.value for s in PolicyVersionStatus], key=f"status_{policy.id}"
                     )
@@ -160,6 +239,9 @@ def render() -> None:
                                 min_general_average=min_general_average or None,
                                 min_lowest_final_grade=min_lowest_final_grade or None,
                                 tier_thresholds=tiers or None,
+                                certificate_layout=CertificateLayout(certificate_layout),
+                                certificate_body_template=certificate_body_template or None,
+                                signatory_overrides=signatory_overrides or None,
                                 status=PolicyVersionStatus(status),
                             )
                         )

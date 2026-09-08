@@ -16,10 +16,11 @@ from app.certificate_generator import (
     CertificateData,
     certificate_award_name,
     generate_award_certificate,
+    generate_award_certificates_1up,
     generate_award_certificates_2up,
 )
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
-from app.models.enums import AwardResult, AwardScope
+from app.models.enums import AwardResult, AwardScope, CertificateLayout
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
@@ -76,8 +77,13 @@ def _load_award_context(session, enrollments, version, version_choice, term_choi
 
 def _certificate_data(
     school, school_year, learner, award, average, term_name,
-    adviser, signatory, position, issued_on, venue,
+    adviser, signatory, position, issued_on, venue, version,
 ) -> CertificateData:
+    extra_signatories = None
+    if version.signatory_overrides:
+        extra_signatories = [
+            (s.get("name", ""), s.get("position", "")) for s in version.signatory_overrides
+        ]
     return CertificateData(
         school_name=school.school_name,
         schools_division=school.schools_division,
@@ -93,14 +99,18 @@ def _certificate_data(
         adviser_name=adviser.full_name if adviser else "",
         school_head_name=signatory or "",
         school_head_position=position or "",
+        extra_signatories=extra_signatories,
+        custom_body_template=version.certificate_body_template,
     )
 
 
 def _batch_download(
     enrollments, context, term_name,
-    school, school_year, adviser, signatory, position, issued_on, venue,
+    school, school_year, adviser, signatory, position, issued_on, venue, version,
 ) -> None:
-    """One PDF for every eligible learner in the section, two to a page.
+    """One PDF for every eligible learner in the section, laid out per
+    the policy version's certificate_layout — one full page each, or two
+    to a page to save paper on classroom-level recognition.
 
     Reads the preloaded context rather than querying per learner, and
     renders nothing until asked: `st.download_button(data=...)` evaluates
@@ -119,7 +129,7 @@ def _batch_download(
             _certificate_data(
                 school, school_year, learner, award,
                 context["averages"].get(enrollment.id), term_name,
-                adviser, signatory, position, issued_on, venue,
+                adviser, signatory, position, issued_on, venue, version,
             )
         )
 
@@ -130,13 +140,20 @@ def _batch_download(
         st.info("Set a Recognition Date before printing certificates.")
         return
 
-    pages = -(-len(eligible) // 2)  # ceil
-    st.caption(
-        f"{len(eligible)} eligible learner(s) — {pages} sheet(s), two half-page "
-        "certificates per sheet with a cut line between them."
+    two_up = version.certificate_layout == CertificateLayout.TWO_PER_PAGE
+    pages = -(-len(eligible) // 2) if two_up else len(eligible)
+    layout_caption = (
+        "two half-page certificates per sheet with a cut line between them"
+        if two_up
+        else "one certificate per sheet"
     )
+    st.caption(f"{len(eligible)} eligible learner(s) — {pages} sheet(s), {layout_caption}.")
     if st.button(f"Build {len(eligible)} certificate(s)", type="primary"):
-        data = generate_award_certificates_2up(eligible)
+        data = (
+            generate_award_certificates_2up(eligible)
+            if two_up
+            else generate_award_certificates_1up(eligible)
+        )
         st.success(f"Ready — {len(data) / 1024:,.0f} KB.")
         st.download_button(
             "Download certificates PDF",
@@ -320,7 +337,7 @@ def render() -> None:
 
         _batch_download(
             enrollments, context, term_name,
-            school, school_year, adviser, signatory, position, issued_on, venue,
+            school, school_year, adviser, signatory, position, issued_on, venue, version,
         )
         st.divider()
 
@@ -386,7 +403,7 @@ def render() -> None:
                         pdf_bytes = generate_award_certificate(
                             **_certificate_data(
                                 school, school_year, learner, award, average, term_name,
-                                adviser, signatory, position, issued_on, venue,
+                                adviser, signatory, position, issued_on, venue, version,
                             ).__dict__
                         )
                         st.download_button(

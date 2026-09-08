@@ -119,6 +119,20 @@ class AwardResult(str, enum.Enum):
     NOT_ELIGIBLE = "NOT_ELIGIBLE"
 
 
+class CertificateLayout(str, enum.Enum):
+    """How a batch of certificates for one award policy version print.
+
+    ONE_PER_PAGE — a full landscape page each, for an official issuance
+    (Academic Excellence). TWO_PER_PAGE — two half-page certificates per
+    portrait sheet, to save paper on classroom-level recognition (the
+    tiered Honors). Chosen on the Award Policy Version and used
+    automatically when the Awards page builds a batch.
+    """
+
+    ONE_PER_PAGE = "ONE_PER_PAGE"
+    TWO_PER_PAGE = "TWO_PER_PAGE"
+
+
 class ReportType(str, enum.Enum):
     SF2 = "SF2"
     SF9_G11 = "SF9_G11"

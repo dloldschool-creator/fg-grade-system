@@ -4,18 +4,28 @@ design with no pre-existing official DepEd template to preserve pixel-for-
 pixel (unlike SF9/SF2), so the layout lives here rather than in a template
 file rendered by `app/xlsx_render.py`.
 
-Two output shapes share one drawing routine:
+Output shapes share one drawing routine:
 
-- **one per page** (`generate_award_certificate`) — full landscape Letter,
-  used for the Academic Excellence Award, which is a DepEd order.
+- **one per page** (`generate_award_certificate` for a single learner,
+  `generate_award_certificates_1up` for a batch) — full landscape Letter,
+  the shape for an official issuance like the Academic Excellence Award.
 - **two per page** (`generate_award_certificates_2up`) — two half-page
   certificates on portrait Letter with a cut line between them, to save
   paper on the tiered Honors, which is classroom-level recognition rather
   than an official issuance.
 
+Which batch shape to use is a per-`AwardPolicyVersion` setting
+(`certificate_layout`), not a hardcoded choice — `app/admin_pages/awards.py`
+reads it off the version.
+
 `_draw_certificate` draws into an arbitrary rectangle at an arbitrary
-scale, so both callers use exactly the same layout and nothing can drift
-between them.
+scale, so every caller uses exactly the same layout and nothing can drift
+between them. Two more things are optional per `CertificateData`, both
+sourced from the policy version and both None by default so the plain
+certificate is unchanged: `custom_body_template` (see
+`render_certificate_body`) replaces the standard citation wording, and
+`extra_signatories` (up to 3, alongside the adviser who is always drawn
+separately) replaces the single school-head signatory.
 """
 
 import io
@@ -92,6 +102,18 @@ class CertificateData:
     school_head_name: str
     school_head_position: str
     term_name: str | None = None
+    # Policy-level overrides (app/models/awards.py's AwardPolicyVersion),
+    # both optional and both None by default so every existing caller and
+    # test keeps the plain adviser + school-head certificate unchanged.
+    #
+    # extra_signatories replaces school_head_name/school_head_position
+    # wholesale when set — up to 3 (name, position) pairs drawn alongside
+    # the adviser, who is always separate and never one of these 3.
+    extra_signatories: list[tuple[str, str]] | None = None
+    # Replaces the citation + "Given this..." lines with a template the
+    # admin wrote, substituting the placeholders render_certificate_body
+    # documents. None keeps the standard wording.
+    custom_body_template: str | None = None
 
 
 def _ordinal(n: int) -> str:
@@ -151,6 +173,35 @@ def _given_line(data: CertificateData) -> str:
     if data.recognition_venue:
         given += f" at {data.recognition_venue}"
     return f"{given}, during School Year {data.school_year_name}."
+
+
+class _LiteralOnMissing(dict):
+    """Backs render_certificate_body's substitution — a typo'd placeholder
+    prints literally (`{typo}`) rather than raising, since one wrong field
+    name in an admin-typed template shouldn't take down a whole section's
+    batch of certificates."""
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def render_certificate_body(template: str, data: CertificateData) -> list[str]:
+    """The admin-supplied replacement for the citation + "Given this..."
+    lines, with the standard variables substituted: {learner_name},
+    {award_name}, {average}, {average_label}, {date}, {school_year},
+    {venue}. Returns one string per line for centred drawing."""
+    variables = _LiteralOnMissing(
+        learner_name=data.learner_name,
+        award_name=data.award_name,
+        average=int(data.general_average) if data.general_average is not None else "—",
+        average_label=(
+            f"{formal_term_name(data.term_name)} Average" if data.term_name else "General Average"
+        ),
+        date=f"{_ordinal(data.recognition_date.day)} of {data.recognition_date:%B %Y}",
+        school_year=data.school_year_name,
+        venue=data.recognition_venue or "",
+    )
+    return template.format_map(variables).splitlines() or [""]
 
 
 def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: float, height: float) -> None:
@@ -224,23 +275,45 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     c.drawCentredString(center_x, cursor, data.learner_name.upper())
 
     cursor -= 32 * scale
-    font("Times-Roman", 12)
     c.setFillColor(colors.black)
-    c.drawCentredString(center_x, cursor, _citation(data))
+    if data.custom_body_template:
+        font("Times-Roman", 11)
+        for line in render_certificate_body(data.custom_body_template, data):
+            c.drawCentredString(center_x, cursor, line)
+            cursor -= 16 * scale
+    else:
+        font("Times-Roman", 12)
+        c.drawCentredString(center_x, cursor, _citation(data))
 
-    cursor -= 24 * scale
-    font("Times-Roman", 10)
-    c.drawCentredString(center_x, cursor, _given_line(data))
+        cursor -= 24 * scale
+        font("Times-Roman", 10)
+        c.drawCentredString(center_x, cursor, _given_line(data))
 
+    # Adviser always signs and is always first; extra_signatories (a
+    # policy-level override, up to 3) replaces the single school-head
+    # slot when set — see CertificateData's field comment.
+    if data.extra_signatories is not None:
+        signatories = [(data.adviser_name, "Class Adviser")] + list(data.extra_signatories)
+    else:
+        signatories = [
+            (data.adviser_name, "Class Adviser"),
+            (data.school_head_name, data.school_head_position),
+        ]
+    n = len(signatories)
+    if n == 1:
+        xs = [center_x]
+    elif n == 2:
+        xs = [x0 + inner_w * 0.28, x0 + inner_w * 0.72]
+    else:
+        left_frac, right_frac = 0.15, 0.85
+        xs = [x0 + inner_w * (left_frac + i * (right_frac - left_frac) / (n - 1)) for i in range(n)]
+    name_size = 11 if n <= 2 else 9
     sig_y = y0 + margin + 0.9 * inch * scale
-    left_x = x0 + inner_w * 0.28
-    right_x = x0 + inner_w * 0.72
-    font("Times-Bold", 11)
-    c.drawCentredString(left_x, sig_y, data.adviser_name.upper())
-    c.drawCentredString(right_x, sig_y, data.school_head_name.upper())
-    font("Times-Roman", 10)
-    c.drawCentredString(left_x, sig_y - 15 * scale, "Class Adviser")
-    c.drawCentredString(right_x, sig_y - 15 * scale, data.school_head_position)
+    for sig_x, (name, position) in zip(xs, signatories):
+        font("Times-Bold", name_size)
+        c.drawCentredString(sig_x, sig_y, (name or "").upper())
+        font("Times-Roman", 10 if n <= 2 else 8)
+        c.drawCentredString(sig_x, sig_y - 15 * scale, position or "")
 
 
 def generate_award_certificate(**fields) -> bytes:
@@ -251,6 +324,21 @@ def generate_award_certificate(**fields) -> bytes:
     c = canvas.Canvas(buffer, pagesize=(width, height))
     _draw_certificate(c, data, x=0, y=0, width=width, height=height)
     c.showPage()
+    c.save()
+    return buffer.getvalue()
+
+
+def generate_award_certificates_1up(certificates: list[CertificateData]) -> bytes:
+    """A batch of certificates, one full landscape page each — the
+    AwardPolicyVersion.certificate_layout == ONE_PER_PAGE counterpart to
+    generate_award_certificates_2up, for an official issuance printed for
+    a whole section at once."""
+    buffer = io.BytesIO()
+    width, height = landscape(letter)
+    c = canvas.Canvas(buffer, pagesize=(width, height))
+    for data in certificates:
+        _draw_certificate(c, data, x=0, y=0, width=width, height=height)
+        c.showPage()
     c.save()
     return buffer.getvalue()
 

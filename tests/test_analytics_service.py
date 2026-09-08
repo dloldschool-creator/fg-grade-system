@@ -662,7 +662,16 @@ def test_the_drill_down_cost_is_flat(session, school_year):
 
 def _seed_offering_grades(session, offering, values):
     """Write one grade per learner on an offering. Never committed — the
-    session fixture rolls back."""
+    session fixture rolls back.
+
+    Deletes any TermGrade already sitting on that (enrollment, offering,
+    term) key first, in this same uncommitted transaction. This runs
+    against the live database, and a teacher may already have encoded a
+    real grade there — the unique constraint on that triple would
+    otherwise collide with it. The delete never reaches other sessions
+    (nothing here commits) and is undone by the same rollback that undoes
+    the insert, so the real row is untouched once the test ends.
+    """
     from app.models.grades import TermGrade
     from app.models.learners import Enrollment
 
@@ -676,6 +685,11 @@ def _seed_offering_grades(session, offering, values):
     )
     if len(roster) < len(values):
         pytest.skip("not enough learners in that section")
+    session.query(TermGrade).filter(
+        TermGrade.enrollment_id.in_([e.id for e in roster]),
+        TermGrade.section_subject_offering_id == offering.id,
+        TermGrade.term_id == offering.term_id,
+    ).delete(synchronize_session=False)
     for enrollment, value in zip(roster, values):
         session.add(
             TermGrade(
@@ -799,14 +813,21 @@ def test_learners_and_rows_are_counted_separately(session, school_year):
     if len(offerings) < 2:
         pytest.skip("that section runs only one offering")
 
+    # Counted as a delta against a before-seeding baseline, not an
+    # absolute count — the live database may already have other real
+    # learners failing these same offerings (teachers encode right up to
+    # the term close), and this test only cares about what its own two
+    # seeded learners contribute.
+    ids = tuple(o.id for o in offerings)
+    before = subject_learners_at_risk(session, school_year.id, ids)
+
     # The same two learners fail both subjects.
     _seed_offering_grades(session, offerings[0], [60, 61])
     _seed_offering_grades(session, offerings[1], [62, 63])
 
-    ids = tuple(o.id for o in offerings)
-    report = subject_learners_at_risk(session, school_year.id, ids)
-    assert len(report.rows) == 4
-    assert report.learners == 2, "the same learner twice is one person"
+    after = subject_learners_at_risk(session, school_year.id, ids)
+    assert len(after.rows) - len(before.rows) == 4
+    assert after.learners - before.learners == 2, "the same learner twice is one person"
 
 
 def test_an_ungraded_learner_is_not_at_risk(session, school_year):
