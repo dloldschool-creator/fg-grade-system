@@ -15,6 +15,7 @@ from app.award_service import clear_award_override, compute_award_eligibility, s
 from app.certificate_generator import (
     CertificateData,
     certificate_award_name,
+    formal_learner_name,
     generate_award_certificate,
     generate_award_certificates_1up,
     generate_award_certificates_2up,
@@ -87,7 +88,9 @@ def _certificate_data(
     return CertificateData(
         school_name=school.school_name,
         schools_division=school.schools_division,
-        learner_name=f"{learner.last_name}, {learner.first_name}",
+        learner_name=formal_learner_name(
+            learner.first_name, learner.middle_name, learner.last_name, learner.extension_name
+        ),
         # The policy's administrative name carries the DepEd order and a
         # version; neither belongs on a learner's certificate.
         award_name=certificate_award_name(award.award_name),

@@ -55,7 +55,7 @@ _DESIGN_W, _DESIGN_H = landscape(letter)
 # between its five lines). Used to centre that block vertically rather
 # than letting it hang off the bottom of the header — keep it in sync if
 # those steps change.
-_BODY_BLOCK_HEIGHT = 120
+_BODY_BLOCK_HEIGHT = 138
 
 # The award policy is *named* for the administrators who maintain it —
 # "Academic Excellence Award (DO 15, s. 2026)", possibly with a version
@@ -114,6 +114,23 @@ class CertificateData:
     # admin wrote, substituting the placeholders render_certificate_body
     # documents. None keeps the standard wording.
     custom_body_template: str | None = None
+
+
+def formal_learner_name(
+    first_name: str, middle_name: str | None, last_name: str, extension_name: str | None = None
+) -> str:
+    """"First MI. Last[ Extension]" order for a certificate citation, e.g.
+    "Denny Laine O. Liwag" — distinct from the "Last, First Middle" registrar
+    order `_full_name` helpers on SF9/SF2/term cards use, which is built for
+    alphabetized rosters rather than a citation read aloud."""
+    parts = [first_name.strip()]
+    if middle_name and middle_name.strip():
+        parts.append(f"{middle_name.strip()[0]}.")
+    parts.append(last_name.strip())
+    name = " ".join(parts)
+    if extension_name and extension_name.strip():
+        name += f" {extension_name.strip()}"
+    return name
 
 
 def _ordinal(n: int) -> str:
@@ -209,25 +226,36 @@ def render_certificate_body(template: str, data: CertificateData) -> list[str]:
 def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: float, height: float) -> None:
     """Draws one certificate inside the given rectangle.
 
-    The design is laid out at landscape-Letter size and uniformly scaled
-    to fit, preserving its aspect ratio and centring within the box — so
-    a half-page certificate is the same design, just smaller, rather than
-    a squashed one.
+    Content (seal, text) is laid out at landscape-Letter size and
+    uniformly scaled to fit `height`, preserving its aspect ratio — so a
+    half-page certificate is the same design, just smaller, rather than a
+    squashed one. The *border* is inset from the passed box by the same
+    margin on all four sides, auto-scaling with whatever box this is
+    drawn into. For a single certificate the box already carries the
+    design's own proportions, so this is the same rectangle either way —
+    but the 2-up layout's half-page slot is wider relative to its height
+    than the design, and fitting the border to the aspect-preserved
+    content width alone would leave a wide dead margin down each side
+    while top and bottom sat flush against it. Widening the border to the
+    box's own width keeps the equal margin without stretching anything —
+    only the border grows; the seal and text stay the size the vertical
+    fit gives them, simply centred within the wider frame.
     """
     scale = min(width / _DESIGN_W, height / _DESIGN_H)
     inner_w, inner_h = _DESIGN_W * scale, _DESIGN_H * scale
-    x0 = x + (width - inner_w) / 2
     y0 = y + (height - inner_h) / 2
     top = y0 + inner_h
-    center_x = x0 + inner_w / 2
+    center_x = x + width / 2
 
     def font(name: str, size: float) -> None:
         c.setFont(name, size * scale)
 
     margin = 0.35 * inch * scale
+    box_x0, box_y0 = x + margin, y + margin
+    box_w, box_h = width - 2 * margin, height - 2 * margin
     c.setStrokeColor(colors.black)
     c.setLineWidth(1.2 * scale)
-    c.rect(x0 + margin, y0 + margin, inner_w - 2 * margin, inner_h - 2 * margin)
+    c.rect(box_x0, box_y0, box_w, box_h)
 
     if os.path.exists(SEAL_PATH):
         seal = 0.95 * inch * scale
@@ -242,18 +270,18 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
         )
 
     cursor = top - 1.75 * inch * scale
-    font("Times-Bold", 12)
+    font("Times-Bold", 14)
     c.setFillColor(colors.black)
     c.drawCentredString(center_x, cursor, "Republic of the Philippines")
-    cursor -= 15 * scale
-    font("Times-Bold", 13)
-    c.drawCentredString(center_x, cursor, "DEPARTMENT OF EDUCATION")
-    cursor -= 18 * scale
+    cursor -= 17 * scale
     font("Times-Bold", 15)
+    c.drawCentredString(center_x, cursor, "DEPARTMENT OF EDUCATION")
+    cursor -= 21 * scale
+    font("Times-Bold", 17)
     c.setFillColor(_BLUE)
     c.drawCentredString(center_x, cursor, data.school_name.upper())
-    cursor -= 14 * scale
-    font("Times-Italic", 9)
+    cursor -= 16 * scale
+    font("Times-Italic", 10)
     c.setFillColor(_GRAY)
     c.drawCentredString(center_x, cursor, data.schools_division)
 
@@ -262,33 +290,33 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     # header — otherwise it sits high and leaves a dead gap above the
     # signatures.
     cursor = y0 + inner_h / 2 + (_BODY_BLOCK_HEIGHT / 2) * scale
-    font("Times-Bold", 26)
+    font("Times-Bold", 30)
     c.setFillColor(_BLUE)
     c.drawCentredString(center_x, cursor, "CERTIFICATE OF RECOGNITION")
 
-    cursor -= 30 * scale
-    font("Times-Italic", 11)
+    cursor -= 35 * scale
+    font("Times-Italic", 13)
     c.setFillColor(_GRAY)
     c.drawCentredString(center_x, cursor, "is proudly presented to")
 
-    cursor -= 34 * scale
-    font("Times-BoldItalic", 24)
+    cursor -= 39 * scale
+    font("Times-BoldItalic", 28)
     c.setFillColor(colors.black)
     c.drawCentredString(center_x, cursor, data.learner_name.upper())
 
-    cursor -= 32 * scale
+    cursor -= 37 * scale
     c.setFillColor(colors.black)
     if data.custom_body_template:
-        font("Times-Roman", 11)
+        font("Times-Roman", 13)
         for line in render_certificate_body(data.custom_body_template, data):
             c.drawCentredString(center_x, cursor, line)
-            cursor -= 16 * scale
+            cursor -= 18 * scale
     else:
-        font("Times-Roman", 12)
+        font("Times-Roman", 14)
         c.drawCentredString(center_x, cursor, _citation(data))
 
-        cursor -= 24 * scale
-        font("Times-Roman", 10)
+        cursor -= 27 * scale
+        font("Times-Roman", 12)
         c.drawCentredString(center_x, cursor, _given_line(data))
 
     # Adviser always signs and is always first; extra_signatories (a
@@ -305,17 +333,17 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     if n == 1:
         xs = [center_x]
     elif n == 2:
-        xs = [x0 + inner_w * 0.28, x0 + inner_w * 0.72]
+        xs = [box_x0 + box_w * 0.28, box_x0 + box_w * 0.72]
     else:
         left_frac, right_frac = 0.15, 0.85
-        xs = [x0 + inner_w * (left_frac + i * (right_frac - left_frac) / (n - 1)) for i in range(n)]
-    name_size = 11 if n <= 2 else 9
+        xs = [box_x0 + box_w * (left_frac + i * (right_frac - left_frac) / (n - 1)) for i in range(n)]
+    name_size = 13 if n <= 2 else 10
     sig_y = y0 + margin + 0.9 * inch * scale
     for sig_x, (name, position) in zip(xs, signatories):
         font("Times-Bold", name_size)
         c.drawCentredString(sig_x, sig_y, (name or "").upper())
-        font("Times-Roman", 10 if n <= 2 else 8)
-        c.drawCentredString(sig_x, sig_y - 15 * scale, position or "")
+        font("Times-Roman", 11 if n <= 2 else 9)
+        c.drawCentredString(sig_x, sig_y - 16 * scale, position or "")
 
 
 def generate_award_certificate(**fields) -> bytes:

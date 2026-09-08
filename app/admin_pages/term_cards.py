@@ -33,7 +33,10 @@ def _card_for(session, enrollment, learner, *, school, term, grade_level, sectio
     return TermCardData(
         school_name=school.school_name if school else "",
         term_name=term.name,
-        learner_name=f"{learner.last_name}, {learner.first_name}",
+        learner_name=(
+            f"{learner.last_name}, {learner.first_name}"
+            f"{f' {learner.middle_name}' if learner.middle_name else ''}"
+        ),
         lrn=learner.lrn or "",
         grade_level=(grade_level.code or grade_level.name) if grade_level else "",
         section_name=section.name if section else "",
