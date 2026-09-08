@@ -58,6 +58,13 @@ LEARNER_DELETED = "LEARNER_DELETED"
 # through spelling corrections to find it.
 LEARNER_ADMISSION_CHANGED = "LEARNER_ADMISSION_CHANGED"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
+# An irregular learner's substitute subject (app/models/subjects.py's
+# EnrollmentSubjectOverride) changes which subject counts toward their
+# Term/General Average and what prints on their report card — a quiet
+# edit here is exactly the kind of grade-affecting change rule 8 exists
+# to make attributable, on both sides: setting one up and removing one.
+SUBJECT_OVERRIDE_CREATED = "SUBJECT_OVERRIDE_CREATED"
+SUBJECT_OVERRIDE_REMOVED = "SUBJECT_OVERRIDE_REMOVED"
 # Changing a subject's units silently changes every Term Average and
 # General Average computed from that point on, and a wrong unit produces a
 # plausible wrong number rather than an error (DO 017 s. 2026, Annex E).
@@ -104,6 +111,8 @@ REASON_REQUIRED = {
     AWARD_OVERRIDDEN,
     CALENDAR_DAY_CHANGED,
     AUDIT_LOG_ARCHIVED,
+    SUBJECT_OVERRIDE_CREATED,
+    SUBJECT_OVERRIDE_REMOVED,
 }
 
 

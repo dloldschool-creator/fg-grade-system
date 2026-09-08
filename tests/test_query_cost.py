@@ -75,10 +75,12 @@ def test_loading_a_roster_costs_a_fixed_number_of_queries(session, roster):
         load_report_context(session, roster)
     # Was 8; 9 since the context also resolves the section's averaging rules
     # (DO 017 s. 2026), which `build_term_subject_rows` needs to decide
-    # whether the language pair prints as one row or two. One query for the
-    # whole section — the number that must not move is the per-learner one,
-    # asserted below.
-    assert counter.count <= 9, (
+    # whether the language pair prints as one row or two; 10 since it also
+    # batch-loads irregular-learner subject overrides for the whole roster
+    # (app/enrollment_subject_overrides.py) — one query whether or not any
+    # exist. One query for the whole section — the number that must not
+    # move is the per-learner one, asserted below.
+    assert counter.count <= 10, (
         f"{counter.count} queries to load a {len(roster)}-learner roster; "
         "something inside load_report_context is querying per learner"
     )

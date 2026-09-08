@@ -33,6 +33,11 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.curriculum_policy import DEFAULT_RULES, resolve_averaging_rules
+from app.enrollment_subject_overrides import (
+    apply_overrides,
+    load_extra_offerings,
+    load_overrides_by_enrollment,
+)
 from app.models.grades import (
     CombinedLearningAreaResult,
     SubjectFinalGrade,
@@ -105,6 +110,15 @@ class ReportCardContext:
     # needs them so the printed subject list matches the Term Average that
     # `app/grading_service.py` actually computed.
     rules: object = None
+    # Irregular-learner subject substitutions (app/enrollment_subject_overrides.py)
+    # — most enrollments have none, in which case `offerings_by_subject`
+    # above is used unchanged. `term_number_by_id`/`offerings_by_id`/
+    # `raw_offerings` are what `_effective_offerings_by_subject` needs to
+    # recompute the map for the rare enrollment that does have one.
+    overrides_by_enrollment: dict = field(default_factory=dict)
+    term_number_by_id: dict = field(default_factory=dict)
+    offerings_by_id: dict = field(default_factory=dict)
+    raw_offerings: list = field(default_factory=list)
 
 
 def load_report_context(session: Session, enrollments: list[Enrollment]) -> ReportCardContext:
@@ -129,6 +143,16 @@ def load_report_context(session: Session, enrollments: list[Enrollment]) -> Repo
         .filter_by(section_id=first.section_id, school_year_id=first.school_year_id)
         .all()
     )
+    offerings_by_id = {o.id: o for o in offerings}
+
+    # Irregular-learner substitutions may point at an offering outside this
+    # section entirely, so it's batch-loaded separately and merged in.
+    overrides_by_enrollment = load_overrides_by_enrollment(session, enrollment_ids)
+    extra_offerings_by_id = load_extra_offerings(
+        session, overrides_by_enrollment, set(offerings_by_id)
+    )
+    offerings_by_id.update(extra_offerings_by_id)
+
     offerings_by_subject: dict = {}
     subject_order: dict = {}
     offering_ids = []
@@ -147,6 +171,19 @@ def load_report_context(session: Session, enrollments: list[Enrollment]) -> Repo
             subject_order[offering.subject_id] = candidate
 
     subject_ids = set(offerings_by_subject)
+
+    # A substitute offering's subject needs its own Subject row, display
+    # order and TermGrade lookup, same as any section-wide subject.
+    for offering in extra_offerings_by_id.values():
+        term_number = terms.get(offering.term_id)
+        if term_number is None:
+            continue
+        offering_ids.append(offering.id)
+        subject_ids.add(offering.subject_id)
+        candidate = offering.display_order if offering.display_order is not None else 9999
+        existing = subject_order.get(offering.subject_id)
+        if existing is None or candidate < existing:
+            subject_order[offering.subject_id] = candidate
     areas: list = []
     for area in (
         session.query(CombinedLearningArea).filter_by(grade_level_id=first.grade_level_id).all()
@@ -195,18 +232,47 @@ def load_report_context(session: Session, enrollments: list[Enrollment]) -> Repo
     }
     rules = resolve_averaging_rules(session, first.school_year_id, first.grade_level_id)
     return ReportCardContext(
-        offerings_by_subject, subject_order, subjects, areas, term_grades, finals, combined, rules
+        offerings_by_subject, subject_order, subjects, areas, term_grades, finals, combined, rules,
+        overrides_by_enrollment=overrides_by_enrollment,
+        term_number_by_id=terms,
+        offerings_by_id=offerings_by_id,
+        raw_offerings=offerings,
     )
 
 
-def _term_grades_for(context: ReportCardContext, enrollment_id, subject_id) -> dict:
+def _effective_offerings_by_subject(context: ReportCardContext, enrollment_id) -> dict:
+    """The subject -> {term_number: offering_id} map to use for one
+    learner: the section-wide default, unless they have an
+    irregular-subject override (app/enrollment_subject_overrides.py) —
+    recomputed only then, so the overwhelming common case (no overrides)
+    costs nothing extra and returns the shared dict unchanged.
+
+    Applying the same `apply_overrides` that app/grading_service.py uses
+    on the same raw offering list is what keeps this out of the §16/§17
+    trap: the printed subject list and the average computed for it must
+    come from one reading of "this learner's effective subjects", not two.
+    """
+    overrides = context.overrides_by_enrollment.get(enrollment_id)
+    if not overrides:
+        return context.offerings_by_subject
+    effective = apply_overrides(context.raw_offerings, overrides, context.offerings_by_id)
+    result: dict = {}
+    for offering in effective:
+        term_number = context.term_number_by_id.get(offering.term_id)
+        if term_number is None:
+            continue
+        result.setdefault(offering.subject_id, {})[term_number] = offering.id
+    return result
+
+
+def _term_grades_for(context: ReportCardContext, offerings_by_subject: dict, enrollment_id, subject_id) -> dict:
     """{term_number: grade | None} for one subject. A term is present as a
     key when the subject is *offered* then, whether or not a grade has
     been encoded — which is what tells "doesn't run" apart from "not yet
     graded"."""
     return {
         term_number: context.term_grades.get((enrollment_id, offering_id))
-        for term_number, offering_id in context.offerings_by_subject.get(subject_id, {}).items()
+        for term_number, offering_id in offerings_by_subject.get(subject_id, {}).items()
     }
 
 
@@ -223,6 +289,7 @@ def build_learning_area_rows(
     if context is None:
         context = load_report_context(session, [enrollment])
 
+    offerings_by_subject = _effective_offerings_by_subject(context, enrollment.id)
     rows: list[LearningAreaRow] = []
     handled: set = set()
 
@@ -232,7 +299,7 @@ def build_learning_area_rows(
             continue
         component_terms: set[int] = set()
         for subject_id in component_ids:
-            component_terms |= set(context.offerings_by_subject.get(subject_id, {}))
+            component_terms |= set(offerings_by_subject.get(subject_id, {}))
         rows.append(
             LearningAreaRow(
                 name=area.name,
@@ -257,13 +324,13 @@ def build_learning_area_rows(
             rows.append(
                 LearningAreaRow(
                     name=subject.official_name,
-                    term_grades=_term_grades_for(context, enrollment.id, subject_id),
+                    term_grades=_term_grades_for(context, offerings_by_subject, enrollment.id, subject_id),
                     # Blank on purpose — §16. The component's own final
                     # grade exists in the database; the form just doesn't
                     # show it, because the parent row carries it.
                     final_grade=None,
                     remark=None,
-                    offered_terms=set(context.offerings_by_subject.get(subject_id, {})),
+                    offered_terms=set(offerings_by_subject.get(subject_id, {})),
                     is_component=True,
                 )
             )
@@ -293,10 +360,10 @@ def build_learning_area_rows(
         rows.append(
             LearningAreaRow(
                 name=subject.official_name,
-                term_grades=_term_grades_for(context, enrollment.id, subject_id),
+                term_grades=_term_grades_for(context, offerings_by_subject, enrollment.id, subject_id),
                 final_grade=final.final_grade,
                 remark=final.remark.value if final.remark else None,
-                offered_terms=set(context.offerings_by_subject.get(subject_id, {})),
+                offered_terms=set(offerings_by_subject.get(subject_id, {})),
                 units_per_term=final.units_per_term,
                 units=final.units,
                 unrounded_final_grade=final.unrounded_final_grade,
@@ -340,6 +407,7 @@ def build_term_subject_rows(
     if context is None:
         context = load_report_context(session, [enrollment])
 
+    offerings_by_subject = _effective_offerings_by_subject(context, enrollment.id)
     rules = context.rules or DEFAULT_RULES
     combine_pair = bool(getattr(rules, "combine_language_pair_in_term_average", False))
     # component subject_id -> (area, [component ids]), only when collapsing.
@@ -354,7 +422,7 @@ def build_term_subject_rows(
     # while they all share the parent's place in the section's order.
     ordered: list[tuple[int, int, str, Decimal | None]] = []
     seen_areas: set = set()
-    for subject_id, by_term in context.offerings_by_subject.items():
+    for subject_id, by_term in offerings_by_subject.items():
         if term_number not in by_term:
             continue  # subject doesn't run this term
         subject = context.subjects.get(subject_id)
@@ -378,7 +446,7 @@ def build_term_subject_rows(
             # informational — the parent above is the row that counts.
             for position, component_id in enumerate(component_ids, start=1):
                 component = context.subjects.get(component_id)
-                component_offerings = context.offerings_by_subject.get(component_id, {})
+                component_offerings = offerings_by_subject.get(component_id, {})
                 if component is None or term_number not in component_offerings:
                     continue
                 ordered.append(

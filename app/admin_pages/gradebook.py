@@ -4,6 +4,8 @@ from decimal import Decimal
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
+from sqlalchemy import or_
+
 from app import audit_service
 from app.admin_pages._helpers import clear_text_fields, flash, generation_key, get_session, render_flashes
 from app.auth import require_role
@@ -13,9 +15,14 @@ from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeEncodingStatus, GradeWorkflowStatus
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
-from app.roster_order import learner_order_by
+from app.roster_order import learner_order_by, learner_sort_key
 from app.models.organization import SchoolYear, Term
-from app.models.subjects import SectionSubjectOffering, Subject, TeacherAssignment
+from app.models.subjects import (
+    EnrollmentSubjectOverride,
+    SectionSubjectOffering,
+    Subject,
+    TeacherAssignment,
+)
 
 # A learner still counted as actively in the section for grading purposes —
 # excludes transferred-out/dropped/NLS/shifted-out/completed/graduated,
@@ -133,6 +140,43 @@ def render() -> None:
             .all()
         )
         roster = [e for e in enrollments if e.enrollment_status in ROSTER_STATUSES]
+
+        # Irregular-learner substitutions (app/enrollment_subject_overrides.py):
+        # one query, since this page only ever looks at one offering at a
+        # time. A learner overridden OUT of this offering doesn't belong
+        # on this roster even though they're in this section; one
+        # overridden IN takes their substitute subject here even though
+        # their own section is a different one entirely.
+        overrides_here = (
+            session.query(EnrollmentSubjectOverride)
+            .filter(
+                or_(
+                    EnrollmentSubjectOverride.original_section_subject_offering_id == offering.id,
+                    EnrollmentSubjectOverride.substitute_section_subject_offering_id == offering.id,
+                )
+            )
+            .all()
+        )
+        excluded_ids = {
+            ov.enrollment_id
+            for ov in overrides_here
+            if ov.original_section_subject_offering_id == offering.id
+        }
+        included_ids = [
+            ov.enrollment_id
+            for ov in overrides_here
+            if ov.substitute_section_subject_offering_id == offering.id
+        ]
+        roster = [e for e in roster if e.id not in excluded_ids]
+        if included_ids:
+            cross_section = (
+                session.query(Enrollment)
+                .filter(Enrollment.id.in_(included_ids))
+                .join(Learner, Learner.id == Enrollment.learner_id)
+                .all()
+            )
+            roster += [e for e in cross_section if e.enrollment_status in ROSTER_STATUSES]
+
         if not roster:
             st.info("No actively-enrolled learners in this section yet.")
             return
@@ -147,6 +191,12 @@ def render() -> None:
             .filter(Learner.id.in_([e.learner_id for e in roster]))
             .all()
         }
+        # Re-sorted rather than trusting the SQL ORDER BY above: a learner
+        # crossed in from another section was appended after it, and the
+        # same DepEd males-first-then-alphabetical order (roster_order.py)
+        # applies to every roster in this app, this one included.
+        if included_ids:
+            roster.sort(key=lambda e: learner_sort_key(learners[e.learner_id]))
 
         existing_grades = {
             g.enrollment_id: g

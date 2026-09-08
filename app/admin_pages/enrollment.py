@@ -8,16 +8,21 @@ from app.admin_pages._helpers import (
     clear_text_fields,
     flash,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     render_flashes,
     stateful_tabs,
     text_field,
     try_commit,
 )
 from app.auth import require_role
+from app.enrollment_subject_overrides import load_overrides_by_enrollment
+from app.grading_service import recompute_enrollment_grades_batch
 from app.models.academic_structure import Section
-from app.models.enums import EnrollmentStatus
+from app.models.enums import EnrollmentStatus, OfferingStatus
 from app.models.learners import Enrollment, Learner, LearnerMovement
-from app.models.organization import SchoolYear
+from app.models.organization import SchoolYear, Term
+from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
 
 RESULT_LIMIT = 30
 
@@ -237,12 +242,53 @@ def _roster_tab(session, adviser_user_id, current_user):
     ):
         movements_by_enrollment.setdefault(movement.enrollment_id, []).append(movement)
 
+    # Subject substitutions (app/enrollment_subject_overrides.py) — every
+    # learner here shares this one section and school year, so the
+    # candidate offering lists for the add-override form are the same for
+    # all of them and are loaded once, not per learner. `year_offerings`
+    # covers both: an original is always one of this section's own
+    # offerings (a subset of it), a substitute can be any of them.
+    overrides_by_enrollment = load_overrides_by_enrollment(session, [e.id for e in enrollments])
+    year_offerings = (
+        session.query(SectionSubjectOffering).filter_by(school_year_id=sy_choice).all()
+    )
+    year_offering_by_id = {o.id: o for o in year_offerings}
+    section_offerings = [o for o in year_offerings if o.section_id == section_choice]
+    subject_by_id = {
+        s.id: s
+        for s in session.query(Subject)
+        .filter(Subject.id.in_({o.subject_id for o in year_offerings}))
+        .all()
+    } if year_offerings else {}
+    term_by_id = {
+        t.id: t
+        for t in session.query(Term)
+        .filter(Term.id.in_({o.term_id for o in year_offerings}))
+        .all()
+    } if year_offerings else {}
+    override_section_ids = {o.section_id for o in year_offerings} - {section_choice}
+    other_section_by_id = {
+        s.id: s
+        for s in session.query(Section).filter(Section.id.in_(override_section_ids)).all()
+    } if override_section_ids else {}
+
+    def _offering_label(offering) -> str:
+        subject = subject_by_id.get(offering.subject_id)
+        term = term_by_id.get(offering.term_id)
+        label = f"{subject.official_name if subject else '?'} — {term.name if term else '?'}"
+        if offering.section_id != section_choice:
+            other_section = other_section_by_id.get(offering.section_id)
+            label += f" ({other_section.name if other_section else 'another section'})"
+        return label
+
     for enrollment in enrollments:
         learner = learners.get(enrollment.learner_id)
         if learner is None:
             continue
+        panel_id = f"enrollment_{enrollment.id}"
         with st.expander(
-            f"{learner.last_name}, {learner.first_name} — {enrollment.enrollment_status.value}"
+            f"{learner.last_name}, {learner.first_name} — {enrollment.enrollment_status.value}",
+            expanded=panel_is_open(panel_id),
         ):
             # Read-only by design (2026-09-05): an editable dropdown here
             # used to set enrollment_status directly with no date, reason,
@@ -361,6 +407,138 @@ def _roster_tab(session, adviser_user_id, current_user):
                     if try_commit(session, "Movement logged."):
                         clear_text_fields(movement_form)
                     st.rerun()
+
+            st.subheader("Subject substitutions")
+            st.caption(
+                "For an irregular learner taking a different elective in place of "
+                "one of this section's usual subjects — for one or more terms. The "
+                "learner's Term/General Average and report card use the substitute "
+                "subject instead of the original for every term listed here."
+            )
+            existing_overrides = overrides_by_enrollment.get(enrollment.id, [])
+            if existing_overrides:
+                for ov in existing_overrides:
+                    original = year_offering_by_id.get(ov.original_section_subject_offering_id)
+                    substitute = year_offering_by_id.get(ov.substitute_section_subject_offering_id)
+                    st.write(
+                        f"**{_offering_label(original) if original else '?'}** → "
+                        f"**{_offering_label(substitute) if substitute else '?'}** — {ov.reason}"
+                    )
+                    with st.form(f"remove_override_{ov.id}"):
+                        remove_reason = st.text_area(
+                            "Reason for removing", key=f"remove_override_reason_{ov.id}"
+                        )
+                        if st.form_submit_button("Remove this substitution"):
+                            if not remove_reason.strip():
+                                st.error("A reason is required.")
+                            else:
+                                audit_service.record(
+                                    session,
+                                    action=audit_service.SUBJECT_OVERRIDE_REMOVED,
+                                    object_type="enrollment_subject_overrides",
+                                    object_id=ov.id,
+                                    user_id=current_user.id,
+                                    previous={
+                                        "original_section_subject_offering_id": ov.original_section_subject_offering_id,
+                                        "substitute_section_subject_offering_id": ov.substitute_section_subject_offering_id,
+                                    },
+                                    new=None,
+                                    reason=remove_reason.strip(),
+                                )
+                                session.delete(ov)
+                                if try_commit(session, "Substitution removed."):
+                                    recompute_enrollment_grades_batch(session, [enrollment.id])
+                                st.rerun()
+            else:
+                st.caption("No substitutions for this learner.")
+
+            st.markdown("**Add a subject substitution**")
+            if not section_offerings:
+                st.caption("This section has no offerings yet.")
+            else:
+                # Outside the form below so picking one triggers an
+                # immediate rerun — the substitute list depends on which
+                # term the chosen original belongs to. That rerun would
+                # otherwise collapse this very panel (st.expander has no
+                # memory), taking the in-progress pick with it — hence
+                # expanded=panel_is_open(...) above and on_change here.
+                original_choice = st.selectbox(
+                    "Original subject (this section's usual subject they're excused from)",
+                    options=[o.id for o in section_offerings],
+                    format_func=lambda v: _offering_label(year_offering_by_id[v]),
+                    key=f"override_original_{enrollment.id}",
+                    on_change=keep_panel_open,
+                    args=(panel_id,),
+                )
+                original_offering = year_offering_by_id.get(original_choice)
+                substitute_options = [
+                    o.id
+                    for o in year_offerings
+                    if original_offering is not None
+                    and o.term_id == original_offering.term_id
+                    and o.id != original_choice
+                    and o.status != OfferingStatus.PLACEHOLDER
+                ]
+                with st.form(f"add_override_{enrollment.id}"):
+                    if not substitute_options:
+                        st.caption("No other usable offering exists for that term yet.")
+                        substitute_choice = None
+                    else:
+                        substitute_choice = st.selectbox(
+                            "Substitute subject (what they take instead, that same term)",
+                            options=substitute_options,
+                            format_func=lambda v: _offering_label(year_offering_by_id[v]),
+                            key=f"override_substitute_{enrollment.id}",
+                        )
+                    override_reason = st.text_area(
+                        "Reason",
+                        key=f"override_reason_{enrollment.id}",
+                        placeholder="e.g. already passed this subject at their previous school",
+                    )
+                    if st.form_submit_button("Add substitution"):
+                        if substitute_choice is None:
+                            st.error("No substitute offering available for that term.")
+                        elif not override_reason.strip():
+                            st.error("A reason is required.")
+                        else:
+                            override = EnrollmentSubjectOverride(
+                                enrollment_id=enrollment.id,
+                                original_section_subject_offering_id=original_choice,
+                                substitute_section_subject_offering_id=substitute_choice,
+                                reason=override_reason.strip(),
+                                created_by_user_id=current_user.id,
+                            )
+                            session.add(override)
+                            try:
+                                # A duplicate (this original slot already
+                                # has a substitution) raises here, before
+                                # any audit row is written for a change
+                                # that didn't actually happen.
+                                session.flush()
+                            except IntegrityError:
+                                session.rollback()
+                                flash(
+                                    "error",
+                                    "That subject already has a substitution for this "
+                                    "learner — remove it first.",
+                                )
+                                st.rerun()
+                            audit_service.record(
+                                session,
+                                action=audit_service.SUBJECT_OVERRIDE_CREATED,
+                                object_type="enrollment_subject_overrides",
+                                object_id=override.id,
+                                user_id=current_user.id,
+                                previous=None,
+                                new={
+                                    "original_section_subject_offering_id": original_choice,
+                                    "substitute_section_subject_offering_id": substitute_choice,
+                                },
+                                reason=override_reason.strip(),
+                            )
+                            if try_commit(session, "Substitution added."):
+                                recompute_enrollment_grades_batch(session, [enrollment.id])
+                            st.rerun()
 
 
 def render() -> None:

@@ -290,3 +290,46 @@ class TeacherAssignment(UUIDPKMixin, Base):
     )
     assigned_at: Mapped[datetime] = mapped_column(server_default=func.now())
     unassigned_at: Mapped[datetime | None]
+
+
+class EnrollmentSubjectOverride(UUIDPKMixin, TimestampMixin, Base):
+    """One irregular learner's substitute subject for one term.
+
+    Rule 5 makes Section Subject Offerings the source of truth for what a
+    *section* is graded on — this is the deliberate exception: an
+    irregular learner (a transferee who already passed the section's
+    usual elective, say) takes a *different* offering instead, which may
+    belong to another section entirely. `original_section_subject_offering_id`
+    is the slot they're excused from; `substitute_section_subject_offering_id`
+    is the one they're graded on instead. Both are required — this always
+    replaces a specific slot, never just adds a subject on top.
+
+    One row per **term**, not one row covering a whole subject, because a
+    SectionSubjectOffering is already per-term. A learner substituting for
+    terms 2 and 3 but not term 1 is two rows, pointing at that subject's
+    term-2 and term-3 offerings respectively — term 1 needs no row at all.
+
+    No VersionMixin: unlike a grade, this isn't edited by more than one
+    person at a time — it's set up once by whoever handles the exception
+    and later removed, both audited (SUBJECT_OVERRIDE_CREATED /
+    SUBJECT_OVERRIDE_REMOVED in app/audit_service.py).
+    """
+
+    __tablename__ = "enrollment_subject_overrides"
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "original_section_subject_offering_id"),
+    )
+
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enrollments.id", ondelete="RESTRICT"), nullable=False
+    )
+    original_section_subject_offering_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("section_subject_offerings.id", ondelete="RESTRICT"), nullable=False
+    )
+    substitute_section_subject_offering_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("section_subject_offerings.id", ondelete="RESTRICT"), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )

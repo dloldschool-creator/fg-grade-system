@@ -27,6 +27,11 @@ from app.curriculum_policy import (
     load_offering_units,
     resolve_averaging_rules,
 )
+from app.enrollment_subject_overrides import (
+    apply_overrides,
+    load_extra_offerings,
+    load_overrides_by_enrollment,
+)
 from app.grading_engine import (
     GradeUnits,
     compute_combined_language_final_grade,
@@ -125,6 +130,11 @@ class _RecomputeContext:
     combined_results: dict
     term_summaries: dict
     annual_summaries: dict
+    # Irregular-learner subject substitutions (app/enrollment_subject_overrides.py)
+    # — most enrollments have none, in which case the offering list below
+    # is used unchanged.
+    overrides_by_enrollment: dict
+    offerings_by_id: dict
 
 
 def _resolve_passing_grade_ctx(context: _RecomputeContext, school_year_id, offering) -> Decimal:
@@ -162,19 +172,32 @@ def _load_recompute_context(session: Session, enrollments: list[Enrollment]) -> 
             (offering.section_id, offering.school_year_id), []
         ).append(offering)
 
+    # Irregular-learner substitutions may point at an offering outside
+    # every section already queried above (the substitute is often taught
+    # in a different section), so it's fetched separately and merged in.
+    overrides_by_enrollment = load_overrides_by_enrollment(session, enrollment_ids)
+    offerings_by_id = {o.id: o for o in all_offerings}
+    extra_offerings_by_id = load_extra_offerings(
+        session, overrides_by_enrollment, set(offerings_by_id)
+    )
+    offerings_by_id.update(extra_offerings_by_id)
+
     terms_by_school_year: dict = {}
     for term in session.query(Term).filter(Term.school_year_id.in_(school_year_ids)).all():
         terms_by_school_year.setdefault(term.school_year_id, {})[term.id] = term
 
     # resolve_averaging_rules/load_offering_units already batch internally
     # (app/curriculum_policy.py); called once per distinct pair / once for
-    # the whole offering list, not once per subject.
+    # the whole offering list, not once per subject. Extra (substitute)
+    # offerings need their units resolved too, same as any other.
     rules_by_school_year_grade = {
         (school_year_id, grade_level_id): resolve_averaging_rules(session, school_year_id, grade_level_id)
         for school_year_id in school_year_ids
         for grade_level_id in grade_level_ids
     }
-    units_by_offering = load_offering_units(session, all_offerings)
+    units_by_offering = load_offering_units(
+        session, all_offerings + list(extra_offerings_by_id.values())
+    )
 
     combined_areas_by_grade_level: dict = {}
     for area in (
@@ -198,8 +221,11 @@ def _load_recompute_context(session: Session, enrollments: list[Enrollment]) -> 
             ).append(component)
 
     # Passing-grade resolution, preloaded rather than re-queried per
-    # subject/area/term (see `_resolve_passing_grade_ctx`).
-    override_ids = {o.grading_policy_version_id for o in all_offerings if o.grading_policy_version_id}
+    # subject/area/term (see `_resolve_passing_grade_ctx`). Extra
+    # (substitute) offerings can carry their own policy override too.
+    override_ids = {
+        o.grading_policy_version_id for o in offerings_by_id.values() if o.grading_policy_version_id
+    }
     versions_by_id = {
         v.id: v
         for v in (
@@ -262,6 +288,8 @@ def _load_recompute_context(session: Session, enrollments: list[Enrollment]) -> 
         combined_results=combined_results,
         term_summaries=term_summaries,
         annual_summaries=annual_summaries,
+        overrides_by_enrollment=overrides_by_enrollment,
+        offerings_by_id=offerings_by_id,
     )
 
 
@@ -309,6 +337,11 @@ def _recompute_one(session: Session, enrollment: Enrollment, context: _Recompute
     offerings = context.offerings_by_section_year.get(
         (enrollment.section_id, enrollment.school_year_id), []
     )
+    # Irregular-learner substitutions (app/enrollment_subject_overrides.py):
+    # a no-op for the overwhelming majority of enrollments, which have none.
+    offerings = apply_overrides(
+        offerings, context.overrides_by_enrollment.get(enrollment_id, []), context.offerings_by_id
+    )
     terms = context.terms_by_school_year.get(enrollment.school_year_id, {})
     rules = context.rules_by_school_year_grade[(enrollment.school_year_id, enrollment.grade_level_id)]
     units_by_offering = context.units_by_offering
@@ -321,6 +354,18 @@ def _recompute_one(session: Session, enrollment: Enrollment, context: _Recompute
         if term is None:
             continue
         offerings_by_subject.setdefault(offering.subject_id, {})[term.term_number] = offering
+
+    # `subject_final_grades`/`combined_results` are caches (this module's
+    # own docstring), never entered directly — so a subject this
+    # enrollment no longer takes (an irregular-learner override removed
+    # it after it already had a final computed) must have its stale cache
+    # row deleted here, not just skipped. Otherwise the report card would
+    # print both the stale original subject and its substitute.
+    for subject_id in [
+        sid for (eid, sid) in context.subject_final_grades if eid == enrollment_id
+    ]:
+        if subject_id not in offerings_by_subject:
+            session.delete(context.subject_final_grades.pop((enrollment_id, subject_id)))
 
     # subject_id -> computed final grade (Decimal | None)
     subject_finals: dict = {}
@@ -385,11 +430,21 @@ def _recompute_one(session: Session, enrollment: Enrollment, context: _Recompute
     combined_areas = context.combined_areas_by_grade_level.get(enrollment.grade_level_id, [])
     for area in combined_areas:
         components = context.combined_components_by_area.get(area.id, [])
-        if len(components) != 2:
-            continue  # not fully configured — skip rather than guess
+        applicable = (
+            len(components) == 2
+            and components[0].subject_id in offerings_by_subject
+            and components[1].subject_id in offerings_by_subject
+        )
+        if not applicable:
+            # Same staleness concern as subject_final_grades above: an
+            # override can remove one of the pair's components from this
+            # enrollment's subjects between recomputes, and a previously
+            # computed combined result would otherwise stay behind.
+            stale = context.combined_results.pop((enrollment_id, area.id), None)
+            if stale is not None:
+                session.delete(stale)
+            continue
         comp1_id, comp2_id = components[0].subject_id, components[1].subject_id
-        if comp1_id not in offerings_by_subject or comp2_id not in offerings_by_subject:
-            continue  # this section doesn't offer both components — not applicable here
 
         combined_component_subject_ids.update([comp1_id, comp2_id])
 
