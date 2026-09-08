@@ -16,6 +16,7 @@ from app.auth import require_role
 from app.display_time import format_time
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.models.rbac import Role, User, UserRole
+from app.naming import normalize_name
 from app.user_import import (
     USER_COLUMNS,
     USER_FILE,
@@ -329,6 +330,38 @@ def render() -> None:
                 # Both columns are on the row already loaded above, so
                 # this costs nothing extra — no query per panel.
                 st.caption(_account_state(user))
+
+                col_name, col_save_name = st.columns([3, 1])
+                new_name = col_name.text_input(
+                    "Full name", value=user.full_name, key=f"user_name_{user.id}",
+                    on_change=keep_panel_open, args=(user.id,),
+                )
+                col_save_name.write("")  # vertical alignment with the input above
+                if col_save_name.button("Save name", key=f"save_name_{user.id}"):
+                    cleaned = normalize_name(new_name)
+                    if not cleaned:
+                        # Shown inline rather than queued via flash(): no
+                        # rerun follows, and flash() only surfaces on the
+                        # *next* one, which would leave this sitting unseen
+                        # until some other widget on the page is touched.
+                        st.error("Full name can't be blank.")
+                    elif cleaned == user.full_name:
+                        st.caption("No change.")
+                    else:
+                        audit_service.record(
+                            session,
+                            action=audit_service.USER_RENAMED,
+                            object_type="users",
+                            object_id=user.id,
+                            user_id=current_user.id,
+                            previous={"full_name": user.full_name, "user": user.email},
+                            new={"full_name": cleaned},
+                        )
+                        user.full_name = cleaned
+                        session.commit()
+                        flash("success", "Name updated.")
+                        st.rerun()
+
                 col1, col2 = st.columns(2)
                 is_active = col1.checkbox(
                     "Active", value=user.is_active, key=f"user_active_{user.id}",

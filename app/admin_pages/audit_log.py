@@ -80,6 +80,7 @@ ACTION_GROUPS = {
         audit_service.USER_CREATED,
         audit_service.USER_ROLES_CHANGED,
         audit_service.USER_PASSWORD_RESET,
+        audit_service.USER_RENAMED,
     ],
     # Who may encode grades for a section is an access grant (see
     # teacher_assignment_service.py's module docstring) — its own group
