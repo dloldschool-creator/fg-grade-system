@@ -256,6 +256,16 @@ def render() -> None:
                     # of re-reading `value=` on every rerun. That was
                     # bleeding one subject's typed/saved grade into
                     # another subject's field for the same learner.
+                    # generation_key's `name` argument, not its `form`
+                    # argument, is what has to be unique per offering —
+                    # `form` only looks up the clear-counter, it is not
+                    # folded into the returned widget key (see
+                    # _helpers.generation_key). A bare f"grade_{enrollment.id}"
+                    # here collided across every offering sharing this
+                    # roster, which is every offering a teacher with
+                    # multiple subjects in one section teaches — the
+                    # exact bug this comment used to (wrongly) claim was
+                    # already fixed by the `form` argument alone.
                     # format="%.0f" + step=1.0: official grades are always
                     # whole numbers (§18 and friends all ROUND()); typed
                     # values still get explicitly re-rounded at save time
@@ -272,7 +282,7 @@ def render() -> None:
                         value=float(existing.official_grade) if existing and existing.official_grade is not None else None,
                         step=1.0,
                         format="%.0f",
-                        key=generation_key(f"gradebook_{offering.id}", f"grade_{enrollment.id}"),
+                        key=generation_key(f"gradebook_{offering.id}", f"grade_{offering.id}_{enrollment.id}"),
                         label_visibility="collapsed",
                     )
                     has_grade = existing is not None and existing.official_grade is not None
@@ -295,7 +305,7 @@ def render() -> None:
                     clear = (
                         col3.checkbox(
                             "Blank",
-                            key=generation_key(f"gradebook_{offering.id}", f"clear_{enrollment.id}"),
+                            key=generation_key(f"gradebook_{offering.id}", f"clear_{offering.id}_{enrollment.id}"),
                             help="Clear this grade back to not-yet-encoded.",
                         )
                         if has_grade
@@ -311,7 +321,7 @@ def render() -> None:
                     reason = (
                         col4.text_input(
                             "Reason",
-                            key=generation_key(f"gradebook_{offering.id}", f"reason_{enrollment.id}"),
+                            key=generation_key(f"gradebook_{offering.id}", f"reason_{offering.id}_{enrollment.id}"),
                             placeholder="Reason for blanking (required if ticked)",
                             label_visibility="collapsed",
                         )

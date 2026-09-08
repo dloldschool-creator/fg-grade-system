@@ -271,6 +271,18 @@ def generation_key(form: str, name: str) -> str:
     (The clearing function is still called `clear_text_fields`; it only ever
     bumped a counter, and renaming it would touch every add form in the app
     for no behavioural gain.)
+
+    **`name` must be unique across every form this key could collide
+    with — `form` is used only to look up the generation counter, it is
+    not folded into the returned key.** `text_field` gets this for free
+    because its `key` argument already carries the form ("add_section.name"),
+    but a caller with a `name` that doesn't vary per form will collide.
+    That's what happened in the Gradebook: `grade_<enrollment_id>` was the
+    same string for every subject offering, since the roster (and so the
+    enrollment ids) repeats across a teacher's classes — two different
+    subjects produced the identical Streamlit widget key, and a grade typed
+    for one showed up in the other. Fixed by folding the offering id into
+    `name` itself, not by changing this function.
     """
     generation = st.session_state.get(_TEXT_GENERATION + form, 0)
     return f"{name}#{generation}"
