@@ -224,11 +224,14 @@ def test_one_up_batch_gives_every_certificate_its_own_page(count, expected_pages
 
 def test_custom_body_substitutes_the_documented_variables():
     data = _certificate(term_name="Term 1")
-    template = "for {award_name} — {average_label} {average} — {school_year} at {venue} on {date}."
+    template = (
+        "for {award_name} — {average_label} {average} — {school_year} at {venue} "
+        "on {date}, {school_name}."
+    )
     lines = render_certificate_body(template, data)
     assert lines == [
         "for WITH HONORS — First Term Average 92 — 2026-2027 at FGNMHS Covered Court "
-        "on 17th of October 2026."
+        "on 17th of October 2026, Francisco G. Nepomuceno Memorial High School."
     ]
 
 

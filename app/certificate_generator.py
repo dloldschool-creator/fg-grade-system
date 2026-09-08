@@ -189,7 +189,8 @@ def render_certificate_body(template: str, data: CertificateData) -> list[str]:
     """The admin-supplied replacement for the citation + "Given this..."
     lines, with the standard variables substituted: {learner_name},
     {award_name}, {average}, {average_label}, {date}, {school_year},
-    {venue}. Returns one string per line for centred drawing."""
+    {venue}, {school_name}. Returns one string per line for centred
+    drawing."""
     variables = _LiteralOnMissing(
         learner_name=data.learner_name,
         award_name=data.award_name,
@@ -200,6 +201,7 @@ def render_certificate_body(template: str, data: CertificateData) -> list[str]:
         date=f"{_ordinal(data.recognition_date.day)} of {data.recognition_date:%B %Y}",
         school_year=data.school_year_name,
         venue=data.recognition_venue or "",
+        school_name=data.school_name,
     )
     return template.format_map(variables).splitlines() or [""]
 

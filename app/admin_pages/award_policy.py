@@ -195,7 +195,8 @@ def render() -> None:
                     st.markdown(
                         "**Custom certificate body** (optional — leave blank to keep the standard "
                         "wording). Placeholders filled in for you: `{learner_name}`, `{award_name}`, "
-                        "`{average}`, `{average_label}`, `{date}`, `{school_year}`, `{venue}`."
+                        "`{average}`, `{average_label}`, `{date}`, `{school_year}`, `{venue}`, "
+                        "`{school_name}`."
                     )
                     certificate_body_template = st.text_area(
                         "Custom body text",
