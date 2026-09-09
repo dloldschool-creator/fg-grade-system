@@ -15,7 +15,14 @@ from app.auth import require_role
 from app.display_time import format_time
 from app.grading_service import recompute_enrollment_grades, recompute_enrollment_grades_batch
 from app.report_card import build_learning_area_rows, load_report_context
-from app.models.enums import AveragingMethod, CompletionStatus, FinalizationRecordStatus, FinalizationScopeType, GradeWorkflowStatus
+from app.models.enums import (
+    AveragingMethod,
+    CompletionStatus,
+    FinalizationRecordStatus,
+    FinalizationScopeType,
+    GradeEncodingStatus,
+    GradeWorkflowStatus,
+)
 from app.models.grades import (
     AnnualGradeSummary,
     CombinedLearningAreaResult,
@@ -96,6 +103,12 @@ def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> 
     one really does get its own snapshot.
     """
     finalized = incomplete = already = 0
+    if not panel["finalization_open"]:
+        # The button that calls this is disabled for the same reason
+        # (see _panel_data), so this only matters to a caller that
+        # bypasses the button — never silently finalize behind a closed
+        # last term.
+        return finalized, incomplete, already
     now = datetime.now(timezone.utc)
     for enrollment in enrollments:
         latest_record = panel["finalization"].get(enrollment.id)
@@ -111,7 +124,7 @@ def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> 
     return finalized, incomplete, already
 
 
-def _finalization_section(session, current_user, enrollment: Enrollment, summary, latest_record) -> None:
+def _finalization_section(session, current_user, enrollment: Enrollment, summary, latest_record, panel) -> None:
     st.subheader("Finalization")
     # A School Head reviews finalized records (§3E) but never finalizes or
     # reopens one, so the state is shown and the controls are not drawn.
@@ -173,12 +186,19 @@ def _finalization_section(session, current_user, enrollment: Enrollment, summary
         st.caption("Not finalized yet. Finalizing is done by the registrar or adviser.")
         return
 
-    can_finalize = summary is not None and summary.completion_status == CompletionStatus.COMPLETE
+    is_complete = summary is not None and summary.completion_status == CompletionStatus.COMPLETE
+    can_finalize = is_complete and panel["finalization_open"]
     if not can_finalize:
-        st.info(
-            "Can't finalize yet — this learner's record isn't complete. Encode the "
-            "missing grades and Recompute above first."
-        )
+        if is_complete:
+            st.info(
+                f"Complete, but finalizing is closed until {panel['final_term_name']} "
+                "opens for grade encoding."
+            )
+        else:
+            st.info(
+                "Can't finalize yet — this learner's record isn't complete. Encode the "
+                "missing grades and Recompute above first."
+            )
     if st.button("Finalize", key=f"finalize_{enrollment.id}", disabled=not can_finalize):
         _finalize_enrollment(session, current_user, enrollment, summary, datetime.now(timezone.utc))
         try_commit(
@@ -207,6 +227,9 @@ def _panel_data(session, enrollments, school_year_id) -> dict:
         .all()
     }
     per_term: dict = {}
+    per_term_by_number: dict = {}
+    terms = session.query(Term).filter_by(school_year_id=school_year_id).all()
+    term_number_by_id = {t.id: t.term_number for t in terms}
     rows = (
         session.query(TermGradeSummary)
         .join(Term, Term.id == TermGradeSummary.term_id)
@@ -216,10 +239,21 @@ def _panel_data(session, enrollments, school_year_id) -> dict:
     )
     for row in rows:
         per_term.setdefault(row.enrollment_id, []).append(row)
-    term_names = {
-        t.id: t.name
-        for t in session.query(Term).filter_by(school_year_id=school_year_id).all()
-    }
+        per_term_by_number[(row.enrollment_id, term_number_by_id[row.term_id])] = row
+    term_names = {t.id: t.name for t in terms}
+    # Whether the school year's LAST term (highest term_number — not
+    # assumed to be "Term 3", so a fourth term needs no change here, see
+    # the "if DepEd reverts to four quarters" note in CLAUDE.md) is open
+    # for grade encoding. Finalizing is gated on this everywhere below: a
+    # subject offered only in T1 so far reads as a complete, one-term
+    # subject whether that's its real pattern or its later-term offerings
+    # just haven't been created yet (see the Grade 12 gap in CLAUDE.md) —
+    # gating on the calendar at least stops that from finalizing a whole
+    # year before the year's own last term has even opened.
+    final_term = max(terms, key=lambda t: t.term_number) if terms else None
+    finalization_open = (
+        final_term is not None and final_term.grade_encoding_status == GradeEncodingStatus.OPEN
+    )
     # Latest ANNUAL_ENROLLMENT finalization record per learner, newest
     # first so the first one kept per enrollment_id is the latest.
     finalization: dict = {}
@@ -237,7 +271,10 @@ def _panel_data(session, enrollments, school_year_id) -> dict:
         "annual": annual,
         "terms": per_term,
         "term_names": term_names,
+        "terms_by_number": per_term_by_number,
         "finalization": finalization,
+        "finalization_open": finalization_open,
+        "final_term_name": final_term.name if final_term else None,
     }
 
 
@@ -308,7 +345,7 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
 
     st.divider()
     _finalization_section(
-        session, current_user, enrollment, summary, panel["finalization"].get(enrollment.id)
+        session, current_user, enrollment, summary, panel["finalization"].get(enrollment.id), panel
     )
 
 
@@ -382,9 +419,14 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
                     if offering_id is not None
                     else None
                 )
-        summary = summaries.get(enrollment.id)
-        row["General Average"] = _fmt(summary.general_average) if summary else DASH
-        row["Completion"] = summary.completion_status.value if summary else "not computed yet"
+        if view == "Final":
+            summary = summaries.get(enrollment.id)
+            row["General Average"] = _fmt(summary.general_average) if summary else DASH
+            row["Completion"] = summary.completion_status.value if summary else "not computed yet"
+        else:
+            term_summary = panel["terms_by_number"].get((enrollment.id, term_number))
+            row[f"{view} Average"] = _fmt(term_summary.term_average) if term_summary else DASH
+            row["Completion"] = term_summary.completion_status.value if term_summary else "not computed yet"
         rows.append(row)
     st.table(rows)
 
@@ -450,7 +492,10 @@ def render() -> None:
                     flash("success", f"Recomputed {len(enrollments)} learner(s).")
                     st.rerun()
             with col_finalize:
-                if st.button("Finalize all eligible in this section"):
+                if st.button(
+                    "Finalize all eligible in this section",
+                    disabled=not panel["finalization_open"],
+                ):
                     finalized, incomplete, already = finalize_eligible_enrollments(
                         session, current_user, enrollments, panel
                     )
@@ -463,11 +508,18 @@ def render() -> None:
                         parts.append(f"{already} already finalized.")
                     flash("success" if finalized else "info", " ".join(parts))
                     st.rerun()
-            st.caption(
-                "Finalize all eligible locks the whole year (all terms) for every learner "
-                "whose annual record already reads COMPLETE — same rule as the per-learner "
-                "Finalize button below, just applied to the section at once."
-            )
+            if panel["finalization_open"]:
+                st.caption(
+                    "Finalize all eligible locks the whole year (all terms) for every learner "
+                    "whose annual record already reads COMPLETE — same rule as the per-learner "
+                    "Finalize button below, just applied to the section at once."
+                )
+            else:
+                st.caption(
+                    f"Disabled until {panel['final_term_name']} opens for grade encoding. Until "
+                    "then, a subject whose later terms just haven't been offered yet can read as "
+                    "a complete one-term subject too early and finalize the whole year on it."
+                )
 
         _class_summary(session, enrollments, section_choice, sy_choice, panel)
 
