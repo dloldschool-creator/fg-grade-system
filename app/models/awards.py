@@ -54,6 +54,15 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
     # Eligible regardless of thresholds, and only an explicit override on
     # the Awards page grants it. require_* checks above still apply.
     manual_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Zero absences AND zero tardies/cutting, over the scope's period
+    # (the term, or the whole year for ANNUAL), with attendance fully
+    # encoded first — an unencoded day is not proof of presence (same
+    # NULL-is-not-a-value rule the grading side uses; see the Insights
+    # attendance-risk trap in CLAUDE.md, where 0% absent on an empty sheet
+    # reads as perfect attendance rather than "nobody's checked yet").
+    require_perfect_attendance: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     # Certificate rendering, all optional — a version with none of these
     # set falls back to the long-standing default (one signatory picked
     # on the Awards page, standard wording, layout below).

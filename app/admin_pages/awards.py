@@ -11,7 +11,7 @@ from app.admin_pages._helpers import (
     section_picker,
 )
 from app.auth import require_role
-from app.award_service import clear_award_override, compute_award_eligibility, set_award_override
+from app.award_service import clear_award_override, compute_award_eligibility_batch, set_award_override
 from app.certificate_generator import (
     CertificateData,
     certificate_award_name,
@@ -327,8 +327,9 @@ def render() -> None:
             return
 
         if st.button("Compute eligibility for all"):
-            for enrollment in enrollments:
-                compute_award_eligibility(session, enrollment.id, version_choice, term_choice)
+            compute_award_eligibility_batch(
+                session, [e.id for e in enrollments], version_choice, term_choice
+            )
             flash("success", f"Computed eligibility for {len(enrollments)} learner(s).")
             st.rerun()
 

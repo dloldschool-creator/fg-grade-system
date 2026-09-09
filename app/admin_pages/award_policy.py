@@ -38,7 +38,7 @@ This is where you configure the rules, per school year:
 
 * **Effective school year** — which SY this version applies to. The Awards page only offers versions whose school year matches the year you're working in.
 * **Judged against (scope)** — TERM (judged against each term's Term Average, awardable up to 3×/year — the Legacy Honors shape) or ANNUAL (judged once, against the year's General Average — the Academic Excellence shape).
-* **Require complete record / no derogatory record / no failed subject** — checkboxes for eligibility. These still apply even when Manual only (below) is checked.
+* **Require complete record / no derogatory record / no failed subject / perfect attendance** — checkboxes for eligibility. These still apply even when Manual only (below) is checked. Perfect attendance means zero absences and zero tardies/cutting over this version's own period (the term below for TERM, the whole year for ANNUAL) — an unencoded day blocks it rather than being read as present. A pure attendance award (e.g. "Complete Attendance") just checks this one and leaves everything else at its default/blank — it's computed automatically, no manual override needed for the typical case.
 * **Manual only** — for an award with no computable rule at all: Leadership, Best in Subject. Every learner defaults to Not Eligible no matter what the thresholds below say; grant it to specific learners with the override control on the Awards page. Overrides this checkbox — leave thresholds blank when it's on.
 * **Single-tier thresholds** — a flat min average and/or min lowest single grade. Leave both at 0 to skip.
 * **Tiered thresholds** — up to 3 named tiers (e.g. "With Honors", "With High Honors", "With Highest Honors"), each with its own minimum. Filling these in overrides the single-tier fields above.
@@ -86,6 +86,7 @@ def _version_snapshot(v: AwardPolicyVersion) -> dict:
         "require_no_derogatory_record": v.require_no_derogatory_record,
         "require_no_failed_subject": v.require_no_failed_subject,
         "manual_only": v.manual_only,
+        "require_perfect_attendance": v.require_perfect_attendance,
         "min_general_average": v.min_general_average,
         "min_lowest_final_grade": v.min_lowest_final_grade,
         "tier_thresholds": v.tier_thresholds,
@@ -138,6 +139,18 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
         "Require no failed subject",
         value=existing.require_no_failed_subject if existing else False,
         key=f"{prefix}_reqf",
+    )
+    require_perfect_attendance = st.checkbox(
+        "Require perfect attendance",
+        value=existing.require_perfect_attendance if existing else False,
+        key=f"{prefix}_reqattend",
+        help=(
+            "Zero absences AND zero tardies/cutting over this version's own period "
+            "(the term picked below for a TERM scope, the whole year for ANNUAL), "
+            "with attendance fully encoded first — an unencoded day blocks it rather "
+            "than counting as present. Combines with any other setting on this form; "
+            "leave everything else blank/unchecked for a pure attendance award."
+        ),
     )
     manual_only = st.checkbox(
         "Manual only — no automatic rule (Leadership, Best in Subject)",
@@ -225,6 +238,7 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
         "require_complete_record": require_complete_record,
         "require_no_derogatory_record": require_no_derogatory_record,
         "require_no_failed_subject": require_no_failed_subject,
+        "require_perfect_attendance": require_perfect_attendance,
         "manual_only": manual_only,
         "min_general_average": min_general_average or None,
         "min_lowest_final_grade": min_lowest_final_grade or None,
@@ -308,6 +322,7 @@ def render() -> None:
                     f"{'complete record required, ' if v.require_complete_record else ''}"
                     f"{'no derogatory record, ' if v.require_no_derogatory_record else ''}"
                     f"{'no failed subject, ' if v.require_no_failed_subject else ''}"
+                    f"{'perfect attendance required, ' if v.require_perfect_attendance else ''}"
                     f"{shape} — effective {sy_by_id.get(v.effective_school_year_id).name if v.effective_school_year_id else '—'}"
                     f"{extras_suffix}"
                 )

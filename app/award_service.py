@@ -27,18 +27,29 @@ Scope and shape are orthogonal — any scope can use any shape. All three
 always record *why*, never a bare "Not Eligible" (§24 requires the
 explanation), and none ever recomputes grades itself: the averages are
 read from the already-computed summary tables.
+
+`require_perfect_attendance` is a fourth, independent gate (like
+`require_complete_record`) rather than a fourth shape: zero absences and
+zero tardies/cutting over the scope's own period, with attendance fully
+encoded first. It combines with any shape — a pure attendance award sets
+nothing else, but a school could equally require both a grade threshold
+and perfect attendance on the same version. Reading it means a real,
+separately-batched query against `attendance_records`, so
+`compute_award_eligibility_batch` only fetches it when the version
+actually asks for it.
 """
 
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app import audit_service
+from app import attendance_service, audit_service
+from app.attendance_engine import AttendanceSummary, Movement, compute_active_window
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
 from app.models.enums import AwardResult, AwardScope, CompletionStatus
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment
-from app.models.organization import Term
+from app.models.organization import SchoolYear, Term
 
 
 def _evaluate(
@@ -48,6 +59,7 @@ def _evaluate(
     enrollment,
     average_label: str,
     record_label: str,
+    attendance: AttendanceSummary | None = None,
 ):
     """`summary` is an AnnualGradeSummary or a TermGradeSummary — this
     reads only the fields both expose (via `_average_of`/`_lowest_of`),
@@ -55,7 +67,12 @@ def _evaluate(
 
     Two labels, not one, because the natural phrasing differs: the annual
     scope reports a "General Average" but an "Annual record", while a term
-    scope reports a "Term 1 Average" and a "Term 1 record"."""
+    scope reports a "Term 1 Average" and a "Term 1 record".
+
+    `attendance` is only read when `version.require_perfect_attendance` is
+    set — the caller (`compute_award_eligibility_batch`) only bothers
+    building it in that case, since it's a genuinely separate, batched
+    data fetch from the grade summaries every other check reads."""
     reasons: list[str] = []
     eligible = True
 
@@ -68,6 +85,28 @@ def _evaluate(
     ):
         eligible = False
         reasons.append(f"{record_label} record is not COMPLETE.")
+
+    if version.require_perfect_attendance:
+        if attendance is None or attendance.eligible_days == 0:
+            eligible = False
+            reasons.append(f"No eligible class days recorded ({record_label}).")
+        elif attendance.unencoded_days > 0:
+            eligible = False
+            reasons.append(
+                f"{attendance.unencoded_days} day(s) of attendance not yet encoded "
+                f"({record_label})."
+            )
+        else:
+            broken = []
+            if attendance.days_absent:
+                broken.append(f"{attendance.days_absent} absence(s)")
+            if attendance.late_count:
+                broken.append(f"{attendance.late_count} tardy(ies)")
+            if attendance.cutting_count:
+                broken.append(f"{attendance.cutting_count} cutting(s)")
+            if broken:
+                eligible = False
+                reasons.append("Not perfect attendance — " + ", ".join(broken) + ".")
 
     if version.require_no_derogatory_record and enrollment.derogatory_record:
         eligible = False
@@ -151,14 +190,56 @@ def _lowest_of(summary):
     return summary.lowest_final_grade
 
 
-def compute_award_eligibility(
-    session: Session, enrollment_id, award_policy_version_id, term_id=None
-) -> LearnerAward | None:
-    """Computes and upserts the `learner_awards` row.
+def _attendance_by_enrollment(
+    session: Session, version: AwardPolicyVersion, enrollments: dict, term_id
+) -> dict:
+    """`{enrollment_id: AttendanceSummary}` for the version's scope
+    period, batched the same way `attendance_service.summarize_month_batch`
+    already batches a whole roster for one month — the only difference
+    here is the `class_days` list spans a term or the whole year instead
+    of one calendar month, which the function already supports since it
+    was never actually month-specific, just month-named. Only called when
+    `require_perfect_attendance` is set — every other check reads grade
+    summaries instead, which the caller already has."""
+    if not enrollments:
+        return {}
+    class_days = (
+        attendance_service.class_days_in_term(session, term_id)
+        if version.scope == AwardScope.TERM
+        else attendance_service.class_days_in_school_year(session, version.effective_school_year_id)
+    )
+    movements = attendance_service.movements_by_enrollment(session, list(enrollments))
+    school_year = session.get(SchoolYear, version.effective_school_year_id)
+    default_start = school_year.start_date if school_year else None
+    roster = [
+        (
+            enrollment,
+            None,  # summarize_month_batch never reads the Learner slot
+            compute_active_window(
+                [Movement(m.movement_type, m.effective_date) for m in movements.get(enrollment.id, [])],
+                default_start=default_start,
+            ),
+        )
+        for enrollment in enrollments.values()
+    ]
+    return attendance_service.summarize_month_batch(session, roster, class_days)
+
+
+def compute_award_eligibility_batch(
+    session: Session, enrollment_ids: list, award_policy_version_id, term_id=None
+) -> dict:
+    """Computes and upserts `learner_awards` for a whole roster in one
+    pass — the same split `recompute_enrollment_grades_batch` uses for
+    grades (CLAUDE.md's Performance section), and for the same reason:
+    the Awards page's "Compute eligibility for all" used to call the
+    single-enrollment version in a loop, which meant one full commit per
+    learner, not just one query. `compute_award_eligibility` below is now
+    a 1-element wrapper over this — call this directly for anything that
+    loops.
 
     `term_id` is required for a TERM-scoped policy and ignored for an
-    ANNUAL one — passing it for the wrong scope returns None rather than
-    silently writing a row that means something different from what the
+    ANNUAL one — passing it for the wrong scope returns {} rather than
+    silently writing rows that mean something different from what the
     caller intended.
 
     A row with `is_override=True` is left untouched: an admin override
@@ -167,61 +248,104 @@ def compute_award_eligibility(
     """
     version = session.get(AwardPolicyVersion, award_policy_version_id)
     if version is None:
-        return None
+        return {}
 
     if version.scope == AwardScope.TERM:
         if term_id is None:
-            return None
-        summary = (
-            session.query(TermGradeSummary)
-            .filter_by(enrollment_id=enrollment_id, term_id=term_id)
-            .one_or_none()
-        )
+            return {}
+        summaries = {
+            row.enrollment_id: row
+            for row in session.query(TermGradeSummary)
+            .filter(
+                TermGradeSummary.enrollment_id.in_(enrollment_ids),
+                TermGradeSummary.term_id == term_id,
+            )
+            .all()
+        }
         term = session.get(Term, term_id)
         record_label = term.name if term else "Term"
         average_label = f"{record_label} Average"
         effective_term_id = term_id
     else:
-        summary = (
-            session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment_id).one_or_none()
-        )
+        summaries = {
+            row.enrollment_id: row
+            for row in session.query(AnnualGradeSummary)
+            .filter(AnnualGradeSummary.enrollment_id.in_(enrollment_ids))
+            .all()
+        }
         record_label = "Annual"
         average_label = "General Average"
         effective_term_id = None
 
-    existing = (
-        session.query(LearnerAward)
-        .filter_by(
-            enrollment_id=enrollment_id,
-            award_policy_version_id=award_policy_version_id,
-            term_id=effective_term_id,
+    enrollments = {
+        e.id: e for e in session.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).all()
+    }
+    existing_rows = {
+        row.enrollment_id: row
+        for row in session.query(LearnerAward)
+        .filter(
+            LearnerAward.enrollment_id.in_(enrollment_ids),
+            LearnerAward.award_policy_version_id == award_policy_version_id,
+            LearnerAward.term_id == effective_term_id,
         )
-        .one_or_none()
-    )
-    if existing is not None and existing.is_override:
-        return existing
-
+        .all()
+    }
     policy = session.get(AwardPolicy, version.award_policy_id)
-    enrollment = session.get(Enrollment, enrollment_id)
 
-    eligible, award_name, reason = _evaluate(
-        version, policy.name, summary, enrollment, average_label, record_label
+    attendance_by_enrollment = (
+        _attendance_by_enrollment(session, version, enrollments, term_id)
+        if version.require_perfect_attendance
+        else {}
     )
 
-    if existing is None:
-        existing = LearnerAward(
-            enrollment_id=enrollment_id,
-            school_year_id=enrollment.school_year_id,
-            award_policy_version_id=award_policy_version_id,
-            term_id=effective_term_id,
+    now = datetime.now(timezone.utc)
+    results: dict = {}
+    for enrollment_id in enrollment_ids:
+        enrollment = enrollments.get(enrollment_id)
+        if enrollment is None:
+            continue
+        existing = existing_rows.get(enrollment_id)
+        if existing is not None and existing.is_override:
+            results[enrollment_id] = existing
+            continue
+
+        eligible, award_name, reason = _evaluate(
+            version,
+            policy.name,
+            summaries.get(enrollment_id),
+            enrollment,
+            average_label,
+            record_label,
+            attendance=attendance_by_enrollment.get(enrollment_id),
         )
-        session.add(existing)
-    existing.award_result = AwardResult.ELIGIBLE_AWARDED if eligible else AwardResult.NOT_ELIGIBLE
-    existing.award_name = award_name
-    existing.reason = reason
-    existing.computed_at = datetime.now(timezone.utc)
+
+        if existing is None:
+            existing = LearnerAward(
+                enrollment_id=enrollment_id,
+                school_year_id=enrollment.school_year_id,
+                award_policy_version_id=award_policy_version_id,
+                term_id=effective_term_id,
+            )
+            session.add(existing)
+        existing.award_result = AwardResult.ELIGIBLE_AWARDED if eligible else AwardResult.NOT_ELIGIBLE
+        existing.award_name = award_name
+        existing.reason = reason
+        existing.computed_at = now
+        results[enrollment_id] = existing
+
     session.commit()
-    return existing
+    return results
+
+
+def compute_award_eligibility(
+    session: Session, enrollment_id, award_policy_version_id, term_id=None
+) -> LearnerAward | None:
+    """Single-enrollment wrapper over `compute_award_eligibility_batch` —
+    same 1-element-call pattern as `recompute_enrollment_grades`. Prefer
+    the batch function directly for anything that loops."""
+    return compute_award_eligibility_batch(
+        session, [enrollment_id], award_policy_version_id, term_id
+    ).get(enrollment_id)
 
 
 def set_award_override(

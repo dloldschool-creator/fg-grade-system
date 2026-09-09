@@ -138,6 +138,36 @@ def class_days_in_month(session: Session, school_year_id, year: int, month: int)
     )
 
 
+def class_days_in_term(session: Session, term_id) -> list[AcademicCalendarDate]:
+    """Every class day in one term, for a period-scoped summary (a
+    Complete Attendance award, e.g.) that isn't bound to one calendar
+    month. `summarize_month_batch` is named for its usual caller but
+    takes any `class_days` list, so this is the only new piece needed."""
+    return (
+        session.query(AcademicCalendarDate)
+        .filter(
+            AcademicCalendarDate.term_id == term_id,
+            AcademicCalendarDate.is_default_class_day.is_(True),
+        )
+        .order_by(AcademicCalendarDate.calendar_date)
+        .all()
+    )
+
+
+def class_days_in_school_year(session: Session, school_year_id) -> list[AcademicCalendarDate]:
+    """Every class day in the whole school year — the ANNUAL-scope
+    counterpart to `class_days_in_term`."""
+    return (
+        session.query(AcademicCalendarDate)
+        .filter(
+            AcademicCalendarDate.school_year_id == school_year_id,
+            AcademicCalendarDate.is_default_class_day.is_(True),
+        )
+        .order_by(AcademicCalendarDate.calendar_date)
+        .all()
+    )
+
+
 def months_with_class_days(session: Session, school_year_id) -> list[tuple[int, int]]:
     """(year, month) pairs that actually contain class days, in order —
     what the Attendance page's month picker offers."""

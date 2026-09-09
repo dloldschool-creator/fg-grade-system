@@ -795,6 +795,7 @@ Academic Excellence conditions.
 | min_general_average | NUMERIC(5,2) NULL | read against whichever average `scope` selects, despite the name |
 | min_lowest_final_grade | NUMERIC(5,2) NULL | lowest Final Grade (`ANNUAL`) or lowest term grade (`TERM`) |
 | require_no_failed_subject | BOOLEAN NOT NULL DEFAULT false | |
+| require_perfect_attendance | BOOLEAN NOT NULL DEFAULT false | zero absences and zero tardies/cutting over the scope's own period, attendance fully encoded first. An independent gate like the require_* fields above, not a shape — combines with any of them |
 | manual_only | BOOLEAN NOT NULL DEFAULT false | no computable rule (Leadership, Best in Subject) — every learner defaults to Not Eligible; only an override grants it. Wins over `tier_thresholds`/flat thresholds when set |
 | tier_thresholds | JSONB NULL | e.g. `[{"label":"WITH HIGHEST HONORS","min_ga":98}, ...]` for the legacy tiered policy |
 | status | ENUM(`DRAFT`,`ACTIVE`,`ARCHIVED`) NOT NULL DEFAULT `DRAFT` | |
