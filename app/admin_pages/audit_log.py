@@ -91,7 +91,17 @@ ACTION_GROUPS = {
         audit_service.TEACHER_ASSIGNED,
         audit_service.TEACHER_UNASSIGNED,
     ],
-    "Awards": [audit_service.AWARD_OVERRIDDEN, audit_service.AWARD_OVERRIDE_CLEARED],
+    "Awards": [
+        audit_service.AWARD_OVERRIDDEN,
+        audit_service.AWARD_OVERRIDE_CLEARED,
+        audit_service.AWARD_POLICY_CREATED,
+        audit_service.AWARD_POLICY_CHANGED,
+        audit_service.AWARD_POLICY_DELETED,
+        audit_service.AWARD_POLICY_VERSION_CREATED,
+        audit_service.AWARD_POLICY_VERSION_CHANGED,
+        audit_service.AWARD_POLICY_VERSION_DELETED,
+        audit_service.AWARD_POLICY_VERSION_STATUS_CHANGED,
+    ],
     "Data": [
         audit_service.DATA_IMPORTED,
         audit_service.BACKUP_DOWNLOADED,
@@ -220,12 +230,27 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
         "be selected below.",
         icon="⚠️",
     )
+    # grand_total alone doesn't say anything is actually archivable: every
+    # entry could be inside the 90-day floor above (true for a young log,
+    # where the archivable count is 0 for weeks after crossing
+    # SUGGEST_THRESHOLD). Telling the admin to "archive the oldest ones"
+    # when there's nothing eligible yet is advice they can't act on.
+    archivable = audit_archive_service.count_before(session, audit_archive_service.max_cutoff())
     if grand_total >= audit_archive_service.SUGGEST_THRESHOLD:
-        st.warning(
-            f"There are {grand_total:,} entries in the log — consider archiving the "
-            "oldest ones below so the viewer above stays usable.",
-            icon="⚠️",
-        )
+        if archivable > 0:
+            st.warning(
+                f"There are {grand_total:,} entries in the log, {archivable:,} of them "
+                "archivable — consider archiving the oldest ones below so the viewer "
+                "above stays usable.",
+                icon="⚠️",
+            )
+        else:
+            st.info(
+                f"There are {grand_total:,} entries in the log, but none are archivable "
+                f"yet — the oldest won't cross the {audit_archive_service.MIN_AGE_DAYS}-day "
+                "mark until later.",
+                icon="ℹ️",
+            )
 
     cutoff_date = st.date_input(
         "Delete entries older than",

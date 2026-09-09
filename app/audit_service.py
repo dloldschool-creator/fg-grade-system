@@ -76,6 +76,25 @@ SUBJECT_UNITS_CHANGED = "SUBJECT_UNITS_CHANGED"
 CALENDAR_DAY_CHANGED = "CALENDAR_DAY_CHANGED"
 AWARD_OVERRIDDEN = "AWARD_OVERRIDDEN"
 AWARD_OVERRIDE_CLEARED = "AWARD_OVERRIDE_CLEARED"
+# Neither a policy nor a version was ever audited before 2026-09-09 —
+# creation was the only thing you could do to either, and nothing
+# recorded who did it or when. That silence made a real duplicate
+# ("Academic Achievement" created twice — likely a Streamlit form
+# submitting on Enter from the Name field before the admin had finished)
+# unanswerable after the fact: no trace of who created either row or
+# when. The policy/version pair also had no edit or delete path at all
+# until the same date, by design (§24, rule 6: editing a version already
+# used to judge awards would silently change results real learners were
+# already given) — adding edit/delete/status-change means adding the
+# full audit trail for the whole lifecycle at once, not just the new
+# capabilities.
+AWARD_POLICY_CREATED = "AWARD_POLICY_CREATED"
+AWARD_POLICY_CHANGED = "AWARD_POLICY_CHANGED"
+AWARD_POLICY_DELETED = "AWARD_POLICY_DELETED"
+AWARD_POLICY_VERSION_CREATED = "AWARD_POLICY_VERSION_CREATED"
+AWARD_POLICY_VERSION_CHANGED = "AWARD_POLICY_VERSION_CHANGED"
+AWARD_POLICY_VERSION_DELETED = "AWARD_POLICY_VERSION_DELETED"
+AWARD_POLICY_VERSION_STATUS_CHANGED = "AWARD_POLICY_VERSION_STATUS_CHANGED"
 USER_ROLES_CHANGED = "USER_ROLES_CHANGED"
 # Creating an account and issuing a password are separate facts from
 # changing what someone may do, and filing them under USER_ROLES_CHANGED
