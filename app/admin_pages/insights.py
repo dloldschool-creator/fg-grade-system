@@ -411,6 +411,76 @@ def _render_by_subject(rows) -> None:
         )
 
 
+def _render_by_teacher(rows) -> None:
+    """Encoding progress re-grouped by subject teacher, for chasing.
+
+    Same `offering_progress` rows as the single-section "by subject" view
+    below, just pivoted: a subject teacher can hold classes across many
+    sections (the busiest here holds 30 across 10), so a section-grouped
+    list scatters their name across a dozen rows instead of saying "this
+    one person owes N classes." School-wide roles only — an adviser's own
+    one-section view already names the teacher per subject, and a subject
+    teacher only ever sees their own classes on "My classes".
+    """
+    if not rows:
+        st.caption("No subjects offered yet for this selection.")
+        return
+
+    by_teacher: dict[str, list] = {}
+    for row in rows:
+        by_teacher.setdefault(row.teacher_name or "Not assigned", []).append(row)
+
+    summary = []
+    for teacher, group in by_teacher.items():
+        encoded = sum(r.encoded for r in group)
+        expected = sum(r.expected for r in group)
+        missing = sum(r.missing for r in group)
+        summary.append(
+            {
+                "Teacher": teacher,
+                "Classes": len(group),
+                "Still incomplete": sum(1 for r in group if r.missing > 0),
+                "Missing": missing,
+                "Progress": _fmt_percent(100.0 * encoded / expected if expected else None),
+            }
+        )
+    summary.sort(key=lambda r: -r["Missing"])
+    st.dataframe(pd.DataFrame(summary), hide_index=True, width="stretch")
+
+    detail = sorted(
+        (r for r in rows if r.missing > 0),
+        key=lambda r: ((r.teacher_name or "Not assigned"), -r.missing),
+    )
+    if detail:
+        st.markdown("**Still needing grades, by teacher**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Teacher": r.teacher_name or "Not assigned",
+                        "Section": r.section_name,
+                        "Subject": r.subject_name or r.subject_code,
+                        "Term": r.term_name,
+                        "Encoded": f"{r.encoded} / {r.expected}",
+                        "Missing": r.missing,
+                        "Progress": _fmt_percent(r.percent),
+                    }
+                    for r in detail
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    unassigned = sum(1 for r in rows if not r.teacher_name)
+    if unassigned:
+        st.warning(
+            f"{unassigned} of these subjects have no teacher assigned, so "
+            "nobody has been asked to encode them. They can be assigned on "
+            "Teacher Assignments."
+        )
+
+
 def _render_my_classes(rows) -> None:
     """The subject teacher's own view: one row per class they hold.
 
@@ -1301,6 +1371,19 @@ def render() -> None:
             "can actually encode against, but each one needs a real subject "
             "chosen on Section Subject Offerings."
         )
+
+    # School-wide roles only — this is a chase list across everyone's
+    # sections, which is exactly what an adviser's own single-section view
+    # below already covers for the one section they hold, and what a
+    # subject teacher's own "My classes" covers for the classes they hold.
+    if school_wide:
+        st.divider()
+        st.subheader("Encoding progress by teacher")
+        by_teacher_rows = _offering_progress(str(sy_choice), tuple(section_ids))
+        by_teacher_rows = [
+            r for r in by_teacher_rows if _matches(r, visible_ids, term_choice, section_choice)
+        ]
+        _render_by_teacher(by_teacher_rows)
 
     # The per-subject breakdown, once the view is down to one section.
     # Gated on that rather than on the viewer's role: it is the same
