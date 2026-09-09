@@ -911,7 +911,6 @@ this table (§50).
 | previous_value | JSONB NULL | |
 | new_value | JSONB NULL | |
 | reason | TEXT NULL | required by app logic for sensitive actions |
-| ip_address | INET NULL | |
 | user_agent | TEXT NULL | |
 | created_at | TIMESTAMPTZ NOT NULL DEFAULT now() | |
 

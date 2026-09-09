@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import ForeignKey, Integer, String, func
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDPKMixin
@@ -24,7 +24,6 @@ class AuditLog(UUIDPKMixin, Base):
     previous_value: Mapped[dict | None] = mapped_column(JSONB)
     new_value: Mapped[dict | None] = mapped_column(JSONB)
     reason: Mapped[str | None] = mapped_column(String)
-    ip_address: Mapped[str | None] = mapped_column(INET)
     user_agent: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

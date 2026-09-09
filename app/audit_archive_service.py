@@ -77,7 +77,6 @@ def export_csv(session, before: datetime) -> tuple[bytes, int]:
             "previous_value",
             "new_value",
             "reason",
-            "ip_address",
             "user_agent",
         ]
     )
@@ -93,7 +92,6 @@ def export_csv(session, before: datetime) -> tuple[bytes, int]:
                 entry.previous_value or "",
                 entry.new_value or "",
                 entry.reason or "",
-                entry.ip_address or "",
                 entry.user_agent or "",
             ]
         )

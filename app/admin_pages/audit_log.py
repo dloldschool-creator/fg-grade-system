@@ -16,7 +16,7 @@ this page into hundreds of pages to click through.
 import os
 import tempfile
 import uuid
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
 
 import pandas as pd
 import streamlit as st
@@ -26,6 +26,7 @@ from app.admin_pages._helpers import flash, get_session, render_flashes, try_com
 from app.auth import require_role
 from app.display_time import LOG_FORMAT, format_time
 from app.models.admin import AuditLog
+from app.models.learners import Learner
 from app.models.rbac import User
 
 PAGE_SIZE = 100
@@ -132,6 +133,45 @@ def _format_value(value, users: dict | None = None) -> str:
     return ", ".join(render(k, v) for k, v in value.items())
 
 
+def _learner_name(last_name, first_name, middle_name=None, extension_name=None) -> str:
+    middle = f" {middle_name}" if middle_name else ""
+    extension = f" {extension_name}" if extension_name else ""
+    return f"{last_name}, {first_name}{middle}{extension}".strip()
+
+
+def _learner_name_from_payload(payload: dict | None) -> str | None:
+    """A LEARNER_DELETED entry's `previous_value` is the only surviving
+    record of the identity fields once the row itself is gone; use it when
+    a live lookup misses. Diffed payloads (LEARNER_CHANGED) may carry only
+    the fields that actually changed, so this returns None rather than a
+    partial name when last_name/first_name aren't both present."""
+    if not payload or "last_name" not in payload or "first_name" not in payload:
+        return None
+    return _learner_name(
+        payload["last_name"],
+        payload["first_name"],
+        payload.get("middle_name"),
+        payload.get("extension_name"),
+    )
+
+
+def _resolve_object(entry: AuditLog, learners: dict) -> str:
+    """`object_type` alone ("learners") tells you nothing about which
+    learner — LEARNER_CREATED/CHANGED/DELETED/ADMISSION_CHANGED all store
+    the learner's id as `object_id`, so resolve it to a name the same way
+    `_resolve_user` does for a `_user_id` field."""
+    if entry.object_type != "learners":
+        return entry.object_type
+    learner = learners.get(entry.object_id)
+    if learner:
+        name = _learner_name(
+            learner.last_name, learner.first_name, learner.middle_name, learner.extension_name
+        )
+        return f"{entry.object_type} — {name}"
+    name = _learner_name_from_payload(entry.previous_value) or _learner_name_from_payload(entry.new_value)
+    return f"{entry.object_type} — {name} (deleted)" if name else f"{entry.object_type} (deleted learner)"
+
+
 def _store_export(data: bytes, before: datetime, count: int) -> None:
     """Spills the export to a temp file and keeps only its path in session
     state — same reasoning as backup.py's _store: an export held as bytes in
@@ -170,9 +210,15 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
     st.subheader("Archive old entries")
     st.caption(
         "For a very large log, not for routine cleanup: entries can be exported and "
-        "permanently deleted, oldest first. Nothing newer than "
-        f"{audit_archive_service.MIN_AGE_DAYS} days can ever be selected, and deleting "
-        "always requires downloading the exact rows first."
+        "permanently deleted, oldest first. Deleting always requires downloading the "
+        "exact rows first."
+    )
+    latest_allowed = audit_archive_service.max_cutoff().date()
+    st.warning(
+        f"You're allowed to archive data no newer than {latest_allowed:%Y-%m-%d} — "
+        f"nothing within the last {audit_archive_service.MIN_AGE_DAYS} days can ever "
+        "be selected below.",
+        icon="⚠️",
     )
     if grand_total >= audit_archive_service.SUGGEST_THRESHOLD:
         st.warning(
@@ -181,11 +227,9 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
             icon="⚠️",
         )
 
-    latest_allowed = audit_archive_service.max_cutoff().date()
-    default_cutoff = min(latest_allowed, datetime.now(timezone.utc).date() - timedelta(days=365))
     cutoff_date = st.date_input(
         "Delete entries older than",
-        value=default_cutoff,
+        value=latest_allowed,
         max_value=latest_allowed,
     )
     before = datetime.combine(cutoff_date, time.min, tzinfo=timezone.utc)
@@ -272,6 +316,7 @@ def render() -> None:
 
     with get_session() as session:
         users = {u.id: u for u in session.query(User).all()}
+        learners = {l.id: l for l in session.query(Learner).all()}
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -339,18 +384,10 @@ def render() -> None:
                                 else "(system)"
                             ),
                             "Action": entry.action,
-                            "Object": entry.object_type,
+                            "Object": _resolve_object(entry, learners),
                             "Was": _format_value(entry.previous_value, users),
                             "Became": _format_value(entry.new_value, users),
                             "Reason": entry.reason or "",
-                            # IP is hidden here, not removed: on Streamlit
-                            # Community Cloud, _request_metadata()'s
-                            # X-Forwarded-For fallback surfaces the
-                            # platform's own internal (10.x) network, not
-                            # the visitor's real address, so it currently
-                            # reads as noise rather than evidence. The
-                            # column is still in AuditLog.ip_address if
-                            # this ever becomes reliable on another host.
                         }
                         for entry in entries
                     ]

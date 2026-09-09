@@ -2,7 +2,10 @@
 
 Every sensitive change records **who, what, which object, the previous
 value, the new value, when, and why where a reason is required** — plus
-IP and user agent where the request context makes them available.
+the requesting user agent where the request context makes it available.
+IP address was tracked here until 2026-09-09 and was removed: on
+Streamlit Community Cloud the only addresses ever available are never
+the visitor's real one (see `_user_agent`'s docstring below).
 
 `audit_logs` is append-only by design: this module offers no update or
 delete, and no page exposes one either. §50 is explicit that normal
@@ -169,7 +172,6 @@ def record(
     if action in REASON_REQUIRED and not (reason or "").strip():
         raise ValueError(f"{action} requires a reason (§50)")
 
-    ip_address, user_agent = _request_metadata()
     entry = AuditLog(
         user_id=user_id,
         action=action,
@@ -178,55 +180,38 @@ def record(
         previous_value=jsonable(previous) if previous is not None else None,
         new_value=jsonable(new) if new is not None else None,
         reason=reason,
-        ip_address=ip_address,
-        user_agent=user_agent,
+        user_agent=_user_agent(),
     )
     session.add(entry)
     return entry
 
 
-def _is_loopback(ip: str) -> bool:
-    """Whether `ip` names the machine itself rather than a real visitor —
-    including the IPv4-mapped-into-IPv6 form (`::ffff:127.0.0.1`) that
-    shows up when the local hop speaks IPv6."""
-    return ip in {"127.0.0.1", "::1"} or ip.startswith("::ffff:127.")
+def _user_agent() -> str | None:
+    """The requesting browser's User-Agent when running inside a Streamlit
+    request (§50's "where appropriate"). Returns None from a script, a
+    test or a background job, where there is no request to describe —
+    that's a normal state, not a failure.
 
-
-def _request_metadata() -> tuple[str | None, str | None]:
-    """IP and user agent when running inside a Streamlit request (§50's
-    "where appropriate"). Returns (None, None) from a script, a test or a
-    background job, where there is no request to describe — that's a
-    normal state, not a failure.
-
-    **Every request on Streamlit Community Cloud arrives at the app
-    through a local reverse proxy**, so `context.ip_address` — the
-    address of the immediate TCP peer — is always that proxy's own
-    loopback address, not the visitor's. `::ffff:127.0.0.1` logged for
-    every user is that, not a bug in how the value is read. The real
-    client address is what the *outer* edge proxy recorded before
-    handing off to that local hop, and it survives in the standard
-    `X-Forwarded-For` header — so that's the fallback when the directly
-    reported address turns out to be the loopback.
+    IP address is deliberately not captured here any more (removed
+    2026-09-09): every request on Streamlit Community Cloud arrives
+    through a local reverse proxy, so the only addresses ever available —
+    the proxy's own loopback, or the platform's internal network via
+    X-Forwarded-For — are never the visitor's real address. A column that
+    can only ever hold noise is worse than no column, since a stale
+    archived export could be misread as evidence.
     """
     try:
         import streamlit as st
 
         context = getattr(st, "context", None)
         if context is None:
-            return None, None
+            return None
         headers = getattr(context, "headers", None) or {}
-        user_agent = headers.get("User-Agent") or headers.get("user-agent")
-        ip_address = getattr(context, "ip_address", None)
-        if ip_address is None or _is_loopback(ip_address):
-            forwarded = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for")
-            if forwarded:
-                # The header is a comma-separated hop chain, client first.
-                ip_address = forwarded.split(",")[0].strip() or ip_address
-        return ip_address, user_agent
+        return headers.get("User-Agent") or headers.get("user-agent")
     except Exception:
         # Audit logging must never be the reason a legitimate change
         # fails, and metadata is the optional part of the entry.
-        return None, None
+        return None
 
 
 def changes(previous: dict, new: dict) -> tuple[dict, dict]:
