@@ -795,6 +795,7 @@ Academic Excellence conditions.
 | min_general_average | NUMERIC(5,2) NULL | read against whichever average `scope` selects, despite the name |
 | min_lowest_final_grade | NUMERIC(5,2) NULL | lowest Final Grade (`ANNUAL`) or lowest term grade (`TERM`) |
 | require_no_failed_subject | BOOLEAN NOT NULL DEFAULT false | |
+| manual_only | BOOLEAN NOT NULL DEFAULT false | no computable rule (Leadership, Best in Subject) — every learner defaults to Not Eligible; only an override grants it. Wins over `tier_thresholds`/flat thresholds when set |
 | tier_thresholds | JSONB NULL | e.g. `[{"label":"WITH HIGHEST HONORS","min_ga":98}, ...]` for the legacy tiered policy |
 | status | ENUM(`DRAFT`,`ACTIVE`,`ARCHIVED`) NOT NULL DEFAULT `DRAFT` | |
 | created_by_user_id | UUID FK → users NULL | |
@@ -802,10 +803,12 @@ Academic Excellence conditions.
 
 `UNIQUE (award_policy_id, version_number)`
 
-**`scope` vs. tier shape are orthogonal.** `scope` decides *what average*
-is judged and *how often*; whether `tier_thresholds` is set decides *how*
-the threshold applies (flat minimum vs. highest-cleared-tier ladder).
-Either scope works with either shape. As seeded:
+**`scope` vs. shape are orthogonal.** `scope` decides *what average* is
+judged and *how often*; shape decides *how* eligibility is judged, one of
+three (checked in this order): `manual_only` (no rule at all — a
+nomination, e.g. Leadership), `tier_thresholds` set (highest-cleared-tier
+ladder), or neither (flat minimum, or none at all — awards everyone who
+clears the require_* checks). Any scope works with any shape. As seeded:
 
 - **Legacy Tiered Honors** — `scope=TERM`, tiered. Judged once per term
   against `term_grade_summaries.term_average` (§17), so a learner can

@@ -12,13 +12,21 @@ judged and *how often*:
     Honors works this way, so a learner can be "With Honors" for Term 1
     and miss it for Term 2.
 
-**Shape** (`tier_thresholds` set or not) decides *how* the threshold is
-applied: a flat minimum, or a ladder where the highest cleared tier wins.
+**Shape** decides *how* eligibility is judged, and is one of three,
+mutually exclusive (`manual_only` wins over `tier_thresholds` over the
+flat fields, checked in that order):
+  - **manual_only** — no computable rule at all (Leadership, Best in
+    Subject). Every learner defaults to Not Eligible; only an explicit
+    override on the Awards page grants it. require_* checks still apply.
+  - **tier_thresholds set** — a ladder where the highest cleared tier wins.
+  - **neither** — a flat minimum (or no threshold at all, which awards
+    everyone who clears the require_* checks — this is the shape to avoid
+    for a nominative award, which is what manual_only is for).
 
-Either scope can use either shape — they're orthogonal. Both always
-record *why*, never a bare "Not Eligible" (§24 requires the explanation),
-and neither ever recomputes grades itself: the averages are read from the
-already-computed summary tables.
+Scope and shape are orthogonal — any scope can use any shape. All three
+always record *why*, never a bare "Not Eligible" (§24 requires the
+explanation), and none ever recomputes grades itself: the averages are
+read from the already-computed summary tables.
 """
 
 from datetime import datetime, timezone
@@ -69,11 +77,25 @@ def _evaluate(
         eligible = False
         reasons.append(f"{summary.failed_subject_count} failed subject(s).")
 
+    # A nominative award (Leadership, Best in Subject) has no computable
+    # rule at all — checked before either threshold shape, since a
+    # manual-only version is expected to carry no thresholds and would
+    # otherwise fall into the single-tier branch's "nothing configured,
+    # nothing to fail" case and silently award everyone. require_* checks
+    # above still apply, so a manual-only award can still be blocked by a
+    # derogatory record, for example.
+    if version.manual_only:
+        if eligible:
+            eligible = False
+            reasons.append(
+                "No automatic rule for this award — it's judged individually. "
+                "Use the override control on the Awards page to grant it."
+            )
     # NOTE: the tier dicts' threshold key is `min_general_average` for
     # every scope. It's historical (tiers were annual-only originally) and
     # kept as-is so already-seeded JSONB stays readable — under a TERM
     # scope it means "minimum Term Average".
-    if version.tier_thresholds:
+    elif version.tier_thresholds:
         if average is None:
             eligible = False
             reasons.append(f"{average_label} not yet computed.")

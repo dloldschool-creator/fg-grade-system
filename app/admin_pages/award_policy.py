@@ -38,7 +38,8 @@ This is where you configure the rules, per school year:
 
 * **Effective school year** — which SY this version applies to. The Awards page only offers versions whose school year matches the year you're working in.
 * **Judged against (scope)** — TERM (judged against each term's Term Average, awardable up to 3×/year — the Legacy Honors shape) or ANNUAL (judged once, against the year's General Average — the Academic Excellence shape).
-* **Require complete record / no derogatory record / no failed subject** — checkboxes for eligibility.
+* **Require complete record / no derogatory record / no failed subject** — checkboxes for eligibility. These still apply even when Manual only (below) is checked.
+* **Manual only** — for an award with no computable rule at all: Leadership, Best in Subject. Every learner defaults to Not Eligible no matter what the thresholds below say; grant it to specific learners with the override control on the Awards page. Overrides this checkbox — leave thresholds blank when it's on.
 * **Single-tier thresholds** — a flat min average and/or min lowest single grade. Leave both at 0 to skip.
 * **Tiered thresholds** — up to 3 named tiers (e.g. "With Honors", "With High Honors", "With Highest Honors"), each with its own minimum. Filling these in overrides the single-tier fields above.
 * **Certificate layout** — one certificate per page (an official issuance) or two per page (saves paper for classroom-level recognition). The Awards page's batch print picks this up automatically.
@@ -84,6 +85,7 @@ def _version_snapshot(v: AwardPolicyVersion) -> dict:
         "require_complete_record": v.require_complete_record,
         "require_no_derogatory_record": v.require_no_derogatory_record,
         "require_no_failed_subject": v.require_no_failed_subject,
+        "manual_only": v.manual_only,
         "min_general_average": v.min_general_average,
         "min_lowest_final_grade": v.min_lowest_final_grade,
         "tier_thresholds": v.tier_thresholds,
@@ -137,11 +139,22 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
         value=existing.require_no_failed_subject if existing else False,
         key=f"{prefix}_reqf",
     )
+    manual_only = st.checkbox(
+        "Manual only — no automatic rule (Leadership, Best in Subject)",
+        value=existing.manual_only if existing else False,
+        key=f"{prefix}_manual",
+        help=(
+            "Every learner defaults to Not Eligible regardless of the thresholds "
+            "below — grant this award to specific learners with the override "
+            "control on the Awards page instead. The require-* checks above still "
+            "apply (e.g. a derogatory record can still block it)."
+        ),
+    )
 
     st.markdown(
         "**Single-tier thresholds** (leave at 0 to skip — used by policies "
-        "like Academic Excellence). Both are read against whichever average "
-        "the scope above selects."
+        "like Academic Excellence; ignored entirely when Manual only is checked "
+        "above). Both are read against whichever average the scope above selects."
     )
     col1, col2 = st.columns(2)
     default_min_ga = float(existing.min_general_average) if existing and existing.min_general_average is not None else 0.0
@@ -212,6 +225,7 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
         "require_complete_record": require_complete_record,
         "require_no_derogatory_record": require_no_derogatory_record,
         "require_no_failed_subject": require_no_failed_subject,
+        "manual_only": manual_only,
         "min_general_average": min_general_average or None,
         "min_lowest_final_grade": min_lowest_final_grade or None,
         "tier_thresholds": tiers or None,
@@ -267,7 +281,9 @@ def render() -> None:
                     else "annual, on the General Average"
                 )
                 average_word = "TA" if v.scope == AwardScope.TERM else "GA"
-                if v.tier_thresholds:
+                if v.manual_only:
+                    shape = "manual only — no automatic rule, judged by override"
+                elif v.tier_thresholds:
                     shape = ", ".join(
                         f"{t['label']} ({average_word}≥{t['min_general_average']})"
                         for t in v.tier_thresholds

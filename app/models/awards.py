@@ -45,6 +45,15 @@ class AwardPolicyVersion(UUIDPKMixin, Base):
         Boolean, default=False, server_default="false"
     )
     tier_thresholds: Mapped[dict | None] = mapped_column(JSONB)
+    # For an award with no computable rule at all — Leadership, Best in
+    # Subject — where eligibility is a nomination, not a threshold. A
+    # version with no thresholds set and manual_only=False would instead
+    # award *everyone* (see award_service._evaluate's else branch: no
+    # threshold configured reads as "nothing to fail"), which is backwards
+    # for a nominative award. manual_only defaults every learner to Not
+    # Eligible regardless of thresholds, and only an explicit override on
+    # the Awards page grants it. require_* checks above still apply.
+    manual_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Certificate rendering, all optional — a version with none of these
     # set falls back to the long-standing default (one signatory picked
     # on the Awards page, standard wording, layout below).
