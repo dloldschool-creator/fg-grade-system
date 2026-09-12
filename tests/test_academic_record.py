@@ -21,6 +21,7 @@ from app.models.academic_record import (
     LearnerAcademicRecord,
     LearnerAcademicRecordSubject,
 )
+from app.models.grades import SubjectFinalGrade
 from app.models.learners import Enrollment
 from app.models.subjects import Subject, SubjectCategory
 
@@ -128,15 +129,46 @@ def test_grading_policy_is_frozen_as_a_number(session, enrollment):
 def test_component_final_grade_is_kept_even_though_the_form_blanks_it(session, enrollment):
     """§16 blanks a component's Final Grade on the printed card. The
     permanent record still stores it — the form decides what to show, the
-    record holds the truth."""
+    record holds the truth.
+
+    The component's final grade is forced to a known value in this
+    never-committed transaction rather than trusted from whatever the
+    picked enrollment's live `SubjectFinalGrade` currently holds — most
+    days *no* live enrollment has a computed final for this subject
+    (Term 1 hasn't closed, so terms 2 and 3 are still blank and
+    `compute_subject_final_grade` correctly withholds a final until all
+    three are in). Trusting the live value either skips this test's real
+    assertion into permanent silence or, as caught 2026-09-12, fails on a
+    learner who simply isn't finished yet — neither says anything about
+    whether capture actually retains a component's final once one exists.
+    """
     record = capture_academic_record(session, enrollment.id)
     session.flush()
     components = [r for r in record_subjects(session, record) if r.is_component]
     if not components:
         pytest.skip("this enrollment has no combined-language components")
-    for component in components:
-        assert component.final_grade is None  # as printed (§16)
-        assert component.component_final_grade is not None  # but retained
+
+    component = components[0]
+    session.query(SubjectFinalGrade).filter_by(
+        enrollment_id=enrollment.id, subject_id=component.subject_id
+    ).delete(synchronize_session=False)
+    session.add(
+        SubjectFinalGrade(
+            enrollment_id=enrollment.id,
+            subject_id=component.subject_id,
+            school_year_id=enrollment.school_year_id,
+            final_grade=Decimal(88),
+        )
+    )
+    session.flush()
+
+    record = capture_academic_record(session, enrollment.id)
+    session.flush()
+    forced = next(
+        r for r in record_subjects(session, record) if r.subject_id == component.subject_id
+    )
+    assert forced.final_grade is None  # as printed (§16)
+    assert forced.component_final_grade == Decimal(88)  # but retained
 
 
 def test_term_applicability_is_frozen(session, enrollment):
