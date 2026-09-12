@@ -199,8 +199,10 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
     st.markdown(
         "**Custom certificate body** (optional — leave blank to keep the standard "
         "wording). Placeholders filled in for you: `{learner_name}`, `{award_name}`, "
-        "`{average}`, `{average_label}`, `{date}`, `{school_year}`, `{venue}`, "
-        "`{school_name}`."
+        "`{average}`, `{average_label}`, `{term_label}`, `{date}`, `{school_year}`, "
+        "`{venue}`, `{school_name}`. `{term_label}` is the bare term name spelled out "
+        "(\"First Term\") for a term award, blank for an annual one — `{average_label}` "
+        "already reads \"First Term Average\" / \"General Average\" if that's what you want."
     )
     certificate_body_template = st.text_area(
         "Custom body text",

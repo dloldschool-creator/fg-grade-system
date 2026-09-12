@@ -235,6 +235,16 @@ def test_custom_body_substitutes_the_documented_variables():
     ]
 
 
+def test_term_label_is_spelled_out_for_a_term_award():
+    data = _certificate(term_name="Term 1")
+    assert render_certificate_body("{term_label}", data) == ["First Term"]
+
+
+def test_term_label_is_blank_for_an_annual_award():
+    data = _certificate(term_name=None)
+    assert render_certificate_body("[{term_label}]", data) == ["[]"]
+
+
 def test_custom_body_handles_multiple_lines():
     lines = render_certificate_body("Line one {learner_name}\nLine two", _certificate())
     assert lines == ["Line one DELA CRUZ, JUAN", "Line two"]

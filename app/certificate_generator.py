@@ -205,9 +205,9 @@ class _LiteralOnMissing(dict):
 def render_certificate_body(template: str, data: CertificateData) -> list[str]:
     """The admin-supplied replacement for the citation + "Given this..."
     lines, with the standard variables substituted: {learner_name},
-    {award_name}, {average}, {average_label}, {date}, {school_year},
-    {venue}, {school_name}. Returns one string per line for centred
-    drawing."""
+    {award_name}, {average}, {average_label}, {term_label}, {date},
+    {school_year}, {venue}, {school_name}. Returns one string per line for
+    centred drawing."""
     variables = _LiteralOnMissing(
         learner_name=data.learner_name,
         award_name=data.award_name,
@@ -215,6 +215,11 @@ def render_certificate_body(template: str, data: CertificateData) -> list[str]:
         average_label=(
             f"{formal_term_name(data.term_name)} Average" if data.term_name else "General Average"
         ),
+        # Bare term name, spelled out ("First Term"), for prose that names
+        # the term without the trailing "Average" — an annual award has
+        # none, so this is blank rather than "General" (there's no term to
+        # spell out, unlike average_label which always has something to say).
+        term_label=formal_term_name(data.term_name) if data.term_name else "",
         date=f"{_ordinal(data.recognition_date.day)} of {data.recognition_date:%B %Y}",
         school_year=data.school_year_name,
         venue=data.recognition_venue or "",
