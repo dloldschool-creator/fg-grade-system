@@ -21,7 +21,7 @@ from app.certificate_generator import (
     generate_award_certificates_2up,
 )
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
-from app.models.enums import AwardResult, AwardScope, CertificateLayout
+from app.models.enums import AwardResult, AwardScope, CertificateLayout, PolicyVersionStatus
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
@@ -299,13 +299,20 @@ def render() -> None:
         section_choice = section.id
         adviser = session.get(User, section.adviser_user_id) if section.adviser_user_id else None
 
+        # ARCHIVED means "retired, don't use for new certificates" — the
+        # Award Policy page's own status control is where a version gets
+        # put there, and this is the one place that actually enforces it
+        # (everywhere else, status is bookkeeping only).
         policy_versions = (
             session.query(AwardPolicyVersion)
-            .filter_by(effective_school_year_id=sy_choice)
+            .filter(
+                AwardPolicyVersion.effective_school_year_id == sy_choice,
+                AwardPolicyVersion.status != PolicyVersionStatus.ARCHIVED,
+            )
             .all()
         )
         if not policy_versions:
-            st.warning("No award policy versions effective for this school year yet — set one up on the Award Policy page.")
+            st.warning("No active award policy versions effective for this school year yet — set one up on the Award Policy page.")
             return
         policy_by_id = {p.id: p for p in session.query(AwardPolicy).all()}
         version_by_id = {v.id: v for v in policy_versions}

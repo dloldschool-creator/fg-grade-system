@@ -45,8 +45,15 @@ This is where you configure the rules, per school year:
 * **Certificate layout** — one certificate per page (an official issuance) or two per page (saves paper for classroom-level recognition). The Awards page's batch print picks this up automatically.
 * **Custom certificate body** — optional; replaces the default certificate wording with your own, with variables filled in for you. Leave blank to keep the standard wording.
 * **Signatory overrides** — optional, up to 3, in addition to the class adviser (who always signs and is never one of these 3). Leave blank to keep the single default signatory from School Info.
-* **Status** — DRAFT / ACTIVE / ARCHIVED. This is just a label for bookkeeping — the Awards page's version picker lists every version effective for the chosen school year regardless of status, so an ACTIVE and a DRAFT version for the same year would both show up as selectable options. Don't rely on status alone to hide a half-configured version — use the school year field to keep it out of the picker until you're ready. You can change it later at any time, whether or not the version has been used, from the "Status" control under the version.
+* **Status** — ACTIVE / ARCHIVED. Unlike Grading Policy's status (which also has a DRAFT and is bookkeeping-only), this one has a real effect: the Awards page's version picker only lists ACTIVE versions for the chosen school year — set a version to ARCHIVED to retire it without deleting it, and it drops out of that picker immediately. A version already used to give out awards keeps computing correctly either way (archiving doesn't touch existing `learner_awards` rows); it just stops being offered for new certificates. You can change it later at any time, whether or not the version has been used, from the "Status" control under the version.
 """
+
+# AwardPolicyVersion's own status choices — deliberately narrower than the
+# shared PolicyVersionStatus enum (which still has DRAFT for Grading
+# Policy's unrelated, bookkeeping-only status field). No AwardPolicyVersion
+# row has ever been DRAFT, so this is safe to restrict at the UI layer
+# without a migration or a data backfill.
+_AWARD_STATUS_OPTIONS = [PolicyVersionStatus.ACTIVE.value, PolicyVersionStatus.ARCHIVED.value]
 
 
 def _tier_editor(key_prefix: str, existing: list[dict] | None = None) -> list[dict]:
@@ -332,7 +339,7 @@ def render() -> None:
                 used_count = usage_counts.get(v.id, 0)
 
                 status_col, status_btn_col, _spacer = st.columns([2, 1, 3])
-                status_options = [s.value for s in PolicyVersionStatus]
+                status_options = _AWARD_STATUS_OPTIONS
                 new_status = status_col.selectbox(
                     "Status",
                     options=status_options,
@@ -404,7 +411,7 @@ def render() -> None:
                     st.write(f"Version number: {next_version}")
                     fields = _render_version_fields(f"newver_{policy.id}", school_years, sy_by_id)
                     status = st.selectbox(
-                        "Status", options=[s.value for s in PolicyVersionStatus], key=f"status_new_{policy.id}"
+                        "Status", options=_AWARD_STATUS_OPTIONS, key=f"status_new_{policy.id}"
                     )
                     if st.form_submit_button("Create version"):
                         new_version = AwardPolicyVersion(
