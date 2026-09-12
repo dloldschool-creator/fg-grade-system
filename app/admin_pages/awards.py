@@ -78,13 +78,22 @@ def _load_award_context(session, enrollments, version, version_choice, term_choi
 
 def _certificate_data(
     school, school_year, learner, award, average, term_name,
-    adviser, signatory, position, issued_on, venue, version,
+    adviser, extra_signatories_override, issued_on, venue, version,
 ) -> CertificateData:
-    extra_signatories = None
-    if version.signatory_overrides:
+    # The per-batch panel (TERM scope only) always wins when it has an
+    # opinion — that's the whole point of it existing, and it's explicitly
+    # "for this print run only". It's never None for TERM (empty list means
+    # "adviser alone", chosen deliberately). Only ANNUAL, which shows no
+    # panel, ever falls through to the policy version's own fixed
+    # signatories, and then to the plain adviser + school-head default.
+    if extra_signatories_override is not None:
+        extra_signatories = extra_signatories_override
+    elif version.signatory_overrides:
         extra_signatories = [
             (s.get("name", ""), s.get("position", "")) for s in version.signatory_overrides
         ]
+    else:
+        extra_signatories = None
     return CertificateData(
         school_name=school.school_name,
         schools_division=school.schools_division,
@@ -100,8 +109,8 @@ def _certificate_data(
         recognition_venue=venue,
         school_year_name=school_year.name,
         adviser_name=adviser.full_name if adviser else "",
-        school_head_name=signatory or "",
-        school_head_position=position or "",
+        school_head_name=school.school_head_name or "",
+        school_head_position=school.school_head_position or "",
         extra_signatories=extra_signatories,
         custom_body_template=version.certificate_body_template,
     )
@@ -109,7 +118,7 @@ def _certificate_data(
 
 def _batch_download(
     enrollments, context, term_name,
-    school, school_year, adviser, signatory, position, issued_on, venue, version,
+    school, school_year, adviser, extra_signatories_override, issued_on, venue, version,
 ) -> None:
     """One PDF for every eligible learner in the section, laid out per
     the policy version's certificate_layout — one full page each, or two
@@ -132,7 +141,7 @@ def _batch_download(
             _certificate_data(
                 school, school_year, learner, award,
                 context["averages"].get(enrollment.id), term_name,
-                adviser, signatory, position, issued_on, venue, version,
+                adviser, extra_signatories_override, issued_on, venue, version,
             )
         )
 
@@ -175,24 +184,28 @@ def _certificate_settings(version, school, school_year):
 
     A TERM-scoped award (the tiered Honors) is **classroom-level
     recognition, not a DepEd order**, so the adviser can point the
-    signature block at their immediate supervisor and set their own date
-    rather than being tied to the school head and the school year's
-    official recognition date.
+    signature block at whoever should sign it — their immediate
+    supervisor, the adviser alone, up to three co-signatories — and set
+    their own date, rather than being tied to the school head and the
+    school year's official recognition date. This panel is the sole
+    authority on TERM signatories: it always returns a list (never
+    `None`), and `_certificate_data` uses it as-is even when the award
+    policy version has its own fixed `signatory_overrides` — a per-batch
+    "not for this print run" always wins over a standing policy default,
+    because that's the reason this panel exists.
 
     An ANNUAL award (Academic Excellence, DO 15 s.2026) *is* an official
     issuance, so it stays locked to the school head and the recognition
-    date on the school year — those aren't the adviser's to change.
+    date on the school year — those aren't the adviser's to change. No
+    panel renders, and `None` is returned so `_certificate_data` falls
+    through to the policy version's own signatories, then the plain
+    adviser + school-head default.
     """
     if version.scope != AwardScope.TERM:
-        return (
-            school.school_head_name,
-            school.school_head_position,
-            school_year.recognition_date,
-            school_year.recognition_venue or "",
-        )
+        return None, school_year.recognition_date, school_year.recognition_venue or ""
 
-    # Four fields, and every one of them reruns the script on blur —
-    # so filling the form used to shut the panel between fields.
+    # Every field reruns the script on blur — so filling the form used to
+    # shut the panel between fields.
     _panel = "certificate_details"
     with st.expander(
         "Certificate details — signatory and date", expanded=panel_is_open(_panel)
@@ -203,17 +216,37 @@ def _certificate_settings(version, school, school_year):
             "term recognition signed by your immediate supervisor, for example. "
             "Nothing is saved; it only affects the certificates you make right now."
         )
-        col1, col2 = st.columns(2)
-        signatory = col1.text_input(
-            "Signatory name", value=school.school_head_name or "", key="cert_signatory",
+        adviser_alone = st.checkbox(
+            "Adviser signs alone (no other signatories)",
+            key="cert_adviser_alone",
             on_change=keep_panel_open, args=(_panel,),
         )
-        position = col2.text_input(
-            "Signatory position",
-            value=school.school_head_position or "",
-            key="cert_position",
-            on_change=keep_panel_open, args=(_panel,),
-        )
+        signatories = []
+        if not adviser_alone:
+            # Signatory 1 defaults to School Info's school head, matching
+            # what a certificate looked like before this panel could name
+            # more than one co-signatory. 2 and 3 are optional — a blank
+            # name omits that row, same convention as the Award Policy
+            # page's own signatory-override editor.
+            defaults = [
+                (school.school_head_name or "", school.school_head_position or ""),
+                ("", ""),
+                ("", ""),
+            ]
+            for i, (default_name, default_position) in enumerate(defaults):
+                label_suffix = "" if i == 0 else " (optional)"
+                col1, col2 = st.columns(2)
+                name = col1.text_input(
+                    f"Signatory {i + 1} name{label_suffix}", value=default_name,
+                    key=f"cert_signame_{i}", on_change=keep_panel_open, args=(_panel,),
+                )
+                position = col2.text_input(
+                    f"Signatory {i + 1} position{label_suffix}", value=default_position,
+                    key=f"cert_sigpos_{i}", on_change=keep_panel_open, args=(_panel,),
+                )
+                if name:
+                    signatories.append((name, position))
+
         col1, col2 = st.columns(2)
         issued_on = col1.date_input(
             "Date issued",
@@ -227,7 +260,7 @@ def _certificate_settings(version, school, school_year):
             key="cert_venue",
             on_change=keep_panel_open, args=(_panel,),
         )
-    return signatory, position, issued_on, venue
+    return signatories, issued_on, venue
 
 
 def render() -> None:
@@ -311,7 +344,7 @@ def render() -> None:
         else:
             st.caption("Judged once for the year on the **General Average** across all terms.")
 
-        signatory, position, issued_on, venue = _certificate_settings(
+        extra_signatories_override, issued_on, venue = _certificate_settings(
             version, school, school_year
         )
 
@@ -341,7 +374,7 @@ def render() -> None:
 
         _batch_download(
             enrollments, context, term_name,
-            school, school_year, adviser, signatory, position, issued_on, venue, version,
+            school, school_year, adviser, extra_signatories_override, issued_on, venue, version,
         )
         st.divider()
 
@@ -407,7 +440,7 @@ def render() -> None:
                         pdf_bytes = generate_award_certificate(
                             **_certificate_data(
                                 school, school_year, learner, award, average, term_name,
-                                adviser, signatory, position, issued_on, venue, version,
+                                adviser, extra_signatories_override, issued_on, venue, version,
                             ).__dict__
                         )
                         st.download_button(
