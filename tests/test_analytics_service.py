@@ -46,7 +46,10 @@ from app.analytics_service import (
     taught_offering_ids,
 )
 from app.database import SessionLocal
+from app.models.grades import TermGrade
+from app.models.learners import Enrollment
 from app.models.organization import SchoolYear
+from app.models.subjects import SectionSubjectOffering
 
 
 @pytest.fixture
@@ -204,6 +207,84 @@ def test_no_section_reports_more_than_complete(session, school_year):
             f"{row.section_name} / {row.term_name}: {row.encoded} encoded of "
             f"{row.expected} expected"
         )
+
+
+def test_encoded_grade_credits_the_learners_home_section_not_the_offerings(session, school_year):
+    """Regression for the MASLOW/T1 "77 encoded of 76 expected" bug found
+    2026-09-12: an irregular learner's `EnrollmentSubjectOverride` routes
+    their grade onto *another* section's offering (e.g. a transferee
+    substituting a subject they already passed). `expected` is counted per
+    the learner's own home section, so the encoded count must be too — the
+    grade belongs to the home section's tally, not the donor offering's
+    section, even though the `TermGrade` row physically references the
+    donor's `SectionSubjectOffering`.
+
+    Doesn't need to create the `EnrollmentSubjectOverride` row itself —
+    `_encoded_by_section_term` never reads that table, only
+    `TermGrade.section_subject_offering_id` vs. `Enrollment.section_id` —
+    so a `TermGrade` pointing cross-section is the whole reproduction.
+    """
+    offerings = (
+        session.query(SectionSubjectOffering).filter_by(school_year_id=school_year.id).all()
+    )
+    by_section: dict = {}
+    for o in offerings:
+        by_section.setdefault(o.section_id, []).append(o)
+
+    picked = None
+    for home_section_id, home_offerings in by_section.items():
+        home_enrollment = (
+            session.query(Enrollment)
+            .filter(
+                Enrollment.section_id == home_section_id,
+                Enrollment.school_year_id == school_year.id,
+                Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
+            )
+            .first()
+        )
+        if home_enrollment is None:
+            continue
+        home_terms = {o.term_id for o in home_offerings}
+        for donor_section_id, donor_offerings in by_section.items():
+            if donor_section_id == home_section_id:
+                continue
+            donor_offering = next((o for o in donor_offerings if o.term_id in home_terms), None)
+            if donor_offering is not None:
+                picked = (home_enrollment, home_section_id, donor_offering)
+                break
+        if picked:
+            break
+    if picked is None:
+        pytest.skip("no two sections share a term with an active learner available to test with")
+    home_enrollment, home_section_id, donor_offering = picked
+    term_id = donor_offering.term_id
+
+    before = analytics_service._encoded_by_section_term(session, school_year.id)
+
+    # Same live-data precaution as test_enrollment_subject_overrides.py's
+    # override_fixture: delete-then-reinsert in this never-committed
+    # transaction, in case this exact key already carries a real grade.
+    session.query(TermGrade).filter_by(
+        enrollment_id=home_enrollment.id,
+        section_subject_offering_id=donor_offering.id,
+        term_id=term_id,
+    ).delete(synchronize_session=False)
+    session.add(
+        TermGrade(
+            enrollment_id=home_enrollment.id,
+            section_subject_offering_id=donor_offering.id,
+            term_id=term_id,
+            official_grade=Decimal(85),
+        )
+    )
+    session.flush()
+
+    after = analytics_service._encoded_by_section_term(session, school_year.id)
+
+    assert after.get((home_section_id, term_id), 0) == before.get((home_section_id, term_id), 0) + 1
+    assert after.get((donor_offering.section_id, term_id), 0) == before.get(
+        (donor_offering.section_id, term_id), 0
+    )
 
 
 def test_the_active_status_set_matches_the_gradebook_roster():

@@ -535,10 +535,23 @@ def _encoded_by_section_term(session, school_year_id) -> dict:
     the denominator uses. Without it, a grade encoded before a learner
     transferred out stays in the numerator while the learner has left the
     denominator, and the section reports more than 100%.
+
+    **Grouped by the enrollment's own section, not the offering's** —
+    those differ for an irregular learner substituted into another
+    section's offering (`EnrollmentSubjectOverride`, e.g. "already passed
+    this elsewhere"). `expected` is `active_learners * offerings`, counted
+    per the learner's home section, so a grade must be credited there too:
+    grouping by the offering's section instead inflates the *donor*
+    section's numerator with a grade from a learner who was never in its
+    `active_learners`, and correspondingly leaves the *home* section
+    permanently "missing" a grade that was never going to be encoded
+    against the original offering. Caught 2026-09-12 on a live MASLOW/T1
+    report of 77 encoded against 76 expected — the 77th was a SMITH
+    learner's substitute grade recorded against a MASLOW offering.
     """
     rows = (
         session.query(
-            SectionSubjectOffering.section_id,
+            Enrollment.section_id,
             SectionSubjectOffering.term_id,
             func.count(TermGrade.id),
         )
@@ -553,7 +566,7 @@ def _encoded_by_section_term(session, school_year_id) -> dict:
             TermGrade.official_grade.isnot(None),
             Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES),
         )
-        .group_by(SectionSubjectOffering.section_id, SectionSubjectOffering.term_id)
+        .group_by(Enrollment.section_id, SectionSubjectOffering.term_id)
         .all()
     )
     return {(section_id, term_id): count for section_id, term_id, count in rows}
