@@ -43,18 +43,20 @@ CARDS_PER_PAGE = CARDS_ACROSS * CARDS_DOWN
 
 # How many subject lines fit before the card has to elide.
 #
-# At the card's font sizes (8.3pt row pitch) the geometry allows about 13
-# lines between the first subject line and the rule above TERM AVERAGE, so
-# 12 leaves one line of margin for the "+N more" line — tighter than before
-# the fonts were enlarged for readability (was ~4 lines of margin at 7.6pt),
-# but still well clear of the realistic worst case: a full Grade 11 term
-# with the language pair (parent + two indented components) plus three
-# electives is 10 lines (see test_a_full_grade_11_term_fits_...). It was 8
-# while the pair printed as two flat rows; under DO 017 the pair prints as
-# a parent plus two indented components, which is three lines, and a Grade
-# 11 term with three electives would have elided real subjects at the old
-# cap.
-MAX_SUBJECT_LINES = 12
+# The subject/grade/average text was enlarged again for readability
+# (subject rows: 7.2pt/8.3pt pitch -> 8.0pt/9.0pt pitch; TERM AVERAGE:
+# 8.0pt -> 9.3pt), and a parent/guardian signature line was added at the
+# foot of the card, both of which eat into the space subject rows used to
+# have. At the new sizes the geometry allows about 11 line-slots between
+# the first subject line and the rule above TERM AVERAGE, so 10 leaves one
+# slot for the "+N more" line. That is still clear of the realistic worst
+# case: a full Grade 11 term with the language pair (parent + two indented
+# components) plus three electives is 10 lines (see
+# test_a_full_grade_11_term_fits_...) — exactly the cap, with the "+N more"
+# slot as the only remaining margin. Raising the fonts any further without
+# also raising MAX_SUBJECT_LINES's floor of 10 would elide real subjects on
+# that worst case.
+MAX_SUBJECT_LINES = 10
 
 
 @dataclass
@@ -109,8 +111,8 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
     text_w = inner_w - seal - 5
 
     c.setFillColor(_BLUE)
-    c.setFont("Helvetica-Bold", 7.2)
-    c.drawString(text_x, cursor - 9, _fit(c, data.school_name.upper(), "Helvetica-Bold", 7.2, text_w))
+    c.setFont("Helvetica-Bold", 8.4)
+    c.drawString(text_x, cursor - 9, _fit(c, data.school_name.upper(), "Helvetica-Bold", 8.4, text_w))
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 8.4)
     c.drawString(text_x, cursor - 19, "TEMPORARY REPORT CARD")
@@ -137,29 +139,29 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
     # Subjects. The grade column is right-aligned against the card edge.
     cursor -= 10
     c.setFillColor(colors.black)
-    c.setFont("Helvetica", 7.2)
+    c.setFont("Helvetica", 8.0)
     grade_x = inner_x + inner_w
-    name_w = inner_w - 28
+    name_w = inner_w - 30
 
     shown = data.subjects[:MAX_SUBJECT_LINES]
     for name, grade in shown:
-        c.drawString(inner_x, cursor, _fit(c, name, "Helvetica", 7.2, name_w))
+        c.drawString(inner_x, cursor, _fit(c, name, "Helvetica", 8.0, name_w))
         c.drawRightString(grade_x, cursor, _grade_text(grade))
-        cursor -= 8.3
+        cursor -= 9.0
     if len(data.subjects) > MAX_SUBJECT_LINES:
         c.setFillColor(_GRAY)
         c.drawString(inner_x, cursor, f"+{len(data.subjects) - MAX_SUBJECT_LINES} more")
-        cursor -= 8.3
+        cursor -= 9.0
 
-    # Term average sits just above the signature line, so it stays put
-    # whatever the subject count.
+    # Term average sits above the signature row, so it stays put whatever
+    # the subject count.
     footer_y = y + pad
-    average_y = footer_y + 23
+    average_y = footer_y + 24
     c.setStrokeColor(_RULE)
     c.setLineWidth(0.5)
-    c.line(inner_x, average_y + 10, inner_x + inner_w, average_y + 10)
+    c.line(inner_x, average_y + 11, inner_x + inner_w, average_y + 11)
     c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 8.0)
+    c.setFont("Helvetica-Bold", 9.3)
     c.drawString(inner_x, average_y, "TERM AVERAGE")
     c.drawRightString(grade_x, average_y, _grade_text(data.term_average))
 
@@ -171,11 +173,32 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
             _fit(c, data.adviser_comment, "Helvetica-Oblique", 6.2, inner_w),
         )
 
+    # Signature row: parent/guardian on the left (a blank line to sign on,
+    # since nothing in the record names a parent), the adviser on the
+    # right (already known, so printed rather than left blank). Each side
+    # is width-capped to its own half so a long adviser name can't run
+    # into the parent's signature line. The line itself is shorter than
+    # its label's fit width — it only needs to be long enough to sign on.
+    sig_line_y = footer_y + 7
+    left_w = inner_w * 0.48
+    sig_line_w = left_w * 0.6
+    right_w = inner_w - left_w - 6
+
+    c.setStrokeColor(_RULE)
+    c.setLineWidth(0.5)
+    c.line(inner_x, sig_line_y, inner_x + sig_line_w, sig_line_y)
+    c.setFillColor(_GRAY)
+    c.setFont("Helvetica", 5.6)
+    c.drawString(
+        inner_x, footer_y,
+        _fit(c, "Parent/Guardian's Signature over Printed Name", "Helvetica", 5.6, left_w),
+    )
+
     c.setFillColor(_GRAY)
     c.setFont("Helvetica", 6.2)
     c.drawRightString(
         grade_x, footer_y,
-        _fit(c, f"{data.adviser_name.upper()} · Adviser", "Helvetica", 6.2, inner_w),
+        _fit(c, f"{data.adviser_name.upper()} · Adviser", "Helvetica", 6.2, right_w),
     )
 
 
