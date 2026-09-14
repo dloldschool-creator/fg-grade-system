@@ -115,7 +115,15 @@ def load_section_subjects(session, section_id, school_year_id) -> list[SubjectRo
     for row in rows.values():
         row.offerings.sort(key=lambda o: terms[o.term_id].term_number)
         row.term_numbers.sort()
-    return sorted(rows.values(), key=lambda r: r.subject.official_name)
+    # Same rule report_card.py uses for SF9: the lowest display_order across
+    # a subject's offerings decides where it prints, so this list reads in
+    # the same order as the report card instead of alphabetically.
+    return sorted(
+        rows.values(),
+        key=lambda r: min(
+            (o.display_order if o.display_order is not None else 9999) for o in r.offerings
+        ),
+    )
 
 
 def _active_for(session, offering_ids) -> dict:
