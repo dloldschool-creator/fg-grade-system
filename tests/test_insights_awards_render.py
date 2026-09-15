@@ -40,7 +40,9 @@ _render_awards(
 """
 
 
-def _policy(per_term=False, tiered=False, requires_complete_record=True):
+def _policy(
+    per_term=False, tiered=False, requires_complete_record=True, requires_perfect_attendance=False
+):
     return AwardPolicyOption(
         version_id=uuid.uuid4(),
         policy_name="Legacy Tiered Honors" if per_term else "Academic Excellence Award",
@@ -49,6 +51,7 @@ def _policy(per_term=False, tiered=False, requires_complete_record=True):
         status="ACTIVE",
         tiered=tiered,
         requires_complete_record=requires_complete_record,
+        requires_perfect_attendance=requires_perfect_attendance,
     )
 
 

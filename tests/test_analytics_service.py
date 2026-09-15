@@ -2080,3 +2080,336 @@ def test_award_policy_options_describe_both_scopes(session, school_year):
         assert option.average_label == (
             "Term Average" if option.per_term else "General Average"
         )
+
+
+# --- require_perfect_attendance staleness -----------------------------
+#
+# A `require_perfect_attendance` award can go stale two ways: the grade
+# summary it was judged on moves (already covered above), or an
+# attendance day it was judged on gets corrected afterward. September
+# straddling Term 1 and Term 2 (§29) is exactly why the second check is
+# scoped by the *changed day's own term*, not by "any attendance change
+# for this learner" — a Term 2 correction must never mark a Term 1 award
+# stale, or vice versa.
+
+
+def _attendance_award_option(session, school_year):
+    options = award_policy_options(session, school_year.id)
+    match = next(
+        (o for o in options if o.per_term and o.requires_perfect_attendance), None
+    )
+    if match is None:
+        pytest.skip("no TERM-scoped require_perfect_attendance award policy")
+    return match
+
+
+def _section_and_unjudged_term_enrollment(session, school_year, version_id, term_id):
+    """A section with at least one learner holding no award row yet for
+    this policy/term. Deliberately indifferent to whether a
+    `TermGradeSummary` exists — the tests below anchor `judged_at` in the
+    future instead (see `_term_award`), so a pre-existing real summary,
+    however recent, can never make the grade side look stale and confuse
+    what's being tested here.
+
+    Scans every advised section rather than trusting the first one
+    (`_any_advised_section`'s usual job): by mid-term, on this live
+    database, the first section tried is frequently already fully judged
+    for a real award policy — including, as of 2026-09-15, the two
+    require_perfect_attendance policies these tests target, which were
+    just recomputed for real across the whole school (see the Term 1
+    Perfect Attendance / Leadership Award recompute)."""
+    from app.models.academic_structure import Section
+    from app.models.awards import LearnerAward
+    from app.models.learners import Enrollment
+
+    sections = (
+        session.query(Section)
+        .filter(
+            Section.school_year_id == school_year.id,
+            Section.adviser_user_id.isnot(None),
+        )
+        .all()
+    )
+    for section in sections:
+        roster = (
+            session.query(Enrollment)
+            .filter_by(school_year_id=school_year.id, section_id=section.id)
+            .filter(Enrollment.enrollment_status.in_(ACTIVE_ENROLLMENT_STATUSES))
+            .limit(8)
+            .all()
+        )
+        ids = [e.id for e in roster]
+        if not ids:
+            continue
+        taken = {
+            row[0]
+            for row in session.query(LearnerAward.enrollment_id)
+            .filter(
+                LearnerAward.enrollment_id.in_(ids),
+                LearnerAward.award_policy_version_id == version_id,
+                LearnerAward.term_id == term_id,
+            )
+            .all()
+        }
+        free = [e for e in roster if e.id not in taken]
+        if free:
+            return section, free
+    pytest.skip("every section already has an award row for this policy/term")
+
+
+def _term_award(session, school_year, option, term, enrollment, *, judged_at, override=False):
+    """Writes only the `LearnerAward` row, at a caller-chosen
+    `computed_at` — never a `TermGradeSummary`, so this can never collide
+    with one that already exists for real on this live database (the
+    unique constraint is `(enrollment_id, term_id)`). Every test below
+    anchors `judged_at` a few minutes in the future specifically so the
+    grade-summary side of `_is_stale` is always False regardless of what
+    a real summary — existing or not — says, isolating the attendance
+    signal this feature actually adds."""
+    from app.models.awards import LearnerAward
+    from app.models.enums import AwardResult
+
+    award = LearnerAward(
+        enrollment_id=enrollment.id,
+        school_year_id=school_year.id,
+        award_policy_version_id=option.version_id,
+        term_id=term.id,
+        award_result=AwardResult.ELIGIBLE_AWARDED,
+        award_name="Perfect Attendance",
+        reason="test",
+        is_override=override,
+        computed_at=judged_at,
+    )
+    session.add(award)
+    return award
+
+
+def _log_attendance_change(session, enrollment, day, *, at):
+    """Writes an AttendanceRecord plus the ATTENDANCE_CHANGED entry
+    `_save_grid` would have logged for correcting it, with `created_at`
+    pinned to `at` for a deterministic test — see the commit that made
+    the component-final-grade retention test deterministic for the same
+    technique."""
+    from app import audit_service
+    from app.models.attendance import AttendanceRecord
+    from app.models.enums import AttendanceStatus
+
+    record = AttendanceRecord(
+        enrollment_id=enrollment.id, calendar_date_id=day.id, status=AttendanceStatus.ABSENT
+    )
+    session.add(record)
+    session.flush()
+    entry = audit_service.record(
+        session,
+        action=audit_service.ATTENDANCE_CHANGED,
+        object_type="attendance_records",
+        object_id=record.id,
+        previous={"status": "PRESENT"},
+        new={"status": "ABSENT", "learner": "Test, Learner", "date": day.calendar_date},
+    )
+    entry.created_at = at
+    session.flush()
+    return record
+
+
+def _first_free_day(session, school_year, section, enrollment, days):
+    """A day in `days` this enrollment has no AttendanceRecord for yet —
+    so the synthetic write below can't collide with something a real
+    teacher already encoded on this live database. Searched newest-first
+    and across the whole term rather than just its first ten days: by
+    Term 1's own close date, its early days are typically fully encoded
+    for every learner, and a gap is far more likely near the end of the
+    term (today's own class day, most plausibly, may not be encoded
+    yet)."""
+    for day in reversed(days):
+        free = _enrollments_without_attendance(session, school_year, section, [day.id], 50)
+        if any(e.id == enrollment.id for e in free):
+            return day
+    return None
+
+
+def test_an_award_is_flagged_stale_when_attendance_is_corrected_after_it_is_computed(
+    session, school_year
+):
+    from datetime import datetime, timedelta, timezone
+
+    from app.attendance_service import class_days_in_term
+    from app.models.organization import Term
+
+    option = _attendance_award_option(session, school_year)
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).order_by(Term.term_number).all()
+    if not terms:
+        pytest.skip("no terms")
+    term = terms[0]
+    days = class_days_in_term(session, term.id)
+    if not days:
+        pytest.skip("no class days in this term")
+    section, roster = _section_and_unjudged_term_enrollment(session, school_year, option.version_id, term.id)
+    enrollment = roster[0]
+    day = _first_free_day(session, school_year, section, enrollment, days)
+    if day is None:
+        pytest.skip("no free class day for this learner in this term")
+
+    # Anchored in the future so a real TermGradeSummary already on this
+    # live database — however recently computed — can never make the
+    # grade side look stale too; only the attendance signal is at play.
+    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    _term_award(session, school_year, option, term, enrollment, judged_at=future)
+    session.flush()
+    _log_attendance_change(session, enrollment, day, at=future + timedelta(minutes=5))
+
+    report = award_eligibility(session, school_year.id, option.version_id, (section.id,))
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[enrollment.id].stale is True
+
+
+def test_an_award_is_not_stale_when_attendance_was_corrected_before_it_was_computed(
+    session, school_year
+):
+    from datetime import datetime, timedelta, timezone
+
+    from app.attendance_service import class_days_in_term
+    from app.models.organization import Term
+
+    option = _attendance_award_option(session, school_year)
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).order_by(Term.term_number).all()
+    if not terms:
+        pytest.skip("no terms")
+    term = terms[0]
+    days = class_days_in_term(session, term.id)
+    if not days:
+        pytest.skip("no class days in this term")
+    section, roster = _section_and_unjudged_term_enrollment(session, school_year, option.version_id, term.id)
+    enrollment = roster[0]
+    day = _first_free_day(session, school_year, section, enrollment, days)
+    if day is None:
+        pytest.skip("no free class day for this learner in this term")
+
+    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    _log_attendance_change(session, enrollment, day, at=future)
+    session.flush()
+    _term_award(session, school_year, option, term, enrollment, judged_at=future + timedelta(minutes=5))
+
+    report = award_eligibility(session, school_year.id, option.version_id, (section.id,))
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[enrollment.id].stale is False
+
+
+def test_attendance_corrected_in_a_different_term_does_not_mark_the_award_stale(
+    session, school_year
+):
+    """The September-split case: a correction to a day that belongs to a
+    different term must not flag an award scoped to this one."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.attendance_service import class_days_in_term
+    from app.models.organization import Term
+
+    option = _attendance_award_option(session, school_year)
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).order_by(Term.term_number).all()
+    if len(terms) < 2:
+        pytest.skip("needs at least two terms")
+    term, other_term = terms[0], terms[1]
+    days = class_days_in_term(session, term.id)
+    other_days = class_days_in_term(session, other_term.id)
+    if not days or not other_days:
+        pytest.skip("one of the two terms has no class days")
+    section, roster = _section_and_unjudged_term_enrollment(session, school_year, option.version_id, term.id)
+    enrollment = roster[0]
+    other_day = _first_free_day(session, school_year, section, enrollment, other_days)
+    if other_day is None:
+        pytest.skip("no free day in the other term for this learner")
+
+    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    _term_award(session, school_year, option, term, enrollment, judged_at=future)
+    session.flush()
+    # Logged against `other_term`'s day, after the award's own judged_at —
+    # would flag it stale if the term scoping were wrong.
+    _log_attendance_change(session, enrollment, other_day, at=future + timedelta(minutes=5))
+
+    report = award_eligibility(session, school_year.id, option.version_id, (section.id,))
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[enrollment.id].stale is False
+
+
+def test_an_override_is_never_marked_stale_by_an_attendance_correction(session, school_year):
+    from datetime import datetime, timedelta, timezone
+
+    from app.attendance_service import class_days_in_term
+    from app.models.organization import Term
+
+    option = _attendance_award_option(session, school_year)
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).order_by(Term.term_number).all()
+    if not terms:
+        pytest.skip("no terms")
+    term = terms[0]
+    days = class_days_in_term(session, term.id)
+    if not days:
+        pytest.skip("no class days in this term")
+    section, roster = _section_and_unjudged_term_enrollment(session, school_year, option.version_id, term.id)
+    enrollment = roster[0]
+    day = _first_free_day(session, school_year, section, enrollment, days)
+    if day is None:
+        pytest.skip("no free class day for this learner in this term")
+
+    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    _term_award(session, school_year, option, term, enrollment, judged_at=future, override=True)
+    session.flush()
+    _log_attendance_change(session, enrollment, day, at=future + timedelta(minutes=5))
+
+    report = award_eligibility(session, school_year.id, option.version_id, (section.id,))
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[enrollment.id].stale is False, "an override is not waiting for a recompute"
+
+
+def test_a_policy_without_require_perfect_attendance_ignores_attendance_changes(
+    session, school_year
+):
+    """Most award policies don't set require_perfect_attendance — an
+    attendance correction must not invent staleness for them, and
+    `award_eligibility` must not pay for the extra query either."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.attendance_service import class_days_in_term
+    from app.models.organization import Term
+    from tests.test_query_cost import QueryCounter
+
+    options = award_policy_options(session, school_year.id)
+    option = next((o for o in options if o.per_term and not o.requires_perfect_attendance), None)
+    if option is None:
+        pytest.skip("no TERM-scoped policy without require_perfect_attendance")
+    terms = session.query(Term).filter_by(school_year_id=school_year.id).order_by(Term.term_number).all()
+    if not terms:
+        pytest.skip("no terms")
+    term = terms[0]
+    days = class_days_in_term(session, term.id)
+    if not days:
+        pytest.skip("no class days in this term")
+    section, roster = _section_and_unjudged_term_enrollment(session, school_year, option.version_id, term.id)
+    enrollment = roster[0]
+    day = _first_free_day(session, school_year, section, enrollment, days)
+    if day is None:
+        pytest.skip("no free class day for this learner in this term")
+
+    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    _term_award(session, school_year, option, term, enrollment, judged_at=future)
+    session.flush()
+    _log_attendance_change(session, enrollment, day, at=future + timedelta(minutes=5))  # "after", if it counted
+
+    with QueryCounter() as counter:
+        report = award_eligibility(session, school_year.id, option.version_id, (section.id,))
+    by_enrollment = {r.enrollment_id: r for r in report.eligible}
+    assert by_enrollment[enrollment.id].stale is False
+    # No attendance query at all for a policy that doesn't ask for one —
+    # same query count as any other ordinary policy.
+    assert counter.count <= 12, f"{counter.count} queries for a non-attendance policy"
+
+
+def test_the_award_cost_stays_bounded_with_require_perfect_attendance(session, school_year):
+    from tests.test_query_cost import QueryCounter
+
+    option = _attendance_award_option(session, school_year)
+    award_eligibility(session, school_year.id, option.version_id)  # warm
+    with QueryCounter() as counter:
+        award_eligibility(session, school_year.id, option.version_id)
+    assert counter.count <= 14, f"{counter.count} queries for a require_perfect_attendance policy"

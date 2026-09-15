@@ -29,7 +29,10 @@ from datetime import date, timezone
 
 from sqlalchemy import and_, case, func, or_
 
+from app import audit_service
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
+from app.models.admin import AuditLog
+from app.models.attendance import AcademicCalendarDate, AttendanceRecord
 from app.models.enums import (
     CompletionStatus,
     EnrollmentStatus,
@@ -2050,6 +2053,7 @@ class AwardPolicyOption:
     status: str
     tiered: bool
     requires_complete_record: bool
+    requires_perfect_attendance: bool
 
     @property
     def label(self) -> str:
@@ -2179,6 +2183,7 @@ def _policy_option(version, policy) -> AwardPolicyOption:
         status=version.status.value if version.status else "",
         tiered=bool(version.tier_thresholds),
         requires_complete_record=bool(version.require_complete_record),
+        requires_perfect_attendance=bool(version.require_perfect_attendance),
     )
 
 
@@ -2232,6 +2237,20 @@ def award_eligibility(
     }
     if not enrollments:
         return AwardEligibilityReport(policy=option, sections=(), eligible=())
+
+    # Only fetched when the policy actually requires perfect attendance —
+    # a real, separately-batched query against attendance_records/
+    # audit_logs, so every other policy pays nothing extra here. Keyed the
+    # same way `summaries` below is: (enrollment_id, term_id) for TERM,
+    # enrollment_id for ANNUAL.
+    if version.require_perfect_attendance:
+        attendance_changed = (
+            _attendance_changed_since_by_enrollment_and_term(session, list(enrollments))
+            if per_term
+            else _attendance_changed_since_by_enrollment(session, list(enrollments))
+        )
+    else:
+        attendance_changed = {}
 
     awards = (
         session.query(LearnerAward)
@@ -2330,10 +2349,18 @@ def award_eligibility(
             entry["overridden"] += 1
 
         summary = summaries.get((enrollment.id, term_id))
+        attendance_changed_at = (
+            attendance_changed.get((enrollment.id, term_id))
+            if per_term
+            else attendance_changed.get(enrollment.id)
+        )
         stale = (
             False
             if award.is_override
-            else _is_stale(award.computed_at, summary[1] if summary else None)
+            else (
+                _is_stale(award.computed_at, summary[1] if summary else None)
+                or _is_stale(award.computed_at, attendance_changed_at)
+            )
         )
         if stale:
             entry["stale"] += 1
@@ -2428,9 +2455,65 @@ def award_eligibility(
     )
 
 
-def _is_stale(award_computed_at, summary_computed_at) -> bool:
-    """Was the award judged before the average it was judged on last
-    moved?
+def _attendance_changed_since_by_enrollment_and_term(session, enrollment_ids) -> dict:
+    """`{(enrollment_id, term_id): latest ATTENDANCE_CHANGED audit entry}`
+    for a TERM-scoped `require_perfect_attendance` award — one query, the
+    term coming from the changed day's own `term_id` rather than the
+    month it falls in. That distinction matters here specifically:
+    September carries both Term 1's last days and Term 2's first ones
+    (§29), and a correction to a Term 2 day must never mark a Term 1
+    award stale, or vice versa. Only called when the policy actually
+    requires perfect attendance — everything else reads grade summaries,
+    which the caller already has."""
+    if not enrollment_ids:
+        return {}
+    rows = (
+        session.query(
+            AttendanceRecord.enrollment_id,
+            AcademicCalendarDate.term_id,
+            func.max(AuditLog.created_at),
+        )
+        .join(AuditLog, AuditLog.object_id == AttendanceRecord.id)
+        .join(AcademicCalendarDate, AcademicCalendarDate.id == AttendanceRecord.calendar_date_id)
+        .filter(
+            AttendanceRecord.enrollment_id.in_(enrollment_ids),
+            AuditLog.action == audit_service.ATTENDANCE_CHANGED,
+            AcademicCalendarDate.term_id.isnot(None),
+        )
+        .group_by(AttendanceRecord.enrollment_id, AcademicCalendarDate.term_id)
+        .all()
+    )
+    return {(r[0], r[1]): r[2] for r in rows}
+
+
+def _attendance_changed_since_by_enrollment(session, enrollment_ids) -> dict:
+    """`{enrollment_id: latest ATTENDANCE_CHANGED audit entry}` — the
+    ANNUAL-scope counterpart, term-agnostic like `award_service`'s own
+    `class_days_in_school_year` branch for the same scope."""
+    if not enrollment_ids:
+        return {}
+    rows = (
+        session.query(AttendanceRecord.enrollment_id, func.max(AuditLog.created_at))
+        .join(AuditLog, AuditLog.object_id == AttendanceRecord.id)
+        .filter(
+            AttendanceRecord.enrollment_id.in_(enrollment_ids),
+            AuditLog.action == audit_service.ATTENDANCE_CHANGED,
+        )
+        .group_by(AttendanceRecord.enrollment_id)
+        .all()
+    )
+    return dict(rows)
+
+
+def _is_stale(award_computed_at, compared_at) -> bool:
+    """Was the award judged before something it was judged on last moved?
+
+    Generic over *what* moved — the grade summary's `computed_at` for an
+    ordinary award, or the most recent `ATTENDANCE_CHANGED` audit entry
+    for a `require_perfect_attendance` one (see
+    `_attendance_changed_since_by_enrollment[_and_term]`). Same question
+    either way: is `award_computed_at` still the last word on the thing it
+    describes.
 
     Both timestamps are written tz-aware into `TIMESTAMP WITHOUT TIME
     ZONE` columns, so a value read back from Postgres is naive while one
@@ -2439,9 +2522,9 @@ def _is_stale(award_computed_at, summary_computed_at) -> bool:
     right failure — but only if it never reaches a user, so both sides
     are normalised here.
     """
-    if award_computed_at is None or summary_computed_at is None:
+    if award_computed_at is None or compared_at is None:
         return False
-    return _naive_utc(summary_computed_at) > _naive_utc(award_computed_at)
+    return _naive_utc(compared_at) > _naive_utc(award_computed_at)
 
 
 def _naive_utc(value):

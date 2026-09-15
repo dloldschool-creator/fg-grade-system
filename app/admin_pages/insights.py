@@ -1136,11 +1136,19 @@ def _render_awards(report, rows, eligible) -> None:
     # Three things worth saying out loud, each only when it is true.
     stale = sum(row.stale for row in rows)
     if stale:
+        # A require_perfect_attendance policy can also go stale when a
+        # day is corrected after the fact — not just when the average
+        # moves — so the wording only claims what can actually be true
+        # for this policy (see analytics_service._is_stale's two callers).
+        moved = (
+            f"the {report.policy.average_label.lower()} or the attendance"
+            if report.policy.requires_perfect_attendance
+            else f"the {report.policy.average_label.lower()}"
+        )
         st.warning(
-            f"{stale} of these results were computed before the "
-            f"{report.policy.average_label.lower()} they were judged on last "
-            "changed, so they describe a grade set that has moved since. "
-            "Recompute them on the Awards page — nothing on this page writes."
+            f"{stale} of these results were computed before {moved} they were "
+            "judged on last changed, so they describe a state that has moved "
+            "since. Recompute them on the Awards page — nothing on this page writes."
         )
     overridden = sum(row.overridden for row in rows)
     if overridden:
