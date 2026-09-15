@@ -75,3 +75,13 @@ class AttendanceMonthStatus(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
     )
     reopened_at: Mapped[datetime | None]
     reopen_reason: Mapped[str | None] = mapped_column(String)
+    # Stamped by _save_grid whenever a save actually changes something —
+    # not just "the month was touched" (updated_at already covers that,
+    # ambiguously, across Prepare/Mark for review/Finalize/Reopen too).
+    # The finalization panel compares this against the audit log's most
+    # recent ATTENDANCE_CHANGED entry to warn about an override that
+    # landed after the last save, from any adviser or tab.
+    last_saved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    last_saved_at: Mapped[datetime | None]

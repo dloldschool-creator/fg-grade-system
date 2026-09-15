@@ -1,4 +1,5 @@
 import calendar as _calendar
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
@@ -26,10 +27,12 @@ from app.attendance_service import (
     validate_month,
 )
 from app.auth import require_role
-from app.display_time import format_time
+from app.display_time import SCHOOL_TZ, format_time
+from app.models.admin import AuditLog
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
+from app.models.rbac import User
 
 # §30's printed codes. The DB stores the internal enum; these are only the
 # encoding UI's shorthand, and the SF2 renderer (Phase 9) does its own
@@ -43,6 +46,10 @@ CODE_BY_STATUS = {
     AttendanceStatus.CUTTING: "T-C",
 }
 STATUS_BY_CODE = {code: status for status, code in CODE_BY_STATUS.items()}
+# audit_service.jsonable() serialises the enum to its (identical) .value
+# string, so a payload's "status" reads back as e.g. "ABSENT" rather than
+# the enum member — this maps that string straight to the printed code.
+CODE_BY_STATUS_VALUE = {status.value: code for status, code in CODE_BY_STATUS.items()}
 
 # Shown for a day outside the learner's active window (before a late
 # enrollee arrived, after a transfer-out). Not editable in any meaningful
@@ -53,6 +60,81 @@ LEARNER_COLUMN = "Learner"
 SEX_COLUMN = "Sex"
 
 EDITABLE_STATES = {FinalizationState.NOT_STARTED, FinalizationState.OPEN, FinalizationState.FOR_REVIEW}
+
+
+def _naive_utc(value: datetime) -> datetime:
+    """Normalises a tz-aware or tz-naive timestamp for comparison.
+
+    `AuditLog.created_at` and `AttendanceMonthStatus.last_saved_at` are
+    both TIMESTAMP WITHOUT TIME ZONE columns, so a value just read back
+    from Postgres is naive — but a value set on an object in the current
+    session and not yet reloaded (e.g. right after `_save_grid` stamps
+    it) is still the tz-aware `datetime.now(timezone.utc)` that wrote it.
+    Same mismatch `analytics_service._is_stale` normalises for award
+    staleness; comparing the two directly without this raises TypeError.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _last_attendance_change(session, roster, class_days) -> AuditLog | None:
+    """Most recent ATTENDANCE_CHANGED entry for this month's records, or
+    None if nothing has ever overridden a day (seeding to PRESENT is
+    deliberately not logged — see `_save_grid`'s comment — so a month
+    that's only ever been prepared, never edited, returns None here)."""
+    enrollment_ids = [e.id for e, _, _ in roster]
+    class_day_ids = [d.id for d in class_days]
+    if not enrollment_ids or not class_day_ids:
+        return None
+    record_ids = [
+        row[0]
+        for row in session.query(AttendanceRecord.id)
+        .filter(
+            AttendanceRecord.enrollment_id.in_(enrollment_ids),
+            AttendanceRecord.calendar_date_id.in_(class_day_ids),
+        )
+        .all()
+    ]
+    if not record_ids:
+        return None
+    return (
+        session.query(AuditLog)
+        .filter(
+            AuditLog.action == audit_service.ATTENDANCE_CHANGED,
+            AuditLog.object_id.in_(record_ids),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+
+
+def _blocking_reasons(
+    report: dict, has_unsaved_edits: bool, current_state: FinalizationState, class_days, today
+) -> list[str]:
+    """The Finalize button's gate, split out from `_finalization_panel` so
+    it's testable without a Streamlit runtime. An empty list means
+    finalizing is allowed; each string is shown to the adviser as its own
+    caption so they know exactly what's outstanding."""
+    reasons: list[str] = []
+    if report["problems"]:
+        reasons.append("Resolve everything in red above before finalizing.")
+    if has_unsaved_edits:
+        reasons.append(
+            "There are unsaved edits in the grid above — click **Save attendance** first."
+        )
+    if current_state == FinalizationState.NOT_STARTED:
+        reasons.append(
+            "This month's sheet hasn't been prepared yet — click **Prepare / refresh "
+            "this month's sheet** above first."
+        )
+    last_class_day = class_days[-1].calendar_date if class_days else None
+    if last_class_day is not None and last_class_day >= today:
+        reasons.append(
+            f"This month is still in progress — its last class day is "
+            f"{last_class_day:%B %d, %Y}. Finalize once the month has ended."
+        )
+    return reasons
 
 
 def _grid_dataframe(session, roster, class_days) -> pd.DataFrame:
@@ -76,7 +158,14 @@ def _grid_dataframe(session, roster, class_days) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _save_grid(session, roster, class_days, edited: pd.DataFrame, user_id) -> None:
+def _save_grid(
+    session, section_id, school_year_id, year, month, roster, class_days, edited: pd.DataFrame, user_id
+) -> bool:
+    """Returns True only if something was actually committed. On a real
+    change, also stamps `AttendanceMonthStatus.last_saved_at/by` in the
+    same commit — the finalization panel's "changed after your last save"
+    check reads that column, not "a save happened at all," so a no-op
+    save must not move it."""
     records = records_for_month(
         session, [e.id for e, _, _ in roster], [d.id for d in class_days]
     )
@@ -134,10 +223,14 @@ def _save_grid(session, roster, class_days, edited: pd.DataFrame, user_id) -> No
             "Ignored unrecognised code(s) — use P, X, T-L or T-C: " + "; ".join(invalid[:5]),
         )
     if changed:
-        try_commit(session, f"Saved {changed} attendance change(s).")
-    else:
-        session.rollback()
-        flash("info", "No changes to save.")
+        row = get_or_create_month_status(session, section_id, school_year_id, year, month)
+        row.last_saved_by_user_id = user_id
+        row.last_saved_at = datetime.now(timezone.utc)
+        bump_version(row)
+        return try_commit(session, f"Saved {changed} attendance change(s).")
+    session.rollback()
+    flash("info", "No changes to save.")
+    return False
 
 
 def _summary_table(session, roster, class_days) -> None:
@@ -160,7 +253,9 @@ def _summary_table(session, roster, class_days) -> None:
     st.table(rows)
 
 
-def _finalization_panel(session, current_user, section_id, school_year_id, year, month) -> None:
+def _finalization_panel(
+    session, current_user, section_id, school_year_id, year, month, roster, class_days, has_unsaved_edits
+) -> None:
     status = get_month_status(session, section_id, year, month)
     current_state = status.status if status else FinalizationState.NOT_STARTED
 
@@ -216,9 +311,46 @@ def _finalization_panel(session, current_user, section_id, school_year_id, year,
     if len(report["problems"]) > 20:
         st.error(f"…and {len(report['problems']) - 20} more.")
 
-    can_finalize = not report["problems"]
-    if not can_finalize:
-        st.caption("Resolve everything in red above before finalizing.")
+    today = datetime.now(SCHOOL_TZ).date()
+    blocking_reasons = _blocking_reasons(report, has_unsaved_edits, current_state, class_days, today)
+
+    can_finalize = not blocking_reasons
+    for reason in blocking_reasons:
+        st.caption(reason)
+
+    last_change = _last_attendance_change(session, roster, class_days)
+    if last_change is not None:
+        changed_by = session.get(User, last_change.user_id) if last_change.user_id else None
+        who = changed_by.full_name if changed_by else "someone" if last_change.user_id else "the system"
+        payload = last_change.new_value or {}
+        learner_name = payload.get("learner", "a learner")
+        changed_date = payload.get("date", "")
+        code = CODE_BY_STATUS_VALUE.get(payload.get("status"), payload.get("status", ""))
+        when = format_time(last_change.created_at, fmt="%b %d, %Y %H:%M")
+
+        last_saved_at = status.last_saved_at if status else None
+        changed_after_save = (
+            last_saved_at is not None
+            and _naive_utc(last_change.created_at) > _naive_utc(last_saved_at)
+        )
+        if changed_after_save:
+            saved_by = (
+                session.get(User, status.last_saved_by_user_id)
+                if status.last_saved_by_user_id
+                else None
+            )
+            saver = saved_by.full_name if saved_by else "someone"
+            saved_when = format_time(last_saved_at, fmt="%b %d, %Y %H:%M")
+            st.warning(
+                f"Attendance changed after the last save ({saver}, {saved_when}): "
+                f"{who} set **{learner_name}** to **{code}** on {changed_date} at "
+                f"{when}. Re-check the grid and re-save before finalizing.",
+                icon="⚠️",
+            )
+        else:
+            st.caption(
+                f"Last override: {when} by {who} — {learner_name}, {changed_date} → {code}."
+            )
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -330,6 +462,7 @@ def render() -> None:
         st.subheader(f"{_calendar.month_name[month]} {year} — {section.name}")
 
         dataframe = _grid_dataframe(session, roster, class_days)
+        has_unsaved_edits = False
         if editable:
             edited = st.data_editor(
                 dataframe,
@@ -355,8 +488,12 @@ def render() -> None:
                 hide_index=True,
                 width="stretch",
             )
+            has_unsaved_edits = not edited.equals(dataframe)
             if st.button("Save attendance", type="primary"):
-                _save_grid(session, roster, class_days, edited, current_user.id)
+                _save_grid(
+                    session, section_choice, sy_choice, year, month,
+                    roster, class_days, edited, current_user.id,
+                )
                 st.rerun()
         else:
             st.dataframe(dataframe, hide_index=True, width="stretch")
@@ -368,4 +505,7 @@ def render() -> None:
 
         st.divider()
         st.subheader("Finalization")
-        _finalization_panel(session, current_user, section_choice, sy_choice, year, month)
+        _finalization_panel(
+            session, current_user, section_choice, sy_choice, year, month,
+            roster, class_days, has_unsaved_edits,
+        )
