@@ -43,6 +43,11 @@ ATTENDANCE_MONTH_FINALIZED = "ATTENDANCE_MONTH_FINALIZED"
 ATTENDANCE_MONTH_REOPENED = "ATTENDANCE_MONTH_REOPENED"
 
 LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
+# No page offers this — `learner_movements` has no delete in the app, only
+# "Log movement" (§27). It exists for the rare correction a registrar has
+# to make outside the UI (a duplicate or mis-logged entry), so that
+# correction still leaves an audited trail rather than a silent DELETE.
+LEARNER_MOVEMENT_DELETED = "LEARNER_MOVEMENT_DELETED"
 # A learner's name, sex, birthdate and LRN are the identity every report
 # the school issues is printed under, and §54 treats them as protected
 # information. Until 2026-08-21 the Learner Masterlist wrote all four with
@@ -140,6 +145,7 @@ REASON_REQUIRED = {
     AUDIT_LOG_ARCHIVED,
     SUBJECT_OVERRIDE_CREATED,
     SUBJECT_OVERRIDE_REMOVED,
+    LEARNER_MOVEMENT_DELETED,
 }
 
 
