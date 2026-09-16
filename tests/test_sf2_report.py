@@ -127,15 +127,34 @@ def test_remark_for_nls_or_dropped_states_the_reason():
     assert _remark_for(nls) == "NLS as of 08/05/2026"
 
 
-def test_remark_for_other_movement_types_is_unchanged():
-    """Transferred/Shifted/Late Enrollment keep the plain label-and-date
-    remark — this legend and reason format is specific to NLS/Dropped."""
-    transferred = LearnerMovement(
+def test_remark_for_transferred_in_or_out_names_the_school():
+    """The template's own header: "If TRANSFERRED IN/OUT, write the name
+    of School.\""""
+    transferred_in = LearnerMovement(
+        movement_type=EnrollmentStatus.TRANSFERRED_IN,
+        effective_date=date(2026, 9, 1),
+        previous_school="Rizal NHS",
+    )
+    assert _remark_for(transferred_in) == "Transferred In as of 09/01/2026 from Rizal NHS"
+
+    transferred_out = LearnerMovement(
         movement_type=EnrollmentStatus.TRANSFERRED_OUT,
         effective_date=date(2026, 9, 12),
-        remarks="Moved to another school",
+        receiving_school="Bonifacio NHS",
     )
-    assert _remark_for(transferred) == "Transferred Out 09/12/2026"
+    assert _remark_for(transferred_out) == "Transferred Out as of 09/12/2026 to Bonifacio NHS"
+
+
+def test_remark_for_shifted_and_late_enrollment_is_unchanged():
+    """Shifted/Late Enrollment keep the plain label-and-date remark —
+    this legend, reason and school format is specific to
+    NLS/Dropped/Transferred In/Transferred Out."""
+    shifted = LearnerMovement(
+        movement_type=EnrollmentStatus.SHIFTED_OUT,
+        effective_date=date(2026, 9, 12),
+        remarks="Moved to another strand",
+    )
+    assert _remark_for(shifted) == "Shifted Out 09/12/2026"
 
 
 # --- The NLS summary row counts NLS and Dropped together ------------------

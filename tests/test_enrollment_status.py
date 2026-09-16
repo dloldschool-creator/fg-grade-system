@@ -120,3 +120,38 @@ def test_reason_is_just_the_main_cause_when_no_sub_reason_is_on_file():
     filled in."""
     movement = _movement(EnrollmentStatus.NLS, date(2026, 8, 5), nls_reason="Others")
     assert movement_reason_text(movement) == "Others"
+
+
+# --- Transferred In/Out name the school, not a reason ----------------------
+
+
+def test_transferred_in_prints_the_previous_school():
+    movement = _movement(
+        EnrollmentStatus.TRANSFERRED_IN, date(2026, 9, 1), previous_school="Rizal NHS"
+    )
+    assert movement_status_line(movement) == "Transferred In as of 09/01/2026 from Rizal NHS"
+
+
+def test_transferred_out_prints_the_receiving_school():
+    movement = _movement(
+        EnrollmentStatus.TRANSFERRED_OUT, date(2026, 9, 12), receiving_school="Bonifacio NHS"
+    )
+    assert movement_status_line(movement) == "Transferred Out as of 09/12/2026 to Bonifacio NHS"
+
+
+def test_transferred_in_ignores_a_receiving_school_left_over_from_another_pick():
+    """The Log Movement form disables the inapplicable field but a stray
+    value there must never leak into the printed line — this is the
+    consequence of that if the form-level guard were ever removed."""
+    movement = _movement(
+        EnrollmentStatus.TRANSFERRED_IN,
+        date(2026, 9, 1),
+        previous_school="Rizal NHS",
+        receiving_school="Should not print",
+    )
+    assert movement_status_line(movement) == "Transferred In as of 09/01/2026 from Rizal NHS"
+
+
+def test_transferred_in_without_a_previous_school_still_names_status_and_date():
+    movement = _movement(EnrollmentStatus.TRANSFERRED_IN, date(2026, 9, 1))
+    assert movement_status_line(movement) == "Transferred In as of 09/01/2026"

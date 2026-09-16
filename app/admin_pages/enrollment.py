@@ -438,6 +438,13 @@ def _roster_tab(session, adviser_user_id, current_user):
                 "exit-status line — so pick the closest match rather than typing "
                 "free text."
             )
+            st.caption(
+                "**Transferred In** needs the Previous school (Receiving school "
+                "doesn't apply and is disabled); **Transferred Out** needs the "
+                "Receiving school instead. These print as \"*Transferred In as of "
+                "<date> from <school>*\" and \"*Transferred Out as of <date> to "
+                "<school>*\" on SF2's Remarks column, per the form's own header."
+            )
             # Movement type, and the NLS/Dropped reason cascade, sit
             # outside the form: a widget inside `st.form` only reports its
             # new value once the form is submitted, so a sub-reason list
@@ -456,6 +463,8 @@ def _roster_tab(session, adviser_user_id, current_user):
                 args=(panel_id,),
             )
             is_nls_or_dropped = movement_type in (EnrollmentStatus.NLS.value, EnrollmentStatus.DROPPED.value)
+            is_transferred_in = movement_type == EnrollmentStatus.TRANSFERRED_IN.value
+            is_transferred_out = movement_type == EnrollmentStatus.TRANSFERRED_OUT.value
 
             main_reason = sub_reason = None
             if is_nls_or_dropped:
@@ -500,59 +509,78 @@ def _roster_tab(session, adviser_user_id, current_user):
                     details = text_field("Details", key=f"{movement_form}.details")
                 col1, col2 = st.columns(2)
                 previous_school = text_field(
-                    "Previous school (if applicable)",
+                    "Previous school" + (" (required)" if is_transferred_in else " (if applicable)"),
                     key=f"{movement_form}.previous_school",
                     container=col1,
+                    disabled=is_transferred_out,
                 )
                 receiving_school = text_field(
-                    "Receiving school (if applicable)",
+                    "Receiving school" + (" (required)" if is_transferred_out else " (if applicable)"),
                     key=f"{movement_form}.receiving_school",
                     container=col2,
+                    disabled=is_transferred_in,
                 )
                 remarks = text_field("Remarks", key=f"{movement_form}.remarks")
 
                 if st.form_submit_button("Log movement"):
-                    previous_status = enrollment.enrollment_status
-                    nls_reason = main_reason if is_nls_or_dropped else None
-                    stored_details = sub_reason if is_nls_or_dropped else details
-                    session.add(
-                        LearnerMovement(
-                            enrollment_id=enrollment.id,
-                            movement_type=EnrollmentStatus(movement_type),
-                            effective_date=effective_date,
-                            details=stored_details or None,
-                            previous_school=previous_school or None,
-                            receiving_school=receiving_school or None,
-                            nls_reason=nls_reason,
-                            remarks=remarks or None,
+                    error = None
+                    if is_transferred_in and not (previous_school or "").strip():
+                        error = "Previous school is required for a Transferred In movement."
+                    elif is_transferred_out and not (receiving_school or "").strip():
+                        error = "Receiving school is required for a Transferred Out movement."
+
+                    if error:
+                        flash("error", error)
+                    else:
+                        previous_status = enrollment.enrollment_status
+                        nls_reason = main_reason if is_nls_or_dropped else None
+                        stored_details = sub_reason if is_nls_or_dropped else details
+                        # The disabled field is inapplicable to this
+                        # movement type, so whatever it's still holding
+                        # from an earlier pick is dropped rather than
+                        # stored — a Transferred In row must never carry
+                        # a Receiving school, and vice versa.
+                        stored_previous_school = None if is_transferred_out else (previous_school or None)
+                        stored_receiving_school = None if is_transferred_in else (receiving_school or None)
+                        session.add(
+                            LearnerMovement(
+                                enrollment_id=enrollment.id,
+                                movement_type=EnrollmentStatus(movement_type),
+                                effective_date=effective_date,
+                                details=stored_details or None,
+                                previous_school=stored_previous_school,
+                                receiving_school=stored_receiving_school,
+                                nls_reason=nls_reason,
+                                remarks=remarks or None,
+                            )
                         )
-                    )
-                    enrollment.enrollment_status = EnrollmentStatus(movement_type)
-                    enrollment.version += 1
-                    # §50 names "learner transferred" and "learner dropped"
-                    # specifically; both arrive through this one form, so
-                    # every movement type is logged rather than a subset.
-                    audit_service.record(
-                        session,
-                        action=audit_service.LEARNER_MOVEMENT_RECORDED,
-                        object_type="enrollments",
-                        object_id=enrollment.id,
-                        user_id=current_user.id,
-                        previous={"enrollment_status": previous_status},
-                        new={
-                            "enrollment_status": movement_type,
-                            "effective_date": effective_date,
-                            "receiving_school": receiving_school or None,
-                            "previous_school": previous_school or None,
-                        },
-                        reason=(
-                            f"{nls_reason} - {stored_details}"
-                            if nls_reason and stored_details
-                            else nls_reason or stored_details or remarks or None
-                        ),
-                    )
-                    if try_commit(session, "Movement logged."):
-                        clear_text_fields(movement_form)
+                        enrollment.enrollment_status = EnrollmentStatus(movement_type)
+                        enrollment.version += 1
+                        # §50 names "learner transferred" and "learner
+                        # dropped" specifically; both arrive through this
+                        # one form, so every movement type is logged
+                        # rather than a subset.
+                        audit_service.record(
+                            session,
+                            action=audit_service.LEARNER_MOVEMENT_RECORDED,
+                            object_type="enrollments",
+                            object_id=enrollment.id,
+                            user_id=current_user.id,
+                            previous={"enrollment_status": previous_status},
+                            new={
+                                "enrollment_status": movement_type,
+                                "effective_date": effective_date,
+                                "receiving_school": stored_receiving_school,
+                                "previous_school": stored_previous_school,
+                            },
+                            reason=(
+                                f"{nls_reason} - {stored_details}"
+                                if nls_reason and stored_details
+                                else nls_reason or stored_details or remarks or None
+                            ),
+                        )
+                        if try_commit(session, "Movement logged."):
+                            clear_text_fields(movement_form)
                     st.rerun()
 
             st.subheader("Subject substitutions")

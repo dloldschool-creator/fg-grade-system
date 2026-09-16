@@ -182,16 +182,25 @@ def movement_remark(movement_type: EnrollmentStatus, effective: date) -> str:
 
 
 # BP15's own header says it: "REMARKS (If NLS, state reason, please refer
-# to legend number 2...)". Dropped shares the same legend (the template's
-# own NLS summary formula counts it there too — see app/nls_reasons.py),
-# so both read the "<Status> as of <date> due to <reason>" line that
-# app/enrollment_status.py also uses for SF9's exit-status line. Every
-# other movement type keeps the plain label-and-date remark unchanged.
-_REASON_REMARK_TYPES = {EnrollmentStatus.NLS, EnrollmentStatus.DROPPED}
+# to legend number 2...). If TRANSFERRED IN/OUT, write the name of
+# School." NLS and Dropped share one legend (the template's own NLS
+# summary formula counts them together — see app/nls_reasons.py) and
+# print "<Status> as of <date> due to <reason>"; Transferred In/Out print
+# "<Status> as of <date> from/to <school>" instead — both read from
+# app/enrollment_status.py's movement_status_line, which SF9's
+# exit-status line also uses, so the two forms can't describe one event
+# two ways. Every other movement type keeps the plain label-and-date
+# remark unchanged.
+_DETAILED_REMARK_TYPES = {
+    EnrollmentStatus.NLS,
+    EnrollmentStatus.DROPPED,
+    EnrollmentStatus.TRANSFERRED_IN,
+    EnrollmentStatus.TRANSFERRED_OUT,
+}
 
 
 def _remark_for(movement) -> str:
-    if movement.movement_type in _REASON_REMARK_TYPES:
+    if movement.movement_type in _DETAILED_REMARK_TYPES:
         return movement_status_line(movement)
     return movement_remark(movement.movement_type, movement.effective_date)
 

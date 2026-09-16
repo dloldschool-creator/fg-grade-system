@@ -71,22 +71,38 @@ def movement_reason_text(movement: LearnerMovement) -> str | None:
 
 
 def movement_status_line(movement: LearnerMovement) -> str:
-    """"<Label> as of <date>[ due to <reason>]" for one movement — SF9's
-    exit-status line and SF2's Remarks column (for NLS/Dropped) both read
-    this, so the two documents can't describe one event two ways."""
-    reason = movement_reason_text(movement)
+    """"<Label> as of <date>[ due to <reason> | from <previous school> |
+    to <receiving school>]" for one movement — SF9's exit-status line and
+    SF2's Remarks column both read this for NLS/Dropped/Transferred
+    In/Transferred Out, so the two documents can't describe one event two
+    ways.
+
+    Each movement type has its own clause because they answer different
+    questions: NLS/Dropped need *why*, a transfer needs *where* — and the
+    Log Movement form (`app/admin_pages/enrollment.py`) requires exactly
+    the field each clause reads, so there's always something to print
+    once the movement is on file at all.
+    """
     line = f"{movement_label(movement.movement_type)} as of {movement.effective_date:%m/%d/%Y}"
-    return f"{line} due to {reason}" if reason else line
+    if movement.movement_type in (EnrollmentStatus.NLS, EnrollmentStatus.DROPPED):
+        reason = movement_reason_text(movement)
+        return f"{line} due to {reason}" if reason else line
+    if movement.movement_type == EnrollmentStatus.TRANSFERRED_IN and movement.previous_school:
+        return f"{line} from {movement.previous_school}"
+    if movement.movement_type == EnrollmentStatus.TRANSFERRED_OUT and movement.receiving_school:
+        return f"{line} to {movement.receiving_school}"
+    return line
 
 
 def exit_status_line(movements: list[LearnerMovement]) -> str | None:
     """SF9's Remarks-column text for a learner who exited before the year's
     grades were complete — "Dropped as of 08/30/2026 due to Child labor,
-    work" — or None if none of `movements` is an exit.
+    work", or "Transferred Out as of 09/12/2026 to Rizal NHS" — or None if
+    none of `movements` is an exit.
 
     Reads the exact line `sf2_report._remark_for` already prints on SF2's
-    own Remarks column for NLS/Dropped, so the two documents describe one
-    event instead of each computing it separately.
+    own Remarks column for these same movement types, so the two
+    documents describe one event instead of each computing it separately.
     """
     latest = latest_exit_movement(movements)
     if latest is None:
