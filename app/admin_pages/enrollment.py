@@ -324,7 +324,14 @@ def _roster_tab(session, adviser_user_id, current_user):
 
             st.subheader("Movement / status history")
             movements = movements_by_enrollment.get(enrollment.id, [])
-            if movements:
+            # Registrar-only, same as every other delete in this app
+            # (§54) — a movement drives SF2's counts and SF9's exit line,
+            # so removing one wrongly is a bigger mistake than an
+            # adviser's own section usually needs to make.
+            may_delete_movement = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+            if not movements:
+                st.caption("No movements logged yet.")
+            elif not may_delete_movement:
                 st.table(
                     [
                         {
@@ -338,7 +345,83 @@ def _roster_tab(session, adviser_user_id, current_user):
                     ]
                 )
             else:
-                st.caption("No movements logged yet.")
+                rows = [
+                    {
+                        "Remove": False,
+                        "Date": m.effective_date.isoformat(),
+                        "Type": m.movement_type.value,
+                        "NLS reason": m.nls_reason or "",
+                        "Details": m.details or "",
+                        "Remarks": m.remarks or "",
+                    }
+                    for m in movements
+                ]
+                edited = st.data_editor(
+                    rows,
+                    key=f"movement_history_{enrollment.id}",
+                    hide_index=True,
+                    disabled=["Date", "Type", "NLS reason", "Details", "Remarks"],
+                    column_config={
+                        "Remove": st.column_config.CheckboxColumn(
+                            "Remove", help="Tick a duplicate or mis-logged entry, then remove it below."
+                        ),
+                    },
+                    on_change=keep_panel_open,
+                    args=(panel_id,),
+                )
+                to_remove = [m for m, row in zip(movements, edited) if row["Remove"]]
+                if to_remove:
+                    reason_key = f"movement_delete_reason_{enrollment.id}"
+                    reason = st.text_input(
+                        f"Reason for removing {len(to_remove)} ticked movement(s) — required (§50)",
+                        key=reason_key,
+                        on_change=keep_panel_open,
+                        args=(panel_id,),
+                    )
+                    if st.button(
+                        f"Remove {len(to_remove)} ticked movement(s)",
+                        key=f"movement_delete_btn_{enrollment.id}",
+                    ):
+                        if not reason.strip():
+                            flash("error", "A reason is required to remove a movement.")
+                        else:
+                            for m in to_remove:
+                                # Recorded before the row goes, and rolled
+                                # back with it if the delete is refused —
+                                # same rule as Learners' own Delete.
+                                audit_service.record(
+                                    session,
+                                    action=audit_service.LEARNER_MOVEMENT_DELETED,
+                                    object_type="learner_movements",
+                                    object_id=m.id,
+                                    user_id=current_user.id,
+                                    previous={
+                                        "movement_type": m.movement_type,
+                                        "effective_date": m.effective_date,
+                                        "nls_reason": m.nls_reason,
+                                        "details": m.details,
+                                        "remarks": m.remarks,
+                                    },
+                                    new=None,
+                                    reason=reason.strip(),
+                                )
+                                session.delete(m)
+                            # enrollment_status isn't derived on read — "Log
+                            # movement" sets it directly — so removing the
+                            # movement that set it would otherwise leave a
+                            # status with no movement behind it. Recompute
+                            # from whichever movement is now the most
+                            # recent, or back to ENROLLED (the model's own
+                            # default) if none are left.
+                            remaining = [m for m in movements if m not in to_remove]
+                            enrollment.enrollment_status = (
+                                max(remaining, key=lambda m: (m.effective_date, m.created_at)).movement_type
+                                if remaining
+                                else EnrollmentStatus.ENROLLED
+                            )
+                            enrollment.version += 1
+                            try_commit(session, f"Removed {len(to_remove)} movement(s).")
+                        st.rerun()
 
             st.caption(
                 "Logging a movement also updates the learner's status above. They "
