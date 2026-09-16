@@ -44,7 +44,7 @@ from app.attendance_service import (
     roster_for_month,
     summarize_month_batch,
 )
-from app.enrollment_status import movement_label
+from app.enrollment_status import movement_label, movement_status_line
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
@@ -180,6 +180,35 @@ def movement_remark(movement_type: EnrollmentStatus, effective: date) -> str:
     return f"{movement_label(movement_type)} {effective:%m/%d/%Y}"
 
 
+# BP15's own header says it: "REMARKS (If NLS, state reason, please refer
+# to legend number 2...)". Dropped shares the same legend (the template's
+# own NLS summary formula counts it there too — see app/nls_reasons.py),
+# so both read the "<Status> as of <date> due to <reason>" line that
+# app/enrollment_status.py also uses for SF9's exit-status line. Every
+# other movement type keeps the plain label-and-date remark unchanged.
+_REASON_REMARK_TYPES = {EnrollmentStatus.NLS, EnrollmentStatus.DROPPED}
+
+
+def _remark_for(movement) -> str:
+    if movement.movement_type in _REASON_REMARK_TYPES:
+        return movement_status_line(movement)
+    return movement_remark(movement.movement_type, movement.effective_date)
+
+
+def _combined_counts(counts: dict, *movement_types: EnrollmentStatus) -> dict:
+    """Sums the M/F buckets of several movement types into one.
+
+    The template's own NLS-row formula (`BU92`) is
+    `COUNTIFS(...,"No Longer in School (NLS)") + COUNTIFS(...,"Dropped")`
+    — the form counts the two movement types as one row — so the ROW_NLS
+    summary line has to do the same combining `_movement_counts` (which
+    tallies every movement type separately) does not.
+    """
+    male = sum(counts.get(t, {"M": 0, "F": 0})["M"] for t in movement_types)
+    female = sum(counts.get(t, {"M": 0, "F": 0})["F"] for t in movement_types)
+    return {"M": male, "F": female}
+
+
 def first_friday_on_or_after(start: date) -> date:
     """The reference date for the form's "Enrolment as of (1st Friday of
     June)" line.
@@ -233,7 +262,7 @@ def _learner_rows(session: Session, section_id, school_year_id, year: int, month
         summary = summaries[enrollment.id]
 
         remarks = [
-            movement_remark(m.movement_type, m.effective_date)
+            _remark_for(m)
             for m in sorted(movements.get(enrollment.id, []), key=lambda m: m.effective_date)
             if month_start <= m.effective_date <= month_end
         ]
@@ -606,8 +635,11 @@ def _fill_summary(session, worksheet, anchors, males, females, class_days, schoo
     )
 
     counts = _movement_counts(session, males + females, year, month)
+
+    nls_bucket = _combined_counts(counts, EnrollmentStatus.NLS, EnrollmentStatus.DROPPED)
+    _write_summary_row(worksheet, anchors, ROW_NLS, nls_bucket["M"], nls_bucket["F"])
+
     for movement_type, row in (
-        (EnrollmentStatus.NLS, ROW_NLS),
         (EnrollmentStatus.TRANSFERRED_OUT, ROW_TRANSFERRED_OUT),
         (EnrollmentStatus.TRANSFERRED_IN, ROW_TRANSFERRED_IN),
         (EnrollmentStatus.SHIFTED_OUT, ROW_SHIFTED_OUT),

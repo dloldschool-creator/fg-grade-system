@@ -1316,6 +1316,48 @@ Learners who are:
 
 begin appearing according to their effective date/month.
 
+> **Amended 2026-09-16** (decided with the school) to match the official
+> SF2 template's own counting rule and reason legend, discovered by
+> reading the template's summary formulas directly: cell `BU92` (the
+> printed form's NLS row) is
+> `COUNTIFS(...,"No Longer in School (NLS)") + COUNTIFS(...,"Dropped")` —
+> DepEd's own form counts NLS and Dropped as one figure, not two. The
+> summary box's NLS row must therefore be the count of NLS movements
+> **plus** Dropped movements, not NLS alone.
+>
+> The **NLS Reason** field is a two-level pick from the template's own
+> "2. REASONS/CAUSES FOR NLS" legend (printed on the SF2 form itself,
+> rows 78-106), applicable to both NLS and Dropped movements since they
+> share the row above. It is not free text:
+>
+> - a. Domestic-Related Factors — Had to take care of siblings; Early
+>   marriage/pregnancy; Parents' attitude toward schooling; Family
+>   problems
+> - b. Individual-Related Factors — Illness; Overage; Death; Drug Abuse;
+>   Poor academic performance; Lack of interest/Distractions;
+>   Hunger/Malnutrition
+> - c. School-Related Factors — Teacher Factor; Physical condition of
+>   classroom; Peer influence
+> - d. Geographic/Environmental — Distance between home and school;
+>   Armed conflict (incl. Tribal wars & clanfeuds); Calamities/Disasters
+> - e. Financial-Related — Child labor, work
+> - f. Others (Specify) — free text, no fixed sub-reason
+>
+> The **NLS Reason** field stores the main cause (e.g. "Financial-Related")
+> and the existing **Details** field stores the sub-reason picked under it
+> (e.g. "Child labor, work") — no new field, just a narrower meaning for
+> Details when the movement type is NLS or Dropped. Every other movement
+> type's Details field is still free text.
+>
+> SF2's Remarks column, for an NLS or Dropped movement, now reads
+> `<Status> as of <effective date> due to <main cause> - <sub-reason>` —
+> e.g. "Dropped as of 08/05/2026 due to Financial-Related - Child labor,
+> work" — the same joining and line format Section 35's SF9 exit-status
+> amendment already uses, from the same shared implementation
+> (`app/enrollment_status.py`), so the two forms cannot describe one
+> event two different ways. Every other movement type's remark is
+> unchanged (label and date only).
+
 ---
 
 # 33. MONTHLY ATTENDANCE FINALIZATION

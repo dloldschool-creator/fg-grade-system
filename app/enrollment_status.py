@@ -55,18 +55,40 @@ def latest_exit_movement(movements: list[LearnerMovement]) -> LearnerMovement | 
     return max(exits, key=lambda m: m.effective_date)
 
 
+def movement_reason_text(movement: LearnerMovement) -> str | None:
+    """The reason text for one movement.
+
+    When both are on file — the shape the NLS/Dropped legend dropdowns
+    write (`app/nls_reasons.py`) — joins the main cause and its
+    sub-reason: "Financial-Related - Child labor, work". Falls back to
+    whichever single field is set, so a movement logged before the
+    dropdowns existed, or any other movement type's free-text reason,
+    still prints something.
+    """
+    if movement.nls_reason and movement.details:
+        return f"{movement.nls_reason} - {movement.details}"
+    return movement.nls_reason or movement.details or movement.remarks
+
+
+def movement_status_line(movement: LearnerMovement) -> str:
+    """"<Label> as of <date>[ due to <reason>]" for one movement — SF9's
+    exit-status line and SF2's Remarks column (for NLS/Dropped) both read
+    this, so the two documents can't describe one event two ways."""
+    reason = movement_reason_text(movement)
+    line = f"{movement_label(movement.movement_type)} as of {movement.effective_date:%m/%d/%Y}"
+    return f"{line} due to {reason}" if reason else line
+
+
 def exit_status_line(movements: list[LearnerMovement]) -> str | None:
     """SF9's Remarks-column text for a learner who exited before the year's
     grades were complete — "Dropped as of 08/30/2026 due to Child labor,
     work" — or None if none of `movements` is an exit.
 
-    Reads the exact rows `sf2_report.movement_remark` already prints on
-    SF2's own Remarks column, so the two documents describe one event
-    instead of each computing it separately.
+    Reads the exact line `sf2_report._remark_for` already prints on SF2's
+    own Remarks column for NLS/Dropped, so the two documents describe one
+    event instead of each computing it separately.
     """
     latest = latest_exit_movement(movements)
     if latest is None:
         return None
-    reason = latest.nls_reason or latest.details or latest.remarks
-    line = f"{movement_label(latest.movement_type)} as of {latest.effective_date:%m/%d/%Y}"
-    return f"{line} due to {reason}" if reason else line
+    return movement_status_line(latest)

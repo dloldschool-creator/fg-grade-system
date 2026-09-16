@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import audit_service
 from app.admin_pages._helpers import (
+    _forget_stale,
     clear_text_fields,
     flash,
     get_session,
@@ -23,6 +24,7 @@ from app.models.enums import EnrollmentStatus, OfferingStatus
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
+from app.nls_reasons import NLS_REASONS
 
 RESULT_LIMIT = 30
 
@@ -328,6 +330,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                         {
                             "Date": m.effective_date.isoformat(),
                             "Type": m.movement_type.value,
+                            "NLS reason": m.nls_reason or "",
                             "Details": m.details or "",
                             "Remarks": m.remarks or "",
                         }
@@ -337,15 +340,71 @@ def _roster_tab(session, adviser_user_id, current_user):
             else:
                 st.caption("No movements logged yet.")
 
+            st.caption(
+                "Logging a movement also updates the learner's status above. They "
+                "still appear on that month's SF2 with a remark, then drop off the "
+                "months after it."
+            )
+            st.caption(
+                "**NLS and Dropped** share one line on SF2's summary box — the "
+                "official form counts them together — and both need a reason from "
+                "the SF2 form's own Legend 2: pick the main cause, then the "
+                "specific reason under it (or \"Others\" to type your own). That "
+                "reason then prints as \"*<Status> as of <date> due to <main "
+                "cause> - <reason>*\" on both SF2's Remarks column and SF9's "
+                "exit-status line — so pick the closest match rather than typing "
+                "free text."
+            )
+            # Movement type, and the NLS/Dropped reason cascade, sit
+            # outside the form: a widget inside `st.form` only reports its
+            # new value once the form is submitted, so a sub-reason list
+            # couldn't react to a main-reason change made in the same
+            # interaction. `_forget_stale` drops a stored choice the
+            # current options no longer contain — same pattern as
+            # `section_filters`'s grade/strand cascade. A live widget in an
+            # expander needs on_change=keep_panel_open or its own rerun
+            # collapses the panel mid-pick (st.expander has no memory) —
+            # same as the subject-substitution picker below.
+            movement_type = st.selectbox(
+                "Movement type",
+                options=[s.value for s in EnrollmentStatus],
+                key=f"mv_type_{enrollment.id}",
+                on_change=keep_panel_open,
+                args=(panel_id,),
+            )
+            is_nls_or_dropped = movement_type in (EnrollmentStatus.NLS.value, EnrollmentStatus.DROPPED.value)
+
+            main_reason = sub_reason = None
+            if is_nls_or_dropped:
+                main_key = f"mv_reason_main_{enrollment.id}"
+                sub_key = f"mv_reason_sub_{enrollment.id}"
+                main_options = list(NLS_REASONS.keys())
+                _forget_stale(main_key, main_options)
+                main_reason = st.selectbox(
+                    "NLS/Dropped reason — main cause (SF2 Legend 2)",
+                    options=main_options,
+                    key=main_key,
+                    on_change=keep_panel_open,
+                    args=(panel_id,),
+                )
+                sub_options = NLS_REASONS[main_reason]
+                if sub_options:
+                    _forget_stale(sub_key, sub_options)
+                    sub_reason = st.selectbox(
+                        "Specific reason",
+                        options=sub_options,
+                        key=sub_key,
+                        on_change=keep_panel_open,
+                        args=(panel_id,),
+                    )
+                else:
+                    # "Others (Specify)" carries no fixed sub-reason on the
+                    # template itself.
+                    sub_reason = st.text_input(
+                        "Specify reason", key=sub_key, on_change=keep_panel_open, args=(panel_id,)
+                    )
+
             with st.form(f"add_movement_{enrollment.id}"):
-                st.caption(
-                    "Logging a movement also updates the learner's status above. They "
-                    "still appear on that month's SF2 with a remark, then drop off the "
-                    "months after it."
-                )
-                movement_type = st.selectbox(
-                    "Movement type", options=[s.value for s in EnrollmentStatus], key=f"mv_type_{enrollment.id}"
-                )
                 effective_date = st.date_input(
                     "Effective date", value=date.today(), key=f"mv_date_{enrollment.id}"
                 )
@@ -353,7 +412,9 @@ def _roster_tab(session, adviser_user_id, current_user):
                 # with it everything clear_text_fields touches — is scoped
                 # to this learner.
                 movement_form = f"add_movement_{enrollment.id}"
-                details = text_field("Details", key=f"{movement_form}.details")
+                details = None
+                if not is_nls_or_dropped:
+                    details = text_field("Details", key=f"{movement_form}.details")
                 col1, col2 = st.columns(2)
                 previous_school = text_field(
                     "Previous school (if applicable)",
@@ -365,22 +426,21 @@ def _roster_tab(session, adviser_user_id, current_user):
                     key=f"{movement_form}.receiving_school",
                     container=col2,
                 )
-                nls_reason = text_field(
-                    "NLS reason (if applicable)", key=f"{movement_form}.nls_reason"
-                )
                 remarks = text_field("Remarks", key=f"{movement_form}.remarks")
 
                 if st.form_submit_button("Log movement"):
                     previous_status = enrollment.enrollment_status
+                    nls_reason = main_reason if is_nls_or_dropped else None
+                    stored_details = sub_reason if is_nls_or_dropped else details
                     session.add(
                         LearnerMovement(
                             enrollment_id=enrollment.id,
                             movement_type=EnrollmentStatus(movement_type),
                             effective_date=effective_date,
-                            details=details or None,
+                            details=stored_details or None,
                             previous_school=previous_school or None,
                             receiving_school=receiving_school or None,
-                            nls_reason=nls_reason or None,
+                            nls_reason=nls_reason,
                             remarks=remarks or None,
                         )
                     )
@@ -402,7 +462,11 @@ def _roster_tab(session, adviser_user_id, current_user):
                             "receiving_school": receiving_school or None,
                             "previous_school": previous_school or None,
                         },
-                        reason=details or remarks or None,
+                        reason=(
+                            f"{nls_reason} - {stored_details}"
+                            if nls_reason and stored_details
+                            else nls_reason or stored_details or remarks or None
+                        ),
                     )
                     if try_commit(session, "Movement logged."):
                         clear_text_fields(movement_form)

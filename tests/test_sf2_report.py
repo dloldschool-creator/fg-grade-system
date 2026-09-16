@@ -10,6 +10,7 @@ import pytest
 
 from app.excel_template import anchor_map, replicate_images, workbook_to_bytes
 from app.models.enums import AttendanceStatus, EnrollmentStatus
+from app.models.learners import LearnerMovement
 from app.sf2_report import (
     COL_PRINT_CONTROL,
     COL_SUMMARY_F,
@@ -22,7 +23,9 @@ from app.sf2_report import (
     SHEET_NAME,
     TEMPLATE_PATH,
     _apply_print_setup,
+    _combined_counts,
     _fill_day_headers,
+    _remark_for,
     _widen_summary_percentage_columns,
     first_friday_on_or_after,
     movement_remark,
@@ -93,6 +96,64 @@ def test_unencoded_day_also_prints_blank():
 def test_movement_remark_names_the_movement_and_its_date():
     remark = movement_remark(EnrollmentStatus.TRANSFERRED_OUT, date(2026, 9, 12))
     assert remark == "Transferred Out 09/12/2026"
+
+
+# --- Remarks column: NLS/Dropped state a reason, everything else doesn't --
+
+
+def test_remark_for_nls_or_dropped_states_the_reason():
+    """BP15's own header: "REMARKS (If NLS, state reason, please refer to
+    legend number 2...)". Dropped shares the row (see test below), so it
+    shares the wording too."""
+    dropped = LearnerMovement(
+        movement_type=EnrollmentStatus.DROPPED,
+        effective_date=date(2026, 8, 5),
+        nls_reason="Financial-Related",
+        details="Child labor, work",
+    )
+    assert (
+        _remark_for(dropped)
+        == "Dropped as of 08/05/2026 due to Financial-Related - Child labor, work"
+    )
+
+    nls = LearnerMovement(movement_type=EnrollmentStatus.NLS, effective_date=date(2026, 8, 5))
+    assert _remark_for(nls) == "NLS as of 08/05/2026"
+
+
+def test_remark_for_other_movement_types_is_unchanged():
+    """Transferred/Shifted/Late Enrollment keep the plain label-and-date
+    remark — this legend and reason format is specific to NLS/Dropped."""
+    transferred = LearnerMovement(
+        movement_type=EnrollmentStatus.TRANSFERRED_OUT,
+        effective_date=date(2026, 9, 12),
+        remarks="Moved to another school",
+    )
+    assert _remark_for(transferred) == "Transferred Out 09/12/2026"
+
+
+# --- The NLS summary row counts NLS and Dropped together ------------------
+
+
+def test_combined_counts_sums_nls_and_dropped_into_one_bucket():
+    """The template's own NLS-row formula (BU92) is
+    COUNTIFS(...,"No Longer in School (NLS)") + COUNTIFS(...,"Dropped") —
+    the two movement types share one row on the printed form."""
+    counts = {
+        EnrollmentStatus.NLS: {"M": 2, "F": 1},
+        EnrollmentStatus.DROPPED: {"M": 1, "F": 3},
+        EnrollmentStatus.TRANSFERRED_OUT: {"M": 5, "F": 5},
+    }
+    assert _combined_counts(counts, EnrollmentStatus.NLS, EnrollmentStatus.DROPPED) == {
+        "M": 3,
+        "F": 4,
+    }
+
+
+def test_combined_counts_defaults_missing_types_to_zero():
+    assert _combined_counts({}, EnrollmentStatus.NLS, EnrollmentStatus.DROPPED) == {
+        "M": 0,
+        "F": 0,
+    }
 
 
 # --- Start-of-year reference date -----------------------------------------

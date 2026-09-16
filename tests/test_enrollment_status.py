@@ -9,6 +9,8 @@ from app.enrollment_status import (
     exit_status_line,
     latest_exit_movement,
     movement_label,
+    movement_reason_text,
+    movement_status_line,
 )
 from app.models.enums import EnrollmentStatus
 from app.models.learners import LearnerMovement
@@ -90,3 +92,31 @@ def test_the_most_recent_exit_movement_is_the_one_reported():
     latest = latest_exit_movement(movements)
     assert latest.movement_type == EnrollmentStatus.NLS
     assert exit_status_line(movements) == "NLS as of 09/01/2026 due to Second reason"
+
+
+# --- The NLS/Dropped legend's main cause + sub-reason ----------------------
+
+
+def test_reason_joins_main_cause_and_sub_reason_with_a_dash():
+    """The shape the Log Movement form's two dropdowns write (§32,
+    app/nls_reasons.py): nls_reason holds the main cause, details holds
+    the sub-reason picked under it."""
+    movement = _movement(
+        EnrollmentStatus.DROPPED,
+        date(2026, 8, 5),
+        nls_reason="Financial-Related",
+        details="Child labor, work",
+    )
+    assert movement_reason_text(movement) == "Financial-Related - Child labor, work"
+    assert (
+        movement_status_line(movement)
+        == "Dropped as of 08/05/2026 due to Financial-Related - Child labor, work"
+    )
+
+
+def test_reason_is_just_the_main_cause_when_no_sub_reason_is_on_file():
+    """"Others (Specify)" with a blank free-text box, or a movement logged
+    before the dropdowns existed with only the old single free-text field
+    filled in."""
+    movement = _movement(EnrollmentStatus.NLS, date(2026, 8, 5), nls_reason="Others")
+    assert movement_reason_text(movement) == "Others"
