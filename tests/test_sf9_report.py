@@ -46,12 +46,12 @@ def _row(name, terms, final, remark, component=False) -> LearningAreaRow:
     )
 
 
-def _filled_sheet(rows, exit_line=None):
+def _filled_sheet(rows, exit_line=None, blank_subject_grades=False):
     workbook = openpyxl.load_workbook(TEMPLATE_PATH)
     worksheet = workbook[SHEET_NAME]
     strip_external_formulas(worksheet)
     anchors = anchor_map(worksheet)
-    _fill_learning_areas(worksheet, anchors, rows, exit_line)
+    _fill_learning_areas(worksheet, anchors, rows, exit_line, blank_subject_grades)
 
     def read(offset, column):
         row = LEARNING_AREA_FIRST_ROW + offset
@@ -153,7 +153,12 @@ def test_exit_line_replaces_every_rows_own_remark_with_one_merged_cell():
     assert read(2, COL_REMARKS) is None
 
 
-def test_exit_line_merge_spans_exactly_the_printed_rows():
+def test_exit_line_merge_spans_the_whole_learning_area_block():
+    """2026-09-16: the merge covers the *entire* reserved learning-area
+    block (first row through the last row before General Average), not
+    just the rows this learner's own subjects printed on — otherwise a
+    section with unused rows left a visible gap of blank rows between the
+    merged cell and General Average."""
     read = _filled_sheet(
         [
             _row("Subject A", {1: D(88)}, D(88), "PASSED"),
@@ -166,13 +171,15 @@ def test_exit_line_merge_spans_exactly_the_printed_rows():
         if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
     ]
     assert len(ranges) == 1
-    assert ranges[0].max_row == LEARNING_AREA_FIRST_ROW + 1  # exactly 2 rows, not the full block
+    assert ranges[0].max_row == LEARNING_AREA_LAST_ROW  # the whole block, not just 2 rows
     assert ranges[0].max_col == COL_REMARKS + 1  # the template's own L:M width
 
 
-def test_exit_line_with_a_single_printed_row_uses_the_templates_own_merge():
-    """One subject means the template's per-row L:M merge already is the
-    cell wanted — nothing to unmerge or rebuild."""
+def test_exit_line_merge_spans_the_whole_block_even_with_one_printed_row():
+    """A single subject used to mean the template's own per-row merge was
+    already the cell wanted — that's no longer true, since the merge now
+    always reaches for the whole block regardless of how many rows this
+    learner's own subjects fill."""
     read = _filled_sheet(
         [_row("Only Subject", {1: D(88)}, D(88), "PASSED")],
         exit_line="NLS as of 08/30/2026",
@@ -183,20 +190,77 @@ def test_exit_line_with_a_single_printed_row_uses_the_templates_own_merge():
         if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
     ]
     assert len(ranges) == 1
-    assert ranges[0].max_row == LEARNING_AREA_FIRST_ROW
+    assert ranges[0].max_row == LEARNING_AREA_LAST_ROW
 
 
 def test_exit_line_does_not_touch_the_general_average_remark_row():
-    """§35 amendment: the merge stops at the last printed subject row — row
-    32 (General Average) keeps its own separate Remarks cell, computed
+    """§35 amendment: the merge stops at the last learning-area row (31) —
+    row 32 (General Average) keeps its own separate Remarks cell, computed
     elsewhere and untouched by this."""
     read = _filled_sheet(
         [_row("Subject A", {1: D(88)}, D(88), "PASSED")],
         exit_line="Dropped as of 08/30/2026 due to Child labor, work",
     )
+    merged_range = [
+        m for m in read.worksheet.merged_cells.ranges
+        if m.min_col == COL_REMARKS and m.min_row == LEARNING_AREA_FIRST_ROW
+    ][0]
+    assert merged_range.max_row == LEARNING_AREA_LAST_ROW
+
     ga_ranges = [m for m in read.worksheet.merged_cells.ranges if m.min_row == 32 and m.min_col == COL_REMARKS]
     assert len(ga_ranges) == 1
     assert ga_ranges[0].max_row == 32, "the General Average remark merge must not be swallowed"
+
+
+# --- Blanking grades for Dropped/NLS (2026-09-16) --------------------------
+
+
+def test_dropped_or_nls_blanks_every_subjects_grades():
+    """A learner who left without transferring anywhere isn't reporting a
+    result — whatever was encoded before the exit isn't printed, only the
+    exit itself is, via the merged remark tested above."""
+    read = _filled_sheet(
+        [
+            _row("Subject A", {1: D(88), 2: D(90), 3: D(92)}, D(90), "PASSED"),
+            _row("Subject B", {1: D(75)}, D(75), "PASSED"),
+        ],
+        exit_line="Dropped as of 08/30/2026 due to Illness",
+        blank_subject_grades=True,
+    )
+    for offset in (0, 1):
+        assert read(offset, COL_TERM[1]) is None
+        assert read(offset, COL_FINAL_GRADE) is None
+    assert read(0, COL_TERM[2]) is None
+    assert read(0, COL_TERM[3]) is None
+
+
+def test_transferred_out_keeps_its_grades():
+    """The learner is continuing at another school, which needs the
+    record — only Dropped/NLS blank grades, so Transferred Out's exit
+    line must pass blank_subject_grades=False and print them as usual."""
+    read = _filled_sheet(
+        [_row("Subject A", {1: D(88)}, D(88), "PASSED")],
+        exit_line="Transferred Out as of 09/12/2026 to Bonifacio NHS",
+        blank_subject_grades=False,
+    )
+    assert read(0, COL_TERM[1]) == 88
+    assert read(0, COL_FINAL_GRADE) == 88
+
+
+def test_blank_subject_grades_does_not_affect_the_not_offered_block_out():
+    """Blanking a grade the learner actually earned is different from a
+    term the subject never ran in — the block-out for a not-offered term
+    must still paint even when every grade on the row is hidden."""
+    workbook = openpyxl.load_workbook(TEMPLATE_PATH)
+    worksheet = workbook[SHEET_NAME]
+    strip_external_formulas(worksheet)
+    anchors = anchor_map(worksheet)
+    _fill_learning_areas(
+        worksheet, anchors, [_one_term("Biology 1", 1)],
+        "Dropped as of 08/30/2026 due to Illness", True,
+    )
+    blocked = worksheet.cell(row=LEARNING_AREA_FIRST_ROW, column=COL_TERM[2])
+    assert blocked.fill.fill_type == "solid"
 
 
 def test_no_exit_line_leaves_the_templates_own_per_row_merges_alone():

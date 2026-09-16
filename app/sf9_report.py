@@ -37,7 +37,7 @@ from app.attendance_service import (
     records_for_month,
     summarize_month,
 )
-from app.enrollment_status import exit_status_line
+from app.enrollment_status import latest_exit_movement, movement_status_line
 from app.excel_template import (
     anchor_map,
     assert_no_external_links,
@@ -46,7 +46,7 @@ from app.excel_template import (
     write_ref,
 )
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.enums import CompletionStatus
+from app.models.enums import CompletionStatus, EnrollmentStatus
 from app.models.grades import AnnualGradeSummary
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear
@@ -378,7 +378,16 @@ def build_sf9_workbook(session: Session, enrollment_id, context: Sf9BatchContext
         movements = (
             session.query(LearnerMovement).filter_by(enrollment_id=enrollment.id).all()
         )
-    exit_line = exit_status_line(movements)
+    exit_movement = latest_exit_movement(movements)
+    exit_line = movement_status_line(exit_movement) if exit_movement is not None else None
+    # Dropped/NLS mean the learner left without transferring anywhere —
+    # whatever was encoded before that isn't a result to report, only the
+    # exit itself is. Transferred Out keeps its grades: the learner is
+    # continuing elsewhere and the receiving school needs the record.
+    blank_subject_grades = exit_movement is not None and exit_movement.movement_type in (
+        EnrollmentStatus.DROPPED,
+        EnrollmentStatus.NLS,
+    )
 
     workbook = openpyxl.load_workbook(TEMPLATE_PATH)
     worksheet = workbook[SHEET_NAME]
@@ -390,7 +399,7 @@ def build_sf9_workbook(session: Session, enrollment_id, context: Sf9BatchContext
         school=school, school_year=school_year, learner=learner, section=section,
         grade_level=grade_level, track=track, strand=strand,
     )
-    _fill_learning_areas(worksheet, anchors, rows, exit_line)
+    _fill_learning_areas(worksheet, anchors, rows, exit_line, blank_subject_grades)
     _fill_general_average(session, worksheet, anchors, enrollment, context)
     _fill_attendance(session, worksheet, anchors, enrollment, context)
     _fill_transfer_certificate(session, worksheet, anchors, enrollment, section, grade_level)
@@ -505,7 +514,9 @@ def _grade_level_number(grade_level) -> str:
     return digits or (grade_level.code or "")
 
 
-def _fill_learning_areas(worksheet, anchors, rows, exit_line: str | None = None) -> None:
+def _fill_learning_areas(
+    worksheet, anchors, rows, exit_line: str | None = None, blank_subject_grades: bool = False
+) -> None:
     """Writes each row, then blanks the unused ones.
 
     §35: "Do not print unused placeholder subjects. Blank unused rows may
@@ -513,15 +524,23 @@ def _fill_learning_areas(worksheet, anchors, rows, exit_line: str | None = None)
     leftover rows are cleared rather than hidden, keeping the form's
     printed shape intact.
 
-    `exit_line` (§35 amendment, 2026-09-05) is set for a learner who left
-    before the year's grades were complete (`app.enrollment_status.
-    exit_status_line`). Every remaining subject's Final Grade is already
-    genuinely None for such a learner, so its own remark would print
-    INCOMPLETE once per row — true, but not what happened. Instead the
-    per-row remarks are collapsed into one merged cell naming the actual
-    status once, spanning only the rows this learner's subjects printed
-    on. The General Average row's own remark (row 32) is a separate cell
-    and untouched by this.
+    `exit_line` (§35 amendment, 2026-09-05; extended 2026-09-16 to cover
+    Transferred Out's own "to <school>" wording, not only NLS/Dropped's
+    "due to <reason>" — see `app.enrollment_status.movement_status_line`)
+    is set for a learner who left before the year's grades were complete.
+    Every remaining subject's Final Grade is already genuinely None for
+    such a learner, so its own remark would print INCOMPLETE once per
+    row — true, but not what happened. Instead the per-row remarks are
+    collapsed into one merged cell naming the actual status once. The
+    General Average row's own remark (row 32) is a separate cell and
+    untouched by this.
+
+    `blank_subject_grades` (2026-09-16, Dropped/NLS only — decided with
+    the school) hides whatever was encoded before the learner left: a
+    partial term's grade isn't a result to report once there's no
+    completed record behind it, only the exit itself is. Transferred Out
+    passes False and keeps its grades, since the learner is continuing
+    elsewhere and the receiving school needs the record.
     """
     blockout_fill, blockout_font = _blockout_style(worksheet)
 
@@ -532,14 +551,16 @@ def _fill_learning_areas(worksheet, anchors, rows, exit_line: str | None = None)
             write(worksheet, anchors, row_number, COL_LEARNING_AREA, entry.display_name)
             for term_number, column in COL_TERM.items():
                 offered = entry.is_offered(term_number)
-                write(
-                    worksheet, anchors, row_number, column,
-                    _grade(entry.term_grades.get(term_number)) if offered else None,
+                grade = None if blank_subject_grades else (
+                    _grade(entry.term_grades.get(term_number)) if offered else None
                 )
+                write(worksheet, anchors, row_number, column, grade)
                 # Only ever paints; never clears. `offered_terms` is what
                 # tells "subject doesn't run that term" apart from "runs
                 # but not yet encoded" — identical in term_grades, opposite
                 # in meaning, and the whole reason this block-out exists.
+                # Independent of blank_subject_grades: a term the subject
+                # never ran in is still "not applicable", not "hidden".
                 if not offered:
                     cell = worksheet.cell(row=row_number, column=column)
                     existing = cell.font
@@ -552,7 +573,10 @@ def _fill_learning_areas(worksheet, anchors, rows, exit_line: str | None = None)
             # terms these flags mark as not offered.
             write(worksheet, anchors, row_number, COL_TERM_OFFERED_FLAGS, _term_flags(entry))
             # A component's Final Grade and Remark stay blank — §16.
-            write(worksheet, anchors, row_number, COL_FINAL_GRADE, _grade(entry.final_grade))
+            write(
+                worksheet, anchors, row_number, COL_FINAL_GRADE,
+                None if blank_subject_grades else _grade(entry.final_grade),
+            )
             # An exit status overrides every row's own remark below, so
             # writing it here would only be discarded — skip it rather
             # than have two competing writers of the same cell.
@@ -568,8 +592,12 @@ def _fill_learning_areas(worksheet, anchors, rows, exit_line: str | None = None)
             write(worksheet, anchors, row_number, COL_FINAL_GRADE, None)
             write(worksheet, anchors, row_number, COL_REMARKS, None)
 
-    if exit_line is not None and rows:
-        _merge_exit_status(worksheet, LEARNING_AREA_FIRST_ROW, LEARNING_AREA_FIRST_ROW + len(rows) - 1, exit_line)
+    if exit_line is not None:
+        # The merged remark covers the whole reserved learning-area block
+        # (2026-09-16), not just the rows this learner's own subjects
+        # printed on — a shorter section would otherwise leave a visible
+        # gap of blank rows between the merged cell and General Average.
+        _merge_exit_status(worksheet, LEARNING_AREA_FIRST_ROW, LEARNING_AREA_LAST_ROW, exit_line)
 
 
 def _merge_exit_status(worksheet, first_row: int, last_row: int, text: str) -> None:
