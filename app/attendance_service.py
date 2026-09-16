@@ -203,21 +203,19 @@ def active_window_for(session: Session, enrollment: Enrollment) -> ActiveWindow:
     )
 
 
-def roster_for_month(
-    session: Session, section_id, school_year_id, year: int, month: int
+def _section_year_windows(
+    session: Session, section_id, school_year_id
 ) -> list[tuple[Enrollment, Learner, ActiveWindow]]:
-    """Learners who belong on that month's sheet, sorted the way SF2 wants
-    them (male then female, alphabetical within each — §34).
-
-    Uses `appears_in_month`, not "is currently active": a learner who
-    transferred out mid-month still belongs on that month's sheet with a
-    remark, and only drops off the following month (§32, spec Test D).
+    """Every enrollment in this section for the year with its computed
+    ActiveWindow — unfiltered by month. Shared base for `roster_for_month`
+    (which filters to one month) and `full_year_roster` (which doesn't),
+    so the batching only has to be written once.
 
     Batches movements and learners across the whole roster instead of
     calling `active_window_for`/`session.get(Learner, ...)` per enrollment
     — the same fix `analytics_service.attendance_risk()` already applies,
-    and this function is called several times per page action (seeding,
-    the grid, saving, validating), so the per-enrollment version compounds
+    and callers of this run several times per page action (seeding, the
+    grid, saving, validating), so the per-enrollment version compounds
     fast. See CLAUDE.md's Insights section for why `active_window_for` is
     avoided in a roster loop.
     """
@@ -254,15 +252,51 @@ def roster_for_month(
             [Movement(m.movement_type, m.effective_date) for m in movements.get(enrollment.id, [])],
             default_start=default_start,
         )
-        if not appears_in_month(window, year, month):
-            continue
         learner = learners.get(enrollment.learner_id)
         rows.append((enrollment, learner, window))
     # Not `r[1].sex.value` — the stored strings are "MALE" and "FEMALE",
     # so sorting on them alphabetically put FEMALE first and quietly
-    # contradicted the docstring above.
+    # contradicted roster_for_month's own docstring.
     rows.sort(key=lambda r: learner_sort_key(r[1]))
     return rows
+
+
+def roster_for_month(
+    session: Session, section_id, school_year_id, year: int, month: int
+) -> list[tuple[Enrollment, Learner, ActiveWindow]]:
+    """Learners who belong on that month's sheet, sorted the way SF2 wants
+    them (male then female, alphabetical within each — §34).
+
+    Uses `appears_in_month`, not "is currently active": a learner who
+    transferred out mid-month still belongs on that month's sheet with a
+    remark, and only drops off the following month (§32, spec Test D).
+    """
+    return [
+        row
+        for row in _section_year_windows(session, section_id, school_year_id)
+        if appears_in_month(row[2], year, month)
+    ]
+
+
+def full_year_roster(
+    session: Session, section_id, school_year_id
+) -> list[tuple[Enrollment, Learner, ActiveWindow]]:
+    """Every enrollment in this section for the year, regardless of
+    movement — unlike `roster_for_month`, nothing here is filtered by
+    whether the learner appears on any one month's sheet.
+
+    Needed for a figure anchored to a fixed date rather than "this
+    month's sheet": SF2's "Enrolment as of (1st Friday of June)" row
+    (§34) must report the school's same June headcount on every month's
+    form covering that year. A learner who left in July drops off
+    August's own `roster_for_month` per §32 — but must still count
+    toward August's printed June figure, or the number would silently
+    shrink month over month instead of staying fixed. It's normal for
+    later months to then register *more* than this fixed count (a
+    transferred-in learner, say), which is exactly why Percentage of
+    Enrolment can print above 100%.
+    """
+    return _section_year_windows(session, section_id, school_year_id)
 
 
 # --------------------------------------------------------------------------

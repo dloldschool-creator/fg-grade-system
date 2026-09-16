@@ -8,8 +8,9 @@ from datetime import date
 import openpyxl
 import pytest
 
+from app.attendance_engine import ActiveWindow
 from app.excel_template import anchor_map, replicate_images, workbook_to_bytes
-from app.models.enums import AttendanceStatus, EnrollmentStatus
+from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
 from app.models.learners import LearnerMovement
 from app.sf2_report import (
     COL_PRINT_CONTROL,
@@ -24,6 +25,7 @@ from app.sf2_report import (
     TEMPLATE_PATH,
     _apply_print_setup,
     _combined_counts,
+    _enrolled_as_of,
     _fill_day_headers,
     _remark_for,
     _widen_summary_percentage_columns,
@@ -33,6 +35,11 @@ from app.sf2_report import (
     paginate,
     printed_code,
 )
+
+
+class _FakeLearner:
+    def __init__(self, sex):
+        self.sex = sex
 
 
 # --- Pagination (§34) -----------------------------------------------------
@@ -154,6 +161,66 @@ def test_combined_counts_defaults_missing_types_to_zero():
         "M": 0,
         "F": 0,
     }
+
+
+# --- "Enrolment as of (1st Friday of June)" stays fixed all year ----------
+
+
+def test_enrolled_as_of_counts_a_learner_who_has_since_left():
+    """The whole point of reading the *whole year's* roster rather than
+    one month's: a learner active in June who transferred out in July
+    must still count toward every later month's printed June figure, even
+    though `roster_for_month` no longer returns them for August (§32)."""
+    reference = date(2026, 6, 12)
+    yearly_roster = [
+        (None, _FakeLearner(Sex.MALE), ActiveWindow(date(2026, 6, 8), date(2026, 7, 20))),
+    ]
+    assert _enrolled_as_of(yearly_roster, reference) == (1, 0)
+
+
+def test_enrolled_as_of_excludes_a_learner_who_enrolled_later():
+    """A learner transferred/late-enrolled in after the reference date
+    must not inflate the fixed June figure — only Registered/Percentage
+    of Enrolment (computed from the current month) should grow."""
+    reference = date(2026, 6, 12)
+    yearly_roster = [
+        (None, _FakeLearner(Sex.FEMALE), ActiveWindow(date(2026, 9, 1), None)),
+    ]
+    assert _enrolled_as_of(yearly_roster, reference) == (0, 0)
+
+
+def test_enrolled_as_of_splits_by_sex():
+    reference = date(2026, 6, 12)
+    yearly_roster = [
+        (None, _FakeLearner(Sex.MALE), ActiveWindow(date(2026, 6, 8), None)),
+        (None, _FakeLearner(Sex.MALE), ActiveWindow(date(2026, 6, 8), None)),
+        (None, _FakeLearner(Sex.FEMALE), ActiveWindow(date(2026, 6, 8), None)),
+    ]
+    assert _enrolled_as_of(yearly_roster, reference) == (2, 1)
+
+
+def test_enrolled_as_of_with_no_reference_date_counts_nobody():
+    """`school_year` missing (so `first_friday_on_or_after` was never
+    called) shouldn't crash — it prints zero rather than guessing."""
+    yearly_roster = [(None, _FakeLearner(Sex.MALE), ActiveWindow(date(2026, 6, 8), None))]
+    assert _enrolled_as_of(yearly_roster, None) == (0, 0)
+
+
+def test_a_transferred_in_learner_can_push_enrolment_percentage_past_100_percent():
+    """Once the "Enrolment as of June" denominator is fixed at the
+    school's June headcount, a section that later gains a Transferred In
+    learner can legitimately register *more* people than that fixed
+    figure — Percentage of Enrolment printing above 100% is expected, not
+    a bug to clamp away."""
+    reference = date(2026, 6, 12)
+    yearly_roster = [
+        (None, _FakeLearner(Sex.MALE), ActiveWindow(date(2026, 6, 8), None)),
+    ]
+    enrolled_male, _ = _enrolled_as_of(yearly_roster, reference)
+    assert enrolled_male == 1
+
+    registered_male = 2  # the original learner, plus one Transferred In later
+    assert registered_male / enrolled_male > 1.0
 
 
 # --- Start-of-year reference date -----------------------------------------

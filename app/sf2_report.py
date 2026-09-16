@@ -40,6 +40,7 @@ from app.excel_template import (
 )
 from app.attendance_service import (
     class_days_in_month,
+    full_year_roster,
     movements_by_enrollment,
     roster_for_month,
     summarize_month_batch,
@@ -320,6 +321,10 @@ def build_sf2_workbook(
     school_year = session.get(SchoolYear, school_year_id)
     class_days = class_days_in_month(session, school_year_id, year, month)
     males, females = _learner_rows(session, section_id, school_year_id, year, month, class_days)
+    # Fetched once for the whole workbook, not per page: every page prints
+    # an identical copy of the summary box, and this is the whole year's
+    # roster (see _enrolled_as_of) rather than one month's.
+    yearly_roster = full_year_roster(session, section_id, school_year_id) if school_year else []
 
     if len(class_days) > len(DAY_COLS):
         raise ValueError(
@@ -366,7 +371,7 @@ def build_sf2_workbook(
         _fill_learner_block(worksheet, anchors, page_slice(males, page_index), MALE_FIRST_ROW, class_days)
         _fill_learner_block(worksheet, anchors, page_slice(females, page_index), FEMALE_FIRST_ROW, class_days)
         _fill_daily_totals(worksheet, anchors, males, females, class_days)
-        _fill_summary(session, worksheet, anchors, males, females, class_days, school_year, year, month)
+        _fill_summary(session, worksheet, anchors, yearly_roster, males, females, class_days, school_year, year, month)
         _clear_print_control_column(worksheet)
         _widen_summary_percentage_columns(worksheet)
         _apply_print_setup(worksheet)
@@ -583,7 +588,9 @@ def _write_summary_row(worksheet, anchors, row: int, male: float, female: float,
     write(worksheet, anchors, row, COL_SUMMARY_TOTAL, computed_total)
 
 
-def _fill_summary(session, worksheet, anchors, males, females, class_days, school_year, year, month) -> None:
+def _fill_summary(
+    session, worksheet, anchors, yearly_roster, males, females, class_days, school_year, year, month
+) -> None:
     day_count = len(class_days)
 
     registered_male = len([e for e in males if _registered_at_month_end(e, year, month)])
@@ -592,8 +599,11 @@ def _fill_summary(session, worksheet, anchors, males, females, class_days, schoo
     start_reference = (
         first_friday_on_or_after(school_year.start_date) if school_year else None
     )
-    enrolled_male = len([e for e in males if _active_on(e, start_reference)])
-    enrolled_female = len([e for e in females if _active_on(e, start_reference)])
+    # `yearly_roster` is the whole year's roster, not this month's
+    # (`males`/`females`) — a learner who has since left has dropped off
+    # this month's sheet entirely (§32), but must still count toward this
+    # fixed June figure.
+    enrolled_male, enrolled_female = _enrolled_as_of(yearly_roster, start_reference)
 
     male_attendance = sum(e["present"] for e in males)
     female_attendance = sum(e["present"] for e in females)
@@ -655,8 +665,24 @@ def _ratio(numerator, denominator):
     return round(numerator / denominator, 4) if denominator else 0
 
 
-def _active_on(entry, day: date | None) -> bool:
-    return bool(day) and entry["window"].contains(day)
+def _enrolled_as_of(yearly_roster, reference: date | None) -> tuple[int, int]:
+    """Male/female counts of `yearly_roster` active on `reference` — SF2's
+    "Enrolment as of (1st Friday of June)" row (§34).
+
+    `yearly_roster` must be the *whole year's* roster
+    (`full_year_roster`), not one month's (`roster_for_month`'s
+    `males`/`females`) — a learner who has since left drops off later
+    months' rosters entirely (§32), and computing this from one of those
+    would make a figure that's supposed to stay fixed all year shrink
+    every time someone exits.
+    """
+    if reference is None:
+        return 0, 0
+    male = sum(1 for _, learner, window in yearly_roster if learner.sex == Sex.MALE and window.contains(reference))
+    female = sum(
+        1 for _, learner, window in yearly_roster if learner.sex == Sex.FEMALE and window.contains(reference)
+    )
+    return male, female
 
 
 def _registered_at_month_end(entry, year: int, month: int) -> bool:
