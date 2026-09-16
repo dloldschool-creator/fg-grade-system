@@ -1523,6 +1523,34 @@ based on the configured passing grade.
 > incomplete, per Section 19's NULL rule), and nothing about how a Final
 > Grade is computed changes. When more than one such movement is on file,
 > the most recent by effective date is the one shown.
+>
+> **Amended 2026-09-16** (decided with the school, found by reviewing an
+> actual printed card) in three ways:
+>
+> 1. **The merge now spans the whole reserved learning-area block**, not
+>    only the subject rows actually printed. Stopping at the printed
+>    rows left a visible gap of blank rows between the merged cell and
+>    General Average whenever a section had unused row capacity — the
+>    merge now runs from the first learning-area row through the row
+>    immediately before General Average, regardless of how many subjects
+>    this learner has.
+> 2. **The line's wording depends on the movement type, not only NLS and
+>    Dropped's "due to <reason>".** Transferred Out prints `<Status> as
+>    of <effective date> to <receiving school>` — e.g. "Transferred Out
+>    as of 09/12/2026 to Bonifacio NHS" — matching how Section 32's own
+>    SF2 amendment already prints it, from the same shared
+>    implementation (`app/enrollment_status.py`), so the two forms still
+>    can't describe one event two different ways.
+> 3. **DROPPED and NLS additionally blank every subject's Term and Final
+>    Grade cells** — whatever was encoded before the learner left isn't a
+>    result to report, only the exit itself is, and the merged remark
+>    already explains why the row is otherwise empty. TRANSFERRED OUT
+>    keeps its grades: the learner is continuing at another school that
+>    needs the record. TRANSFERRED IN needs none of this — it isn't an
+>    exit at all, so the learner is graded as a regular student for the
+>    rest of the year. A term the subject was never offered in is still
+>    shaded as not-applicable regardless of any of the above; that
+>    block-out is a separate rule from grade-blanking.
 
 ## Attendance
 
