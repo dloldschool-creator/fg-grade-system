@@ -1438,6 +1438,26 @@ Generate:
 - print;
 - PDF download.
 
+> **Amended 2026-09-16** (bug fix, discovered by inspection rather than a
+> report). The summary box's "Enrolment as of (1st Friday of June)" row
+> is a snapshot fixed once at the start of the school year — every
+> monthly SF2 for that year must print the same figure. It must be
+> computed from the **whole year's roster**, including learners who have
+> since exited, not from the month being printed: a learner enrolled in
+> June who transferred out in July still belongs in that headcount for
+> every later month's form, even though they no longer appear on that
+> later month's own sheet (they've dropped off per this section's own
+> rule above). Computing it from the current month's roster instead — as
+> the app briefly did — makes the figure silently shrink every time a
+> learner exits, which reads as a plausible number rather than an error.
+>
+> Once this figure is genuinely fixed, **Percentage of Enrolment can
+> print above 100%** for a later month whose registered count has grown
+> past it — a Transferred In learner, say. That is expected and must not
+> be capped or clamped to 100%; a percentage over 100% is the form
+> correctly reporting that the section has grown since June, not a
+> computation error.
+
 ---
 
 # 35. SF9 MODULE
