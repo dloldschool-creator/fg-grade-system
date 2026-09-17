@@ -12,8 +12,14 @@ from app.models.learners import Enrollment, Learner
 from app.roster_order import learner_order_by
 from app.models.organization import SchoolYear
 from app.report_card import build_learning_area_rows
-from app.sf9_report import MAX_LEARNING_AREAS, build_sf9_workbook, load_sf9_context
-from app.xlsx_render import workbook_to_pdf, workbooks_to_pdf
+from app.sf9_report import (
+    MAX_LEARNING_AREAS,
+    SPLIT_AFTER_COL,
+    SPLIT_BACK_START_COL,
+    build_sf9_workbook,
+    load_sf9_context,
+)
+from app.xlsx_render import two_up_split_workbooks_to_pdf, workbook_to_pdf, workbooks_to_pdf
 
 DASH = "—"
 
@@ -146,6 +152,11 @@ def render() -> None:
                 file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+            st.caption(
+                "Prints as one full landscape page per learner — this file's own page "
+                "setup, same as the single Download PDF here. The paper-saving 2-per-"
+                "sheet layout below is a PDF-only feature; it has no .xlsx equivalent."
+            )
         with col_b:
             st.download_button(
                 "Download PDF",
@@ -214,6 +225,18 @@ def _batch_section(session, enrollments, learner_by_enrollment, section) -> None
         format_func=lambda v: "All in one PDF" if v == 0 else f"{v} per PDF (zipped)",
         key="sf9_batch_chunk",
     )
+    two_up = st.checkbox(
+        "2 learners per sheet, duplex (halves the paper — front page has "
+        "identity/grades for 2 learners, back page has their attendance/"
+        "comments/certificate; print on a duplex printer set to flip on "
+        "the short edge)",
+        key="sf9_batch_two_up",
+    )
+    if two_up:
+        st.caption(
+            "PDF only — each learner's own .xlsx download (above, per learner) still "
+            "prints as one full page and won't match this layout."
+        )
 
     if not st.button(f"Build for {len(chosen)} learner(s)", type="primary"):
         return
@@ -243,8 +266,14 @@ def _batch_section(session, enrollments, learner_by_enrollment, section) -> None
                 text=f"Rendered {done} of {len(chosen)} card(s)…",
             )
 
+    renderer = (
+        (lambda wbs: two_up_split_workbooks_to_pdf(
+            wbs, split_after_col=SPLIT_AFTER_COL, back_start_col=SPLIT_BACK_START_COL,
+        ))
+        if two_up else workbooks_to_pdf
+    )
     try:
-        rendered = [(group, workbooks_to_pdf(_workbooks(group))) for group in groups]
+        rendered = [(group, renderer(_workbooks(group))) for group in groups]
     except ValueError as exc:
         progress.empty()
         st.error(str(exc))

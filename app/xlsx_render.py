@@ -515,13 +515,18 @@ def _draw_cell_text(c, cell, x, y, w, h, *, overflow: float | None = None) -> No
         cursor -= leading
 
 
-def _draw_images(c, worksheet, geometry, flip, first_row: int = 1, last_row: int | None = None) -> None:
+def _draw_images(
+    c, worksheet, geometry, flip,
+    first_row: int = 1, last_row: int | None = None,
+    *, min_col: int = 1, max_col: int | None = None,
+) -> None:
     """Places the DepEd shield and the school seal.
 
     An anchor gives a cell plus an EMU offset, so the position has to be
     resolved through the same geometry the cells use — otherwise the seals
     drift as soon as a column width changes.
     """
+    max_col = max_col if max_col is not None else geometry.max_col
     for image in getattr(worksheet, "_images", []):
         anchor = getattr(image, "anchor", None)
         marker = getattr(anchor, "_from", None)
@@ -529,8 +534,10 @@ def _draw_images(c, worksheet, geometry, flip, first_row: int = 1, last_row: int
             continue
         col = min(marker.col + 1, geometry.max_col)
         row = min(marker.row + 1, geometry.max_row)
-        # Each seal is drawn once, on the page its anchor row falls in.
+        # Each seal is drawn once, on the page/box its anchor cell falls in.
         if row < first_row or (last_row is not None and row > last_row):
+            continue
+        if col < min_col or col > max_col:
             continue
         x = geometry.col_x[col] + marker.colOff / EMU_PER_POINT
         top = geometry.row_y[row] + marker.rowOff / EMU_PER_POINT
@@ -689,6 +696,42 @@ def plan_pages(worksheet, page_width: float, page_height: float, geometry: Geome
     return scale, bands
 
 
+def _draw_cells(
+    c, worksheet, geometry, spans, covered, first_row, last_row, flip,
+    *, min_col: int = 1, max_col: int | None = None,
+) -> None:
+    """Fills, then borders, then text, for every uncovered cell in
+    `first_row..last_row` x `min_col..max_col` — so a border is never
+    painted over by the neighbouring cell's background. Shared by
+    `draw_worksheet` (one row-band per page) and `draw_worksheet_in_box`
+    (one worksheet, or a column slice of one, per sub-region of a page),
+    which differ only in how they set up the canvas's transform before
+    calling this."""
+    max_col = max_col if max_col is not None else geometry.max_col
+    for pass_name in ("fill", "border", "text"):
+        for row in range(first_row, last_row + 1):
+            for col in range(min_col, max_col + 1):
+                if (row, col) in covered:
+                    continue
+                rowspan, colspan = spans.get((row, col), (1, 1))
+                x = geometry.col_x[col]
+                y = flip(geometry.row_y[row])
+                w = sum(geometry.col_w[col:col + colspan])
+                h = sum(geometry.row_h[row:row + rowspan])
+                if w <= 0 or h <= 0:
+                    continue
+                cell = worksheet.cell(row=row, column=col)
+                if pass_name == "fill":
+                    _draw_cell_fill(c, cell, x, y, w, h)
+                elif pass_name == "border":
+                    _draw_cell_borders(c, cell, x, y, w, h)
+                else:
+                    _draw_cell_text(
+                        c, cell, x, y, w, h,
+                        overflow=overflow_width(worksheet, geometry, row, col, colspan, covered),
+                    )
+
+
 def draw_worksheet(
     c,
     worksheet,
@@ -737,36 +780,81 @@ def draw_worksheet(
         def flip(top_y: float, _band_top=band_top) -> float:
             return -(top_y - _band_top)
 
-        # Fills first, then borders, then text — so a border is never
-        # painted over by the neighbouring cell's background.
-        for pass_name in ("fill", "border", "text"):
-            for row in range(first_row, last_row + 1):
-                for col in range(1, geometry.max_col + 1):
-                    if (row, col) in covered:
-                        continue
-                    rowspan, colspan = spans.get((row, col), (1, 1))
-                    x = geometry.col_x[col]
-                    y = flip(geometry.row_y[row])
-                    w = sum(geometry.col_w[col:col + colspan])
-                    h = sum(geometry.row_h[row:row + rowspan])
-                    if w <= 0 or h <= 0:
-                        continue
-                    cell = worksheet.cell(row=row, column=col)
-                    if pass_name == "fill":
-                        _draw_cell_fill(c, cell, x, y, w, h)
-                    elif pass_name == "border":
-                        _draw_cell_borders(c, cell, x, y, w, h)
-                    else:
-                        _draw_cell_text(
-                            c, cell, x, y, w, h,
-                            overflow=overflow_width(worksheet, geometry, row, col, colspan, covered),
-                        )
+        _draw_cells(c, worksheet, geometry, spans, covered, first_row, last_row, flip)
 
         # Images belong to the band whose rows they start in.
         _draw_images(c, worksheet, geometry, flip, first_row, last_row)
         c.restoreState()
 
     return len(bands)
+
+
+def draw_worksheet_in_box(
+    c,
+    worksheet,
+    *,
+    box_left: float,
+    box_top: float,
+    box_width: float,
+    box_height: float,
+    page_height: float,
+    max_row: int | None = None,
+    min_col: int = 1,
+    max_col: int | None = None,
+) -> None:
+    """Draws a worksheet — or, with `min_col`/`max_col`, only a column
+    slice of one — scaled to fit and centred both ways inside an
+    arbitrary rectangle on the page.
+
+    This is `draw_worksheet`'s "shrink to fit, then centre the leftover
+    space" behaviour generalised from a whole page to a sub-region, for
+    layouts where more than one thing shares a physical sheet: two
+    learners' whole cards side by side, or — the column slice case — one
+    form's own content cut into a "front" and "back" print position (SF9's
+    identity/grades block vs its attendance/comments/certificate block,
+    say). `min_col`/`max_col` must not fall inside a merge that crosses
+    the cut; SF9's own split has none.
+
+    `box_left`/`box_top` are the box's distance from the page's own
+    left/top edge; `page_height` is only needed to flip that into
+    ReportLab's bottom-up canvas space.
+
+    Always fits and centres, regardless of the worksheet's own
+    page_setup/print_options — a half-page slot has no page of its own to
+    defer to, and unlike `draw_worksheet` there is no pagination: content
+    taller than its box is scaled down until it fits, never split across
+    boxes.
+    """
+    geometry = sheet_geometry(worksheet, max_row, None)
+    max_col = max_col if max_col is not None else geometry.max_col
+    slice_left = geometry.col_x[min_col]
+    slice_width = geometry.col_x[max_col] + geometry.col_w[max_col] - slice_left
+    if slice_width <= 0 or geometry.height <= 0:
+        return
+
+    scale = min(box_width / slice_width, box_height / geometry.height)
+    content_w = slice_width * scale
+    content_h = geometry.height * scale
+    offset_x = box_left + (box_width - content_w) / 2
+    offset_top = box_top + (box_height - content_h) / 2
+
+    spans = merged_spans(worksheet)
+    covered = covered_cells(worksheet)
+
+    c.saveState()
+    # geometry.col_x is absolute from column 1, so the translate has to
+    # subtract the slice's own left edge back out — everything drawn
+    # still addresses columns by their real (1-based) index into that
+    # same absolute geometry.
+    c.translate(offset_x - slice_left * scale, page_height - offset_top)
+    c.scale(scale, scale)
+
+    def flip(top_y: float) -> float:
+        return -top_y
+
+    _draw_cells(c, worksheet, geometry, spans, covered, 1, geometry.max_row, flip, min_col=min_col, max_col=max_col)
+    _draw_images(c, worksheet, geometry, flip, min_col=min_col, max_col=max_col)
+    c.restoreState()
 
 
 def _visible_sheets(workbook):
@@ -799,6 +887,76 @@ def workbooks_to_pdf(workbooks, *, page=letter, landscape: bool | None = None, f
             draw_worksheet(c, worksheet, width, height, fit=fit)
             c.showPage()
     if c is None:
+        raise ValueError("nothing to render")
+    c.save()
+    return buffer.getvalue()
+
+
+def two_up_split_workbooks_to_pdf(
+    workbooks, *, split_after_col: int, back_start_col: int | None = None, page=letter,
+) -> bytes:
+    """Two learners per physical landscape sheet, printed for duplex: each
+    learner's own card is cut into a front slice (columns 1..`split_after_col`,
+    1-based and inclusive) and a back slice (`back_start_col`..the
+    worksheet's last column, default `split_after_col + 1`), rather than
+    shrinking two whole cards side by side. One PDF page holds both
+    learners' front slices side by side (left learner, right learner); the
+    next page holds the same two learners' back slices in the same
+    left/right positions, ready for a printer set to duplex on the short
+    edge.
+
+    `back_start_col` only needs to differ from `split_after_col + 1` when
+    there's a gutter column between the two slices that shouldn't count
+    toward either one's width — SF9 has one (see `sf9_report.SPLIT_AFTER_COL`):
+    skipping it, rather than tacking its width onto the front slice,
+    matters because centering treats the whole declared slice width as
+    content, and a wide-but-blank column dragged along would visibly pull
+    the real content toward one edge instead of centering it.
+
+    So a batch of N learners becomes ceil(N/2) physical sheets — half the
+    paper of `workbooks_to_pdf` — instead of ceil(N/2) sheets' worth of
+    smaller cards; `two_up_split_workbooks_to_pdf` prints each half at
+    full size, since a half-width slice at full height uses the page
+    better than a whole card shrunk into the same space would.
+
+    Takes an iterable, not a list, for the same reason `workbooks_to_pdf`
+    does: the caller builds each learner's workbook as it is consumed, so
+    a 40-learner batch costs one workbook of memory at a time. An odd
+    learner out gets a front page and a back page to themselves, alone on
+    the left; the right half is left blank rather than reusing someone
+    else's card.
+
+    Only the first visible worksheet of each workbook is drawn — right
+    for SF9, which is one sheet per learner; not meant for a multi-sheet
+    workbook. A worksheet's own page_setup (fitToWidth, orientation,
+    margins) is irrelevant here, same reason as `draw_worksheet_in_box`.
+    """
+    back_start_col = back_start_col if back_start_col is not None else split_after_col + 1
+    buffer = io.BytesIO()
+    page_width, page_height = (max(page), min(page))  # landscape, always
+    half_width = page_width / 2
+    c = pdfcanvas.Canvas(buffer, pagesize=(page_width, page_height))
+    drew_any = False
+
+    iterator = iter(workbooks)
+    for left_workbook in iterator:
+        right_workbook = next(iterator, None)
+        pair = [wb for wb in (left_workbook, right_workbook) if wb is not None]
+        worksheets = [_visible_sheets(wb)[0] for wb in pair]
+
+        for min_col, max_col in ((1, split_after_col), (back_start_col, None)):
+            for worksheet, box_left in zip(worksheets, (0.0, half_width)):
+                draw_worksheet_in_box(
+                    c, worksheet,
+                    box_left=box_left, box_top=0.0,
+                    box_width=half_width, box_height=page_height,
+                    page_height=page_height,
+                    min_col=min_col, max_col=max_col if max_col is not None else worksheet.max_column,
+                )
+                drew_any = True
+            c.showPage()
+
+    if not drew_any:
         raise ValueError("nothing to render")
     c.save()
     return buffer.getvalue()

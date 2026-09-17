@@ -590,6 +590,27 @@ the components' sum, or the languages are weighted twice.
   it'll be discarded too. This is a one-off dynamic merge outside the
   `write()`/anchor-map machinery above (which is for the template's own
   *static* merges); write the anchor's `.value` directly afterward.
+- **A wide-but-blank column dragged into a slice's declared width visibly
+  throws off centering**, even though the centering math is correct for
+  the width it's given. `two_up_split_workbooks_to_pdf` (2026-09-17,
+  `app/xlsx_render.py`) prints two learners' SF9 cards per physical
+  landscape sheet, cut into a front slice (identity/grades) and a back
+  slice (attendance/comments/certificate) for duplex printing —
+  `app/sf9_report.SPLIT_AFTER_COL` / `SPLIT_BACK_START_COL` mark the cut.
+  Column N sits in the gap: it's `COL_TERM_OFFERED_FLAGS`, 79.8pt wide
+  (versus ~25pt for a real data column) and carries no visible content —
+  only the per-term flag value Excel's own conditional formatting reads,
+  which this renderer never evaluates (the same shading is already
+  painted as a direct fill in `sf9_report._fill_learning_areas`). Pulling
+  it into either slice's width — first tried as part of the front slice,
+  then reproduced again by a demo script that omitted the new
+  `back_start_col` argument and fell back to `split_after_col + 1` —
+  looked centered by the numbers (the offset formula is symmetric) while
+  visibly hugging one edge, because a third of the "centered" width was
+  blank column N rather than content. The fix excludes N from both
+  slices outright; confirmed with pixel-boundary measurements of the
+  rendered PDF, not by eye — the misalignment was easy to miss on a
+  screenshot and only showed up under precise measurement.
 
 **Streamlit**
 

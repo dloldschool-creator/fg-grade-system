@@ -14,6 +14,8 @@ import pytest
 from app.excel_template import strip_external_formulas
 from app.sf2_report import TEMPLATE_PATH as SF2_TEMPLATE
 from app.sf2_report import _apply_print_setup as _apply_sf2_print_setup
+from app.sf9_report import SPLIT_AFTER_COL as SF9_SPLIT_AFTER_COL
+from app.sf9_report import SPLIT_BACK_START_COL as SF9_SPLIT_BACK_START_COL
 from app.sf9_report import TEMPLATE_PATH as SF9_TEMPLATE
 from app.sf9_report import _apply_print_setup as _apply_sf9_print_setup
 from app.xlsx_render import (
@@ -24,6 +26,7 @@ from app.xlsx_render import (
     plan_pages,
     resolve_font,
     sheet_geometry,
+    two_up_split_workbooks_to_pdf,
     workbook_to_pdf,
 )
 
@@ -214,6 +217,42 @@ def test_a_form_that_fits_exactly_does_not_spill_one_row():
     _, worksheet = _prepared(SF9_TEMPLATE, "SF9")
     _, bands = plan_pages(worksheet, 792, 612, sheet_geometry(worksheet))
     assert len(bands) == 1
+
+
+def _two_up(workbooks):
+    return two_up_split_workbooks_to_pdf(
+        workbooks, split_after_col=SF9_SPLIT_AFTER_COL, back_start_col=SF9_SPLIT_BACK_START_COL,
+    )
+
+
+def test_two_up_split_halves_the_sheet_count():
+    """Two SF9 cards share one physical sheet (a front page + a back
+    page) instead of one sheet each — the whole point of the layout is
+    fewer physical sheets, printed duplex."""
+    workbook_a, _ = _prepared(SF9_TEMPLATE, "SF9")
+    workbook_b, _ = _prepared(SF9_TEMPLATE, "SF9")
+    data = _two_up([workbook_a, workbook_b])
+    assert data.startswith(b"%PDF-")
+    assert _page_count(data) == 2  # one sheet, front + back
+
+
+def test_two_up_split_four_learners_is_two_sheets():
+    workbooks = [_prepared(SF9_TEMPLATE, "SF9")[0] for _ in range(4)]
+    data = _two_up(workbooks)
+    assert _page_count(data) == 4  # 2 sheets x (front + back)
+
+
+def test_two_up_split_odd_learner_out_gets_their_own_sheet():
+    """A trailing single learner still gets a front and a back page (left
+    half only), not dropped or merged into a neighbouring pair."""
+    workbook, _ = _prepared(SF9_TEMPLATE, "SF9")
+    data = _two_up([workbook])
+    assert _page_count(data) == 2
+
+
+def test_two_up_split_refuses_an_empty_batch():
+    with pytest.raises(ValueError):
+        _two_up([])
 
 
 def test_a_component_row_keeps_its_indent_when_wrapped():

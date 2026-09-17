@@ -118,6 +118,28 @@ NEXT_LEVEL_AFTER_GRADE_12 = "COLLEGE"
 # across pages.
 PRINT_AREA = "A1:AA42"
 
+# For `two_up_split_workbooks_to_pdf` (bulk 2-learners-per-sheet duplex
+# printing): the template's own column layout already splits cleanly in
+# two, at every row, with no merge crossing the boundary — A:M (1-13) is
+# the identity block, the Learning Progress table and Performance
+# Descriptors; O:AA (15-27) is Attendance, Teacher's Comments, the
+# signature block and Certificate of Transfer.
+#
+# Column N (14, COL_TERM_OFFERED_FLAGS) sits in the gap and is excluded
+# from *both* slices: it carries no visible content of its own, only the
+# per-term flag value Excel's own conditional formatting reads to shade
+# H:K in the Learning Progress table — CF our renderer never evaluates
+# (`sf9_report._fill_learning_areas` paints the same shading directly as
+# a fill instead, so N's value is redundant here). It's also unusually
+# wide (79.8pt against a ~25pt data column) for text nobody sees, so
+# including it in either slice's width visibly throws off centering: the
+# slice's declared width includes that blank tail, and centering the
+# whole slice (content + blank tail) makes the real content hug one edge
+# instead of sitting in the middle. Confirmed against the template's own
+# geometry, not guessed.
+SPLIT_AFTER_COL = 13  # M — last column of the front slice
+SPLIT_BACK_START_COL = 15  # O — first column of the back slice
+
 # Column N drives the template's OWN conditional formatting, which
 # blocks out the terms a subject isn't offered in. Its three digits are
 # per-term flags — 111 = all three terms, 100 = Term 1 only, 10 = Term 2
