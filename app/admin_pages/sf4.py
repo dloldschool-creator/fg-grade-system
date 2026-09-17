@@ -16,30 +16,18 @@ from app.admin_pages._helpers import get_session, render_flashes
 from app.attendance_service import class_days_in_month, months_with_class_days
 from app.auth import require_role
 from app.excel_template import workbook_to_bytes
+from app.models.enums import EnrollmentStatus
 from app.models.organization import SchoolYear
 from app.sf4_report import GRADE_BLOCKS, MOVEMENT_COLUMNS, build_sf4_workbook
 
-
-def _preview_frame(rows, class_day_count: int) -> pd.DataFrame:
-    """The same figures the form carries, one line per Track/Strand."""
-    frame = []
-    for entry in rows:
-        average = entry.daily_average(class_day_count)
-        percentage = entry.percentage()
-        line = {
-            "Grade": entry.grade_number,
-            "Track": entry.track,
-            "Strand": entry.strand,
-            "Registered (M/F/T)": f"{entry.registered.male:.0f} / "
-            f"{entry.registered.female:.0f} / {entry.registered.total:.0f}",
-            "Daily average": f"{average.total:.2f}",
-            "% for the month": f"{percentage.total:.2f}%",
-        }
-        for movement_type in MOVEMENT_COLUMNS:
-            _before, during = entry.movement(movement_type)
-            line[movement_type.value.replace("_", " ").title()] = int(during.total)
-        frame.append(line)
-    return pd.DataFrame(frame)
+# Each movement block is a Male/Female/Total triple starting at base+3 (the
+# "this month" triple — see MOVEMENT_COLUMNS docstring); +2 more lands on
+# Total. Reading `base + 3` alone, as this preview once did, reads the Male
+# column instead and under-reports every movement figure on screen while the
+# downloaded workbook — which writes the whole triple — stays correct.
+MOVEMENT_TOTAL_COLUMNS = {
+    movement_type: base + 5 for movement_type, base in MOVEMENT_COLUMNS.items()
+}
 
 
 def render() -> None:
@@ -125,11 +113,21 @@ def render() -> None:
                         "Registered T": worksheet.cell(row_number, 5).value,
                         "Daily average": worksheet.cell(row_number, 8).value,
                         "% for month": worksheet.cell(row_number, 11).value,
-                        "Dropped": worksheet.cell(row_number, 15).value,
-                        "Transferred out": worksheet.cell(row_number, 24).value,
-                        "Transferred in": worksheet.cell(row_number, 33).value,
-                        "Shifted out": worksheet.cell(row_number, 42).value,
-                        "Shifted in": worksheet.cell(row_number, 51).value,
+                        "Dropped": worksheet.cell(
+                            row_number, MOVEMENT_TOTAL_COLUMNS[EnrollmentStatus.DROPPED]
+                        ).value,
+                        "Transferred out": worksheet.cell(
+                            row_number, MOVEMENT_TOTAL_COLUMNS[EnrollmentStatus.TRANSFERRED_OUT]
+                        ).value,
+                        "Transferred in": worksheet.cell(
+                            row_number, MOVEMENT_TOTAL_COLUMNS[EnrollmentStatus.TRANSFERRED_IN]
+                        ).value,
+                        "Shifted out": worksheet.cell(
+                            row_number, MOVEMENT_TOTAL_COLUMNS[EnrollmentStatus.SHIFTED_OUT]
+                        ).value,
+                        "Shifted in": worksheet.cell(
+                            row_number, MOVEMENT_TOTAL_COLUMNS[EnrollmentStatus.SHIFTED_IN]
+                        ).value,
                     }
                 )
             if preview:
