@@ -1,4 +1,5 @@
 import calendar as _calendar
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -12,6 +13,7 @@ from app.attendance_service import (
     summarize_month_batch,
 )
 from app.auth import require_role
+from app.display_time import SCHOOL_TZ
 from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
@@ -97,10 +99,16 @@ def render() -> None:
                 "it on the Academic Calendar page first."
             )
             return
+        today = datetime.now(SCHOOL_TZ).date()
+        try:
+            default_month_index = months.index((today.year, today.month))
+        except ValueError:
+            default_month_index = 0
         month_choice = st.selectbox(
             "Month",
             options=months,
             format_func=lambda ym: f"{_calendar.month_name[ym[1]]} {ym[0]}",
+            index=default_month_index,
         )
         year, month = month_choice
 

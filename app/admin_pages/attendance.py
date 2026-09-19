@@ -468,7 +468,7 @@ def render() -> None:
             ):
                 st.rerun()
         if current_state == FinalizationState.NOT_STARTED:
-            st.markdown(f"**{NOT_PREPARED_MESSAGE}**")
+            st.markdown(f"**:red[{NOT_PREPARED_MESSAGE}]**")
         st.caption(
             "The \"Prepare / refresh this month's sheet\" button marks everyone "
             "**Present** on every class day that has no entry yet, so you only need "
