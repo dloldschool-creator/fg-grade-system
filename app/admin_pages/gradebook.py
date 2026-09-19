@@ -123,14 +123,15 @@ def render() -> None:
         subject = session.get(Subject, offering.subject_id)
         term = session.get(Term, offering.term_id)
 
-        if term.grade_encoding_status != GradeEncodingStatus.OPEN:
+        encoding_open = term.grade_encoding_status == GradeEncodingStatus.OPEN
+        if not encoding_open:
             st.warning(
                 f"Grade encoding is CLOSED for {term.name} — ask a Super Admin to open it "
-                "on the School Years & Terms page before you can enter grades."
+                "on the School Years & Terms page to make changes. What you already "
+                "encoded is still shown below, read-only."
             )
-            return
-
-        _deadline_banner(term)
+        else:
+            _deadline_banner(term)
 
         enrollments = (
             session.query(Enrollment)
@@ -215,6 +216,35 @@ def render() -> None:
         }
 
         st.subheader(f"{subject.official_name} — {term.name}")
+
+        if not encoding_open:
+            # Read-only view, no widgets/keys/form: encoding is closed so
+            # there is nothing to save, and a plain table is far cheaper
+            # to render than a form's per-row number_input/checkbox/text_input
+            # (each with its own generation_key) for a roster nobody can edit.
+            st.dataframe(
+                [
+                    {
+                        "Learner": f"{learners[e.learner_id].last_name}, {learners[e.learner_id].first_name}",
+                        "Grade": (
+                            int(existing_grades[e.id].official_grade)
+                            if e.id in existing_grades and existing_grades[e.id].official_grade is not None
+                            else None
+                        ),
+                        "Status": (
+                            existing_grades[e.id].status.value
+                            if e.id in existing_grades
+                            else "not yet encoded"
+                        ),
+                    }
+                    for e in roster
+                    if e.learner_id in learners
+                ],
+                hide_index=True,
+                width="stretch",
+            )
+            return
+
         st.caption("Leave a grade blank if it isn't ready yet. Never type 0 to mean that.")
         st.caption(
             "Already encoded and need it blank again — dropped, transferred, or "
