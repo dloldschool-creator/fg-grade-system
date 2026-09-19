@@ -488,7 +488,7 @@ def render() -> None:
                 key=f"grid_{section_choice}_{year}_{month}",
                 disabled=[LEARNER_COLUMN, SEX_COLUMN],
                 column_config={
-                    LEARNER_COLUMN: st.column_config.TextColumn(width="medium"),
+                    LEARNER_COLUMN: st.column_config.TextColumn(width="medium", pinned=True),
                     SEX_COLUMN: st.column_config.TextColumn(width="small"),
                     **{
                         # NOT_ELIGIBLE has to be a valid option even though
@@ -515,7 +515,12 @@ def render() -> None:
                 )
                 st.rerun()
         else:
-            st.dataframe(dataframe, hide_index=True, width="stretch")
+            st.dataframe(
+                dataframe,
+                hide_index=True,
+                width="stretch",
+                column_config={LEARNER_COLUMN: st.column_config.TextColumn(pinned=True)},
+            )
             st.caption("This month is finalized — reopen it below to make changes.")
 
         st.divider()
