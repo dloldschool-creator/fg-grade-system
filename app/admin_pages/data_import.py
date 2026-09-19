@@ -152,7 +152,17 @@ def render() -> None:
                 f"{column.label}{'' if column.required else '  (optional)'}",
                 options=options,
                 index=options.index(default) if default in options else 0,
-                key=f"map_{spec.job_type}_{column.field}",
+                # Keyed by the upload's own file_id, not just job_type+field:
+                # swapping in a different file for the same import type
+                # before confirming re-renders this same key with a fresh
+                # `options`/`default` from the new headers, but a prior
+                # choice that's still a valid option (NOT_MAPPED, or a
+                # header name both files happen to share) doesn't get
+                # cleared by Streamlit on its own — the auto-suggestion for
+                # the new file then silently never applies. file_id changes
+                # on every upload, even a same-named re-upload, so this key
+                # is fresh whenever the underlying file actually changed.
+                key=f"map_{spec.job_type}_{uploaded.file_id}_{column.field}",
             )
             if chosen != NOT_MAPPED:
                 mapping[column.field] = chosen

@@ -105,7 +105,7 @@ def render() -> None:
 
         for row in rows:
             terms = "".join(str(n) for n in row.term_numbers)
-            with st.form(f"assign_{row.subject.id}"):
+            with st.form(f"assign_{section.id}_{row.subject.id}"):
                 col1, col2, col3 = st.columns([4, 4, 2])
                 col1.write(f"**{row.subject.official_name}**")
                 col1.caption(
@@ -120,7 +120,19 @@ def render() -> None:
                     options=options,
                     index=index,
                     format_func=lambda v: v if v == UNASSIGNED else teacher_by_id[v].full_name,
-                    key=f"teacher_{row.subject.id}",
+                    # Keyed by section+subject, not just subject: a subject
+                    # like Work Immersion is the same catalog row across
+                    # every section that offers it (nine, today), so a bare
+                    # f"teacher_{row.subject.id}" key is reused verbatim when
+                    # switching sections in one browser session — Streamlit
+                    # then keeps whichever teacher was last picked/shown for
+                    # that subject anywhere, ignoring this section's own
+                    # `index=`. The "Current: ..." caption reads `sole`
+                    # straight from the DB so it stayed correct while the
+                    # dropdown silently showed a different section's value —
+                    # a stale-but-plausible selection is the dangerous case,
+                    # since pressing Assign on it reassigns for real.
+                    key=f"teacher_{section.id}_{row.subject.id}",
                     label_visibility="collapsed",
                 )
 
