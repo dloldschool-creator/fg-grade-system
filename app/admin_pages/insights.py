@@ -1300,7 +1300,7 @@ def render() -> None:
     grade_levels, strands, sections = _dimensions(rows)
     term_ids, term_labels = _term_options(rows)
     visible_sections, slots = section_filters(
-        sections, grade_levels, strands, key="insights", extra_slots=2
+        sections, grade_levels, strands, key="insights", leading_slots=1, extra_slots=1
     )
     visible_ids = {s.id for s in visible_sections}
     section_ids = [s.id for s in visible_sections]

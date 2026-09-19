@@ -322,6 +322,7 @@ def render() -> None:
             format_func=lambda v: f"{policy_by_id[version_by_id[v].award_policy_id].name} (v{version_by_id[v].version_number})",
         )
         version = version_by_id[version_choice]
+        policy_name = policy_by_id[version.award_policy_id].name
 
         # A TERM-scoped policy is judged once per term against that term's
         # Term Average (§17), so the term is part of the selection; an
@@ -416,7 +417,30 @@ def render() -> None:
                     override_result = st.selectbox(
                         "Override result", options=[r.value for r in AwardResult], key=f"or_{award.id}"
                     )
-                    override_award_name = st.text_input("Award name (if eligible)", key=f"oan_{award.id}")
+                    if version.manual_only:
+                        # Nominative award (Leadership, Best in Subject) —
+                        # there's no policy-derived name to fall back on,
+                        # so this is the only source of the name.
+                        override_award_name = st.text_input(
+                            "Award name (if eligible)", key=f"oan_{award.id}"
+                        )
+                    elif version.tier_thresholds:
+                        # A ladder: the auto-computed name is whichever
+                        # tier the average clears, which is exactly what a
+                        # manual override is for when it doesn't. Picking
+                        # from the configured tiers (not free text) keeps
+                        # an override name from drifting from the ladder.
+                        override_award_name = st.selectbox(
+                            "Award name (if eligible)",
+                            options=[""] + [t["label"] for t in version.tier_thresholds],
+                            key=f"oan_{award.id}",
+                        )
+                    else:
+                        # Single fixed name (e.g. Academic Excellence) —
+                        # identical to the policy name every time, so
+                        # there's nothing for the admin to type.
+                        override_award_name = policy_name
+                        st.caption(f"Award name (if eligible): **{policy_name}**")
                     override_reason = st.text_area("Reason for override", key=f"orr_{award.id}")
                     if st.form_submit_button("Apply override"):
                         if not override_reason:

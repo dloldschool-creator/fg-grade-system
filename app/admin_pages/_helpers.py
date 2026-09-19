@@ -58,7 +58,15 @@ def picker_options(sections, grade_levels, strands, grade_choice=ALL):
     return present_grades, present_strands
 
 
-def section_filters(sections, grade_levels: dict, strands: dict, *, key: str, extra_slots: int = 0):
+def section_filters(
+    sections,
+    grade_levels: dict,
+    strands: dict,
+    *,
+    key: str,
+    extra_slots: int = 0,
+    leading_slots: int = 0,
+):
     """The Grade level and Strand dropdowns that sit above a list of sections.
 
     Shared so the two callers cannot drift apart: `section_picker` asks for
@@ -67,9 +75,15 @@ def section_filters(sections, grade_levels: dict, strands: dict, *, key: str, ex
     The cascade, the "a filter only appears when it would narrow anything"
     rule and the stale-choice handling are therefore written once.
 
-    Returns `(sections that survive the filters, the trailing containers)`.
-    A caller that asked for slots always gets that many, even when no
-    filter was drawn — they fall back to the page itself, full width.
+    `leading_slots` reserves containers to the *left* of Grade level/Strand
+    (e.g. Insights puts Term first) — they share the same `st.columns()`
+    call as the trailing ones, so position is fixed by column layout, not
+    by the order the caller happens to fill them in after this returns.
+
+    Returns `(sections that survive the filters, leading + trailing
+    containers)`. A caller that asked for slots always gets that many,
+    even when no filter was drawn — they fall back to the page itself,
+    full width.
     """
     # Read the grade level out of session state before laying anything out:
     # the strand options depend on it, and Streamlit has already stored the
@@ -90,8 +104,9 @@ def section_filters(sections, grade_levels: dict, strands: dict, *, key: str, ex
 
     grade_choice = strand_choice = ALL
     if filters:
-        columns = st.columns(len(filters) + extra_slots)
-        index = 0
+        columns = st.columns(leading_slots + len(filters) + extra_slots)
+        leading = list(columns[:leading_slots])
+        index = leading_slots
         if "grade" in filters:
             grade_choice = columns[index].selectbox(
                 "Grade level",
@@ -108,9 +123,9 @@ def section_filters(sections, grade_levels: dict, strands: dict, *, key: str, ex
                 key=strand_key,
             )
             index += 1
-        slots = list(columns[index:])
+        slots = leading + list(columns[index:])
     else:
-        slots = [st] * extra_slots
+        slots = [st] * (leading_slots + extra_slots)
 
     visible = [
         s
