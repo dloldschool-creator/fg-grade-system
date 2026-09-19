@@ -202,17 +202,38 @@ _LOGIN_STYLES = """
      with CSS is brittle — its test id and DOM nesting change between
      releases, and it didn't centre reliably here. */
   .login-heading img.seal {
-      width: 96px; height: auto;
+      width: 112px; height: auto;
       display: block; margin: 0 auto 0.35rem auto;
   }
+  /* The school name is the one thing on this page that should read as a
+     headline — everything else here is only bumped up a notch. */
   .login-heading h1 {
-      font-size: 1.55rem; line-height: 1.3; font-weight: 700;
-      margin: 0.6rem 0 0.2rem 0;
+      font-size: 2.6rem; line-height: 1.25; font-weight: 700;
+      margin: 0.7rem 0 0.3rem 0;
   }
-  .login-heading p { margin: 0; opacity: 0.75; font-size: 0.95rem; }
+  .login-heading p { margin: 0; opacity: 0.75; font-size: 1.15rem; }
   .login-heading .eyebrow {
       text-transform: uppercase; letter-spacing: 0.14em;
-      font-size: 0.7rem; opacity: 0.6;
+      font-size: 0.9rem; opacity: 0.6;
+  }
+  /* Scoped to the login page's own st.container(key=...) — its wrapper
+     div carries this class — so none of it leaks onto the rest of the
+     app, which reuses st.text_input/st.form_submit_button everywhere. */
+  .st-key-login_box [data-testid="stTextInput"] label p {
+      font-size: 1.1rem;
+  }
+  .st-key-login_box [data-testid="stTextInput"] input {
+      font-size: 1.3rem;
+      padding: 0.9rem 1rem;
+  }
+  .st-key-login_box [data-testid="stFormSubmitButton"] button {
+      font-size: 1.2rem;
+      padding: 0.7rem 1rem;
+      height: auto;
+  }
+  .st-key-login_box [data-testid="stCaptionContainer"] p,
+  .st-key-login_box small {
+      font-size: 1rem;
   }
 </style>
 """
@@ -255,7 +276,7 @@ def login_form() -> None:
     # Constrain the form to a readable column — the app runs in "wide"
     # layout, which would otherwise stretch two inputs across the screen.
     _, centre, _ = st.columns([1, 1.4, 1])
-    with centre:
+    with centre, st.container(key="login_box"):
         st.markdown(
             f"""
             <div class="login-heading">
