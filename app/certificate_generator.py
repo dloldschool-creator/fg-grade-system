@@ -52,10 +52,11 @@ _GRAY = colors.HexColor("#555555")
 _DESIGN_W, _DESIGN_H = landscape(letter)
 
 # Total height of the title-through-date block (the sum of the y-steps
-# between its five lines). Used to centre that block vertically rather
-# than letting it hang off the bottom of the header — keep it in sync if
-# those steps change.
-_BODY_BLOCK_HEIGHT = 138
+# between its six lines: title, "is proudly presented to", learner name,
+# the two-line citation, and the "Given this..." line). Used to centre
+# that block vertically rather than letting it hang off the bottom of the
+# header — keep it in sync if those steps change.
+_BODY_BLOCK_HEIGHT = 165
 
 # The award policy is *named* for the administrators who maintain it —
 # "Academic Excellence Award (DO 15, s. 2026)", possibly with a version
@@ -183,6 +184,17 @@ def _citation(data: CertificateData) -> str:
     return f"for earning {data.award_name} with a {label} of {average}."
 
 
+def _citation_lines(data: CertificateData) -> list[str]:
+    """Same wording as `_citation`, split across two lines so the standard
+    (non-custom) certificate body reads as three lines in total — this pair
+    plus the "Given this..." line — instead of two long ones."""
+    average = int(data.general_average) if data.general_average is not None else "—"
+    label = (
+        f"{formal_term_name(data.term_name)} Average" if data.term_name else "General Average"
+    )
+    return [f"for earning {data.award_name}", f"with a {label} of {average}."]
+
+
 def _given_line(data: CertificateData) -> str:
     """The venue is omitted rather than left dangling — an unset venue
     would otherwise render "Given this 3rd of April 2027 at , during…"."""
@@ -258,9 +270,21 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     margin = 0.35 * inch * scale
     box_x0, box_y0 = x + margin, y + margin
     box_w, box_h = width - 2 * margin, height - 2 * margin
-    c.setStrokeColor(colors.black)
-    c.setLineWidth(1.2 * scale)
+
+    # A stylized double-rule border — a bold outer line in the design's
+    # accent blue with a fine inner line set slightly in from it — rather
+    # than a single plain rectangle.
+    c.setStrokeColor(_BLUE)
+    c.setLineWidth(2.4 * scale)
     c.rect(box_x0, box_y0, box_w, box_h)
+    rule_inset = 0.07 * inch * scale
+    c.setLineWidth(0.75 * scale)
+    c.rect(
+        box_x0 + rule_inset,
+        box_y0 + rule_inset,
+        box_w - 2 * rule_inset,
+        box_h - 2 * rule_inset,
+    )
 
     if os.path.exists(SEAL_PATH):
         seal = 0.95 * inch * scale
@@ -295,33 +319,35 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     # header — otherwise it sits high and leaves a dead gap above the
     # signatures.
     cursor = y0 + inner_h / 2 + (_BODY_BLOCK_HEIGHT / 2) * scale
-    font("Times-Bold", 30)
+    font("Times-Bold", 34)
     c.setFillColor(_BLUE)
     c.drawCentredString(center_x, cursor, "CERTIFICATE OF RECOGNITION")
 
-    cursor -= 35 * scale
-    font("Times-Italic", 13)
+    cursor -= 38 * scale
+    font("Times-Italic", 15)
     c.setFillColor(_GRAY)
     c.drawCentredString(center_x, cursor, "is proudly presented to")
 
-    cursor -= 39 * scale
-    font("Times-BoldItalic", 28)
+    cursor -= 42 * scale
+    font("Times-BoldItalic", 32)
     c.setFillColor(colors.black)
     c.drawCentredString(center_x, cursor, data.learner_name.upper())
 
-    cursor -= 37 * scale
+    cursor -= 40 * scale
     c.setFillColor(colors.black)
     if data.custom_body_template:
-        font("Times-Roman", 13)
+        font("Times-Roman", 15)
         for line in render_certificate_body(data.custom_body_template, data):
             c.drawCentredString(center_x, cursor, line)
-            cursor -= 18 * scale
+            cursor -= 20 * scale
     else:
-        font("Times-Roman", 14)
-        c.drawCentredString(center_x, cursor, _citation(data))
+        font("Times-Roman", 16)
+        for line in _citation_lines(data):
+            c.drawCentredString(center_x, cursor, line)
+            cursor -= 21 * scale
 
-        cursor -= 27 * scale
-        font("Times-Roman", 12)
+        cursor -= 3 * scale
+        font("Times-Roman", 13)
         c.drawCentredString(center_x, cursor, _given_line(data))
 
     # Adviser always signs and is always first; extra_signatories (a
@@ -342,13 +368,13 @@ def _draw_certificate(c, data: CertificateData, *, x: float, y: float, width: fl
     else:
         left_frac, right_frac = 0.15, 0.85
         xs = [box_x0 + box_w * (left_frac + i * (right_frac - left_frac) / (n - 1)) for i in range(n)]
-    name_size = 13 if n <= 2 else 10
+    name_size = 15 if n <= 2 else 12
     sig_y = y0 + margin + 0.9 * inch * scale
     for sig_x, (name, position) in zip(xs, signatories):
         font("Times-Bold", name_size)
         c.drawCentredString(sig_x, sig_y, (name or "").upper())
-        font("Times-Roman", 11 if n <= 2 else 9)
-        c.drawCentredString(sig_x, sig_y - 16 * scale, position or "")
+        font("Times-Roman", 12 if n <= 2 else 10)
+        c.drawCentredString(sig_x, sig_y - 18 * scale, position or "")
 
 
 def generate_award_certificate(**fields) -> bytes:

@@ -109,6 +109,17 @@ def _last_attendance_change(session, roster, class_days) -> AuditLog | None:
     )
 
 
+# Shown boldly right by the "Prepare / refresh this month's sheet" button
+# (where an adviser is actually looking) and also folded into
+# `_blocking_reasons` so it still gates the Finalize button — one string so
+# the two places can't drift apart. `_finalization_panel` skips re-printing
+# it as a caption since the bold version above has already said it.
+NOT_PREPARED_MESSAGE = (
+    "This month's sheet hasn't been prepared yet — click \"Prepare / refresh "
+    "this month's sheet\" above first."
+)
+
+
 def _blocking_reasons(
     report: dict, has_unsaved_edits: bool, current_state: FinalizationState, class_days, today
 ) -> list[str]:
@@ -124,10 +135,7 @@ def _blocking_reasons(
             "There are unsaved edits in the grid above — click **Save attendance** first."
         )
     if current_state == FinalizationState.NOT_STARTED:
-        reasons.append(
-            "This month's sheet hasn't been prepared yet — click **Prepare / refresh "
-            "this month's sheet** above first."
-        )
+        reasons.append(NOT_PREPARED_MESSAGE)
     last_class_day = class_days[-1].calendar_date if class_days else None
     if last_class_day is not None and last_class_day >= today:
         reasons.append(
@@ -316,6 +324,8 @@ def _finalization_panel(
 
     can_finalize = not blocking_reasons
     for reason in blocking_reasons:
+        if reason == NOT_PREPARED_MESSAGE:
+            continue  # already shown boldly by the Prepare / refresh button above
         st.caption(reason)
 
     last_change = _last_attendance_change(session, roster, class_days)
@@ -420,10 +430,16 @@ def render() -> None:
                 "Admin needs to generate it on the Academic Calendar page first."
             )
             return
+        today = datetime.now(SCHOOL_TZ).date()
+        try:
+            default_month_index = months.index((today.year, today.month))
+        except ValueError:
+            default_month_index = 0
         month_choice = st.selectbox(
             "Month",
             options=months,
             format_func=lambda ym: f"{_calendar.month_name[ym[1]]} {ym[0]}",
+            index=default_month_index,
         )
         year, month = month_choice
 
@@ -451,9 +467,12 @@ def render() -> None:
                 f"Added {created} attendance row(s) defaulting to Present.",
             ):
                 st.rerun()
+        if current_state == FinalizationState.NOT_STARTED:
+            st.markdown(f"**{NOT_PREPARED_MESSAGE}**")
         st.caption(
-            "Marks everyone **Present** on every class day that has no entry yet, "
-            "so you only need to change the learners who were absent or late.\n\n"
+            "The \"Prepare / refresh this month's sheet\" button marks everyone "
+            "**Present** on every class day that has no entry yet, so you only need "
+            "to change the learners who were absent or late.\n\n"
             "Refresh it again whenever a new learner joins the section, or the "
             "school calendar changes."
         )
