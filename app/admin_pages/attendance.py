@@ -119,6 +119,15 @@ NOT_PREPARED_MESSAGE = (
     "this month's sheet\" above first."
 )
 
+# Shown boldly right by the "Save attendance" button (where an adviser is
+# actually looking right after editing) and also folded into
+# `_blocking_reasons` so it still gates the Finalize button — one string so
+# the two places can't drift apart. `_finalization_panel` skips re-printing
+# it as a caption since the bold version above has already said it.
+UNSAVED_EDITS_MESSAGE = (
+    "There are unsaved edits in the grid above — click **Save attendance** first."
+)
+
 
 def _blocking_reasons(
     report: dict, has_unsaved_edits: bool, current_state: FinalizationState, class_days, today
@@ -131,9 +140,7 @@ def _blocking_reasons(
     if report["problems"]:
         reasons.append("Resolve everything in red above before finalizing.")
     if has_unsaved_edits:
-        reasons.append(
-            "There are unsaved edits in the grid above — click **Save attendance** first."
-        )
+        reasons.append(UNSAVED_EDITS_MESSAGE)
     if current_state == FinalizationState.NOT_STARTED:
         reasons.append(NOT_PREPARED_MESSAGE)
     last_class_day = class_days[-1].calendar_date if class_days else None
@@ -324,8 +331,8 @@ def _finalization_panel(
 
     can_finalize = not blocking_reasons
     for reason in blocking_reasons:
-        if reason == NOT_PREPARED_MESSAGE:
-            continue  # already shown boldly by the Prepare / refresh button above
+        if reason in (NOT_PREPARED_MESSAGE, UNSAVED_EDITS_MESSAGE):
+            continue  # already shown boldly above (Prepare / refresh button, Save attendance button)
         st.caption(reason)
 
     last_change = _last_attendance_change(session, roster, class_days)
@@ -508,6 +515,8 @@ def render() -> None:
                 width="stretch",
             )
             has_unsaved_edits = not edited.equals(dataframe)
+            if has_unsaved_edits:
+                st.markdown(f"**:red[{UNSAVED_EDITS_MESSAGE}]**")
             if st.button("Save attendance", type="primary"):
                 _save_grid(
                     session, section_choice, sy_choice, year, month,
