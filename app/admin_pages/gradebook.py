@@ -35,6 +35,29 @@ ROSTER_STATUSES = {
 }
 
 
+# Shown by the buttons on every render. Unlike Attendance's grid, the grade
+# boxes live inside st.form, which sends nothing to the server until a button
+# is pressed — so there is no live moment to detect "you typed something"
+# and this has to be a standing reminder rather than a conditional one.
+# Submit also ignores whatever is typed but unsaved, hence "Save first".
+SAVE_THEN_SUBMIT_REMINDER = (
+    "✏️ Made changes? Press **Save grades** first so your work isn't lost, "
+    "then **Submit all draft grades** when the class is ready to turn in."
+)
+
+
+def pending_submission_message(draft_count: int) -> str | None:
+    """The red nudge for grades that are saved but not yet submitted, or
+    None when there are none. Split out so the wording is testable."""
+    if draft_count <= 0:
+        return None
+    noun = "grade is" if draft_count == 1 else "grades are"
+    return (
+        f"{draft_count} saved {noun} still in draft — don't forget to press "
+        "**Submit all draft grades** once you're done checking them."
+    )
+
+
 def _round_grade(value: float | None) -> Decimal | None:
     """Official grades are always whole numbers (every Final Grade/GA
     formula in the spec rounds), so round what the teacher typed the same
@@ -361,6 +384,18 @@ def render() -> None:
                     grade_inputs[enrollment.id] = (number_value, clear, reason)
                     col5.caption(existing.status.value.lower() if existing else "not yet encoded")
 
+            st.info(SAVE_THEN_SUBMIT_REMINDER)
+            pending = pending_submission_message(
+                sum(
+                    1
+                    for e in roster
+                    if (g := existing_grades.get(e.id)) is not None
+                    and g.status == GradeWorkflowStatus.DRAFT
+                    and g.official_grade is not None
+                )
+            )
+            if pending:
+                st.markdown(f"**:red[{pending}]**")
             save = st.form_submit_button("Save grades")
             submit = st.form_submit_button("Submit all draft grades")
 
@@ -503,7 +538,8 @@ def render() -> None:
                 recompute_enrollment_grades_batch(session, touched_enrollment_ids)
                 flash(
                     "success",
-                    f"Submitted {submitted_count} grade(s). They're locked here until an "
-                    "adviser/admin verifies or reopens them.",
+                    f"Submitted {submitted_count} grade(s). You can still edit them, but "
+                    "any change puts that grade back to draft, so press Submit again "
+                    "afterward.",
                 )
                 st.rerun()
