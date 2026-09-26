@@ -1884,8 +1884,9 @@ current number.
       and red count (reworded), and the corrected post-submit message.
       **Deployment, 2026-09-26:** the user rebooted after `b71b63d` (the
       override fix), which put everything up to that commit live. The last
-      change, `67dd3ae` (Grade Summary notes removed), needs one more
-      Reboot — check the footer reads `67dd3ae`.
+      two changes — `67dd3ae` (Grade Summary notes removed) and `069c28c`
+      (Gradebook reminder shortened, below) — need one more Reboot; check
+      the footer reads `069c28c`.
       **Left for advisers:** 39 award results in FREUD, MARSHALL, DUCASSE,
       ARISTOTLE and ERIKSON predate grade, attendance or override changes;
       each adviser pressing Compute eligibility for all fixes them. Not
@@ -1949,3 +1950,9 @@ current number.
       left for an adviser to do. Both gone, along with their one query per
       page load; the Help item now says advisers don't need to approve
       grades. The Gradebook's own reminder and red note stay.
+- [x] **Gradebook reminder shortened** (2026-09-26, `069c28c`, the user's
+      wording). `SUBMIT_REMINDER` now reads: "✏️ Your changes aren't kept
+      until you press **Save & submit grades**. If you edit grades, make
+      sure to press **Save & submit grades** button again." The dropped
+      sentence ("press it as often as you like — blank boxes stay blank")
+      is still true and still in Help under "One button saves and submits".
