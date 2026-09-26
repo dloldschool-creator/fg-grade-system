@@ -39,6 +39,33 @@ from app.models.subjects import CombinedLearningArea, CombinedLearningAreaCompon
 DASH = "—"
 
 
+def pending_submission_message(draft_count: int) -> str | None:
+    """Grade Summary's counterpart of the Gradebook's draft reminder. The
+    people reading this page don't encode — the subject teachers do — so it
+    says whom to remind rather than which button to press."""
+    if draft_count <= 0:
+        return None
+    noun = "grade is" if draft_count == 1 else "grades are"
+    return (
+        f"{draft_count} saved {noun} still in draft in this section — please "
+        "remind the subject teachers to press **Save grades** then **Submit all "
+        "draft grades** on the Gradebook."
+    )
+
+
+def _draft_count(session, enrollment_ids) -> int:
+    """One query for the whole section, above every per-learner loop."""
+    return (
+        session.query(TermGrade)
+        .filter(
+            TermGrade.enrollment_id.in_(enrollment_ids),
+            TermGrade.status == GradeWorkflowStatus.DRAFT,
+            TermGrade.official_grade.isnot(None),
+        )
+        .count()
+    )
+
+
 def _fmt(value):
     """Grades are always whole numbers (every formula in the spec rounds,
     §60) — display as a plain int, not the raw Decimal(5,2)'s "93.00"."""
@@ -483,6 +510,10 @@ def render() -> None:
         # read from the same flat, section-wide lookup instead of a query
         # each.
         panel = _panel_data(session, enrollments, sy_choice)
+
+        pending = pending_submission_message(_draft_count(session, [e.id for e in enrollments]))
+        if pending:
+            st.markdown(f"**:red[{pending}]**")
 
         if not current_user.is_read_only():
             col_recompute, col_finalize = st.columns(2)

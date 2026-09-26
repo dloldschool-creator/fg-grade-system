@@ -66,14 +66,16 @@ BY_ROLE = {
             (
                 "Save and Submit are different",
                 "**Save** keeps your work and leaves grades editable. **Submit** "
-                "hands them on for checking. Save often; Submit when the term's "
-                "grades are final.",
+                "hands them on for checking. Always **Save first, then Submit** — "
+                "Submit only sends grades that are already saved, so anything "
+                "typed but not saved is left behind. Save often; Submit when the "
+                "term's grades are final.",
             ),
             (
                 "Editing a submitted grade sends it back to DRAFT",
                 "That's intentional — it makes clear the grade needs submitting "
-                "again. If you change something after submitting, remember to "
-                "press Submit a second time.",
+                "again. If you change something after submitting, press **Save** "
+                "then **Submit** again.",
             ),
             (
                 "A deadline warning doesn't prevent you from encoding",
@@ -175,6 +177,12 @@ BY_ROLE = {
                 "a teacher saves, but if something looks stale after an "
                 "unusual change, press **Recompute**. It only re-reads what is "
                 "already encoded; it never invents a grade.",
+            ),
+            (
+                "A red note on Grade Summary means grades are still in draft",
+                "Some grades in your section are saved but not yet submitted. "
+                "Remind the subject teachers to press **Save grades** then "
+                "**Submit all draft grades** on the Gradebook.",
             ),
             (
                 "A learner's grades won't finalize until their record is complete",

@@ -373,7 +373,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                 if to_remove:
                     reason_key = f"movement_delete_reason_{enrollment.id}"
                     reason = st.text_input(
-                        f"Reason for removing {len(to_remove)} ticked movement(s) — required (§50)",
+                        f"Reason for removing {len(to_remove)} ticked movement(s) — required",
                         key=reason_key,
                         on_change=keep_panel_open,
                         args=(panel_id,),
