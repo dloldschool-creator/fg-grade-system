@@ -1821,3 +1821,62 @@ current number.
       bled.** The fix closes it going forward; the 7 not-yet-checkable
       combos are worth a second pass once their later-term subjects get
       graded.
+- [x] **Save-then-Submit reminders on the Gradebook and Grade Summary**
+      (2026-09-26, asked as "add a message in gradebook like in attendance
+      when changes are made that they need to save and submit"). Commits
+      `043d1d6`, `64d08fc`, `bdef7db`, `f8919ae`.
+      **Why it can't copy Attendance exactly.** Attendance's red "unsaved
+      edits" line is conditional: its grid is an `st.data_editor` outside
+      any form, so every edit reruns the script and the page can compare
+      the edited frame to the stored one. The Gradebook's boxes sit inside
+      `st.form("gradebook_form")`, which sends nothing to the server until
+      a button is pressed, so there is no moment at which "the teacher
+      typed something" is knowable. Taking the form away would put a
+      round trip (~85ms, several queries) behind every keystroke across a
+      40-learner roster. So the Gradebook got two messages instead, both
+      directly above the buttons:
+      a standing `st.info` (`SAVE_THEN_SUBMIT_REMINDER`) telling teachers
+      to Save first, then Submit; and a bold red line
+      (`pending_submission_message`) counting the class's grades that are
+      **saved but still DRAFT** — the one pending state the server can
+      actually see. Counted from `existing_grades`, which the page has
+      already loaded, so it costs no query.
+      **"Save first" is literal, not style.** The Submit branch walks
+      `existing_grades` — what is already in the database — and never reads
+      `grade_inputs`. A teacher who types grades and presses Submit
+      without Save submits the old values and loses the typing. That is
+      why every message now says Save *then* Submit, including the
+      post-submit flash and the caption at the top of the page.
+      **The post-submit flash was also wrong on its own.** It said
+      submitted grades were "locked here until an adviser/admin verifies
+      or reopens them"; the code only locks VERIFIED/FINALIZED, and the
+      caption on the same page said submitted grades stay editable. Now:
+      "You can still edit them, but any change puts that grade back to
+      draft, so press Save then Submit buttons again afterward."
+      **Grade Summary** has no Save/Submit of its own — its readers
+      (advisers, registrar) don't encode — so its version says *whom to
+      remind*: "N saved grades are still in draft in this section — please
+      remind the subject teachers to press Save grades then Submit all
+      draft grades on the Gradebook." `_draft_count` is one `COUNT` query
+      for the section, issued once above the per-learner loop (see the
+      expander-cost rule). **Help** now says Save first, then Submit in
+      the subject-teacher section, and has a new adviser item explaining
+      the red line.
+      **Found in passing:** `tests/test_page_text.py` was already failing
+      on `master` — an Enrollment label showed "(§50)" on screen. Checked
+      by stashing today's changes and re-running; it failed there too.
+      Removed the citation in `bdef7db` so the suite could go fully green
+      (1283 passed, 14 skipped) before that push.
+      **Verified in a browser, not only by tests**, via a throwaway
+      Streamlit harness in the session scratchpad that swapped
+      `require_role` for a stand-in `AuthUser` and ran the real page
+      against the live database, read-only, with nothing pressed. Grade
+      Summary on EDISON showed "14 saved grades…", matching a direct DB
+      count; the Gradebook as the GATES General Science teacher showed
+      "37 saved grades…" on Term 1 and only the blue reminder on a fully
+      submitted class. At the time, 20 sections held DRAFT grades (GATES
+      111, COWIE 86, WEISS 82, DESCARTES 71 the largest) — Term 1 closed
+      on 15 September, so these are grades teachers saved and never
+      submitted. The harness's `launch.json` entry was removed afterwards.
+      **Not yet live** — needs a Reboot in Streamlit Cloud; the footer
+      should read `f8919ae` or later once it is.
