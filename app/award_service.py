@@ -383,6 +383,14 @@ def set_award_override(
 
 
 def clear_award_override(session: Session, learner_award: LearnerAward, cleared_by_user_id=None) -> None:
+    """Removes the override and immediately re-judges that one learner.
+
+    It used to only drop the flag, leaving the overridden result — and
+    its "Manually overridden: …" reason — standing until someone next
+    pressed Compute. Found 2026-09-26: three cleared overrides were still
+    showing learners as awarded, with certificates printable, when the
+    rules said otherwise. Clearing an override means "let the rules
+    decide", so the rules decide now, in the same commit as the audit."""
     audit_service.record(
         session,
         action=audit_service.AWARD_OVERRIDE_CLEARED,
@@ -398,4 +406,11 @@ def clear_award_override(session: Session, learner_award: LearnerAward, cleared_
     learner_award.is_override = False
     learner_award.override_by_user_id = None
     learner_award.override_reason = None
-    session.commit()
+    # Commits, audit entry included. Autoflush writes is_override=False
+    # before the batch reads the row, so it is re-judged, not skipped.
+    compute_award_eligibility_batch(
+        session,
+        [learner_award.enrollment_id],
+        learner_award.award_policy_version_id,
+        term_id=learner_award.term_id,
+    )

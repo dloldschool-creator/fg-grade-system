@@ -1914,3 +1914,19 @@ current number.
       Verified in the preview harness, viewing only: every term was closed,
       so the harness remapped `GradeEncodingStatus.OPEN` to CLOSED in memory
       to render the form. Full suite green (1284 passed, 14 skipped).
+- [x] **Clearing an award override now re-judges the learner** (2026-09-26,
+      the follow-up flagged in the entry above). `clear_award_override`
+      only dropped `is_override`, so the overridden result and its
+      "Manually overridden: …" reason stood — printable as a certificate —
+      until someone next pressed Compute; the Awards page even said so
+      ("will recompute on next run"). It now calls
+      `compute_award_eligibility_batch` for that one enrollment, policy
+      version and term, in the same commit as the audit entry; autoflush
+      writes the cleared flag first, so the batch re-judges the row rather
+      than skipping it as an override. The flash names the new result.
+      `tests/test_award_override_clear.py` stubs the batch (it commits, so
+      it can't run in a rolled-back test against the live DB) and asserts
+      the call and that the flag is already off when it happens.
+      **Not repaired by this:** the three rows cleared before the fix
+      (FREUD 2, ERIKSON 1) still carry their old result. Pressing Compute
+      eligibility for all on those sections fixes them; no script was run.

@@ -409,7 +409,11 @@ def render() -> None:
                     st.warning(f"Manually overridden by an admin: {award.override_reason}")
                     if st.button("Clear override", key=f"clear_override_{award.id}"):
                         clear_award_override(session, award, current_user.id)
-                        flash("success", "Override cleared — will recompute on next run.")
+                        flash(
+                            "success",
+                            "Override cleared — this learner has been re-checked against "
+                            f"the rules: {award.award_name or 'not eligible'}.",
+                        )
                         st.rerun()
 
                 with st.form(f"override_{award.id}"):
