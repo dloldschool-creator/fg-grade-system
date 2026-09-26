@@ -1878,8 +1878,18 @@ current number.
       111, COWIE 86, WEISS 82, DESCARTES 71 the largest) — Term 1 closed
       on 15 September, so these are grades teachers saved and never
       submitted. The harness's `launch.json` entry was removed afterwards.
-      **Not yet live** — needs a Reboot in Streamlit Cloud; the footer
-      should read `f8919ae` or later once it is.
+      **Superseded the same day** by the three entries below: the Gradebook's
+      two buttons became one, and both Grade Summary notes were removed.
+      What survives from this entry is the Gradebook's standing reminder
+      and red count (reworded), and the corrected post-submit message.
+      **Deployment, 2026-09-26:** the user rebooted after `b71b63d` (the
+      override fix), which put everything up to that commit live. The last
+      change, `67dd3ae` (Grade Summary notes removed), needs one more
+      Reboot — check the footer reads `67dd3ae`.
+      **Left for advisers:** 39 award results in FREUD, MARSHALL, DUCASSE,
+      ARISTOTLE and ERIKSON predate grade, attendance or override changes;
+      each adviser pressing Compute eligibility for all fixes them. Not
+      done by script.
 - [x] **One "Save & submit grades" button; no VERIFIED step** (2026-09-26,
       same day as the entry above, after the user asked whether the
       red Grade Summary line meant GATES' grades were wrong).
