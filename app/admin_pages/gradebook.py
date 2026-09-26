@@ -539,7 +539,7 @@ def render() -> None:
                 flash(
                     "success",
                     f"Submitted {submitted_count} grade(s). You can still edit them, but "
-                    "any change puts that grade back to draft, so press Submit again "
-                    "afterward.",
+                    "any change puts that grade back to draft, so press Save then "
+                    "Submit buttons again afterward.",
                 )
                 st.rerun()
