@@ -1883,10 +1883,11 @@ current number.
       What survives from this entry is the Gradebook's standing reminder
       and red count (reworded), and the corrected post-submit message.
       **Deployment, 2026-09-26:** the user rebooted after `b71b63d` (the
-      override fix), which put everything up to that commit live. The last
-      two changes — `67dd3ae` (Grade Summary notes removed) and `069c28c`
-      (Gradebook reminder shortened, below) — need one more Reboot; check
-      the footer reads `069c28c`.
+      override fix), which put everything up to that commit live. The
+      later changes — `67dd3ae` (Grade Summary notes removed), `069c28c`
+      (Gradebook reminder shortened) and `4b940f5` (deadline closes
+      encoding, blue buttons, wording), all below — need one more Reboot;
+      check the footer reads `4b940f5`.
       **Left for advisers:** 39 award results in FREUD, MARSHALL, DUCASSE,
       ARISTOTLE and ERIKSON predate grade, attendance or override changes;
       each adviser pressing Compute eligibility for all fixes them. Not
