@@ -96,8 +96,19 @@ those formulas with values written by our own grading engine via
 6. **No silent recalculation of finalized years.** Policy/weight/threshold
    changes apply only to newly created school years or via explicit
    versioned policy records — never retroactively.
-7. **Workflow states:** grades go DRAFT → SUBMITTED → VERIFIED → FINALIZED.
+7. **Workflow states:** grades go DRAFT → SUBMITTED → FINALIZED.
    A finalized grade is read-only except via an explicit, audited reopen.
+   **There is no VERIFIED step** (decided 2026-09-26, spec §45 amended):
+   the adviser reviews on Grade Summary instead of approving. And the
+   Gradebook has **one button, "Save & submit grades"** — saving *is*
+   submitting, so a teacher never holds a saved-but-unsubmitted grade.
+   DRAFT now only means an imported grade, a reopened one, or a grade
+   blanked back to not-yet-encoded. The two-button version left 20
+   sections with never-submitted grades when Term 1 closed, and nothing
+   reads the difference anyway: averages, report cards and awards count
+   every saved grade regardless of status. Don't bring back a separate
+   Save without discussion. The VERIFIED enum value and columns still
+   exist and the Gradebook still treats them as locked; nothing sets them.
 8. **Every sensitive change is audit-logged**: who, what, old value, new
    value, timestamp, reason (where required).
 9. **Optimistic concurrency** on mutable grade/attendance rows (a `version`
@@ -944,10 +955,11 @@ boundary rather than a convenience, so it is worth stating plainly:
 
 `offering_progress` also carries `submitted`, counting
 `SUBMITTED_OR_BEYOND` rather than only SUBMITTED: rule 7 runs
-DRAFT → SUBMITTED → VERIFIED → FINALIZED, and a teacher told "0
+DRAFT → SUBMITTED → FINALIZED, and a teacher told "0
 submitted" on a finalized class would be chased for work already done.
-Encoding and submitting are separate steps, so "encoded but not
-submitted" is a real state and the page says so.
+Since 2026-09-26 the Gradebook saves and submits in one action, so
+"encoded but not submitted" now only means imported or reopened grades
+(and Term 1's leftovers from the two-button era) — expect it near zero.
 
 **The teacher view does not name the learners still missing a grade.**
 The count is there; the Gradebook is where you act, already shows the
@@ -1166,8 +1178,10 @@ award tiers and the not-eligible reasons, and every generated document.
    and there is no `GRADE_VERIFIED` audit action — although the Gradebook
    already treats VERIFIED as locked and the columns exist. Finalize also
    only checks that the annual record is COMPLETE, so a **DRAFT** grade
-   can be finalized without ever being submitted. Not fixed: who verifies,
-   on which page, and at what granularity is a decision, not a bug fix.
+   can be finalized without ever being submitted. **Resolved 2026-09-26 by
+   decision:** no VERIFIED step at all (rule 7, spec §45). Finalize still
+   does not require SUBMITTED — with one button that gap only covers
+   imported/reopened grades.
 
 **The Grade 12 curriculum is the real blocker for real use.** As the
 rehearsal found it (2026-08-13): six of the eight G12 subject profiles

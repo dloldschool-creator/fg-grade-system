@@ -1873,20 +1873,28 @@ Use states:
 
 1. DRAFT
 2. SUBMITTED
-3. VERIFIED
-4. FINALIZED
+3. FINALIZED
+
+*(Amended 2026-09-26, with approval. The original list had a VERIFIED
+state between SUBMITTED and FINALIZED, confirmed by the adviser or an
+authorized verifier. It was never built, and the school decided against
+it: the adviser already sees every submitted grade on Grade Summary, so a
+separate approval step added work without catching anything. The
+VERIFIED value may remain in the database enum; nothing assigns it.)*
 
 ### Draft
 
-Teacher can edit.
+Not yet submitted. With the single **Save & submit grades** action below,
+a grade is only DRAFT when it arrived another way — the Excel grade import,
+or an authorized reopen — or was blanked back to not-yet-encoded.
 
 ### Submitted
 
-Teacher indicates completion.
-
-### Verified
-
-Adviser/authorized verifier confirms.
+Teacher indicates completion. Saving and submitting are **one action** on
+the Gradebook: a teacher never holds a saved-but-unsubmitted grade. A
+submitted grade stays editable until finalized; editing it and pressing
+the action again keeps it SUBMITTED with the new value, and the change is
+audited like any other grade change.
 
 ### Finalized
 
@@ -2911,7 +2919,8 @@ The finished application must allow the school to perform this complete workflow
 8. Learners are imported/enrolled.
 9. Subject teachers encode Term 1 grades.
 10. Subject teachers submit grades.
-11. Adviser verifies completion.
+11. Adviser reviews completion on Grade Summary (no separate verification
+    step — see §45, amended 2026-09-26).
 12. The same process occurs for Terms 2 and 3.
 13. System computes subject Final Grades.
 14. For Grade 11, the special Effective Communication / Mabisang Komunikasyon rule is applied.

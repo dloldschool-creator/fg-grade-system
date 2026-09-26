@@ -39,7 +39,8 @@ UNIVERSAL = [
     ),
     (
         "You are signed out after 60 minutes idle",
-        "Unsaved typing is lost, so press **Save** before stepping away. "
+        "Unsaved typing is lost, so press **Save** (on the Gradebook, **Save & "
+        "submit grades**) before stepping away. "
         "Refreshing the browser or opening the app in a new tab also signs you "
         "out, so sign in again when that happens.",
     ),
@@ -64,18 +65,24 @@ BY_ROLE = {
                 "always have, then encode the single official term grade here.",
             ),
             (
-                "Save and Submit are different",
-                "**Save** keeps your work and leaves grades editable. **Submit** "
-                "hands them on for checking. Always **Save first, then Submit** — "
-                "Submit only sends grades that are already saved, so anything "
-                "typed but not saved is left behind. Save often; Submit when the "
-                "term's grades are final.",
+                "One button saves and submits",
+                "**Save & submit grades** keeps your work and submits it in one "
+                "step. Nothing you type is kept until you press it, so press it "
+                "often — boxes you leave blank stay blank, and you can finish "
+                "the class later. Your adviser sees the grades on Grade Summary "
+                "straight away; no one else needs to approve them.",
             ),
             (
-                "Editing a submitted grade sends it back to DRAFT",
-                "That's intentional — it makes clear the grade needs submitting "
-                "again. If you change something after submitting, press **Save** "
-                "then **Submit** again.",
+                "You can still edit a submitted grade",
+                "Change the number and press **Save & submit grades** again. "
+                "Grades only lock once a learner's year is finalized; after "
+                "that, ask a Super Admin to reopen.",
+            ),
+            (
+                "A red note means some grades aren't submitted yet",
+                "Grades brought in from an Excel import, or reopened by a Super "
+                "Admin, arrive unsubmitted. Check them, then press **Save & "
+                "submit grades**.",
             ),
             (
                 "A deadline warning doesn't prevent you from encoding",
@@ -179,10 +186,14 @@ BY_ROLE = {
                 "already encoded; it never invents a grade.",
             ),
             (
-                "A red note on Grade Summary means grades are still in draft",
-                "Some grades in your section are saved but not yet submitted. "
-                "Remind the subject teachers to press **Save grades** then "
-                "**Submit all draft grades** on the Gradebook.",
+                "A red note on Grade Summary means grades aren't submitted yet",
+                "Usually grades brought in by Excel import or reopened by a "
+                "Super Admin. Remind the subject teachers to press **Save & "
+                "submit grades** on the Gradebook. You don't need to approve "
+                "anything — submitted grades are final. Once a term is "
+                "closed for encoding this turns into a blue note instead: those "
+                "grades were saved but never formally submitted, and they are "
+                "already counted in the averages, report cards and awards.",
             ),
             (
                 "A learner's grades won't finalize until their record is complete",

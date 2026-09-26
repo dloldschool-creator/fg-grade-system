@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import streamlit as st
+from sqlalchemy import func
 
 from app import audit_service
 from app.academic_record_service import capture_academic_record, get_academic_record
@@ -40,30 +41,57 @@ DASH = "—"
 
 
 def pending_submission_message(draft_count: int) -> str | None:
-    """Grade Summary's counterpart of the Gradebook's draft reminder. The
-    people reading this page don't encode — the subject teachers do — so it
-    says whom to remind rather than which button to press."""
+    """Grade Summary's counterpart of the Gradebook's draft reminder, for
+    terms still open for encoding. The people reading this page don't
+    encode — the subject teachers do — so it says whom to remind rather
+    than which button to press."""
     if draft_count <= 0:
         return None
     noun = "grade is" if draft_count == 1 else "grades are"
     return (
-        f"{draft_count} saved {noun} still in draft in this section — please "
-        "remind the subject teachers to press **Save grades** then **Submit all "
-        "draft grades** on the Gradebook."
+        f"{draft_count} {noun} not yet submitted in this section — please "
+        "remind the subject teachers to press **Save & submit grades** on the "
+        "Gradebook."
     )
 
 
-def _draft_count(session, enrollment_ids) -> int:
-    """One query for the whole section, above every per-learner loop."""
+def closed_term_drafts_message(closed: list[tuple[str, int]]) -> str | None:
+    """For drafts left in a term whose encoding is closed. Teachers can no
+    longer submit there, so a reminder to would be a standing alarm nobody
+    can clear. Drafts are already counted everywhere — no average, report
+    card or award reads the workflow status — so this says exactly that
+    rather than implying the numbers are wrong."""
+    closed = [(name, count) for name, count in closed if count > 0]
+    if not closed:
+        return None
+    total = sum(count for _name, count in closed)
+    terms = ", ".join(name for name, _count in closed)
+    noun = "grade was" if total == 1 else "grades were"
     return (
-        session.query(TermGrade)
-        .filter(
-            TermGrade.enrollment_id.in_(enrollment_ids),
-            TermGrade.status == GradeWorkflowStatus.DRAFT,
-            TermGrade.official_grade.isnot(None),
-        )
-        .count()
+        f"{total} {noun} saved but not formally submitted before encoding "
+        f"closed ({terms}). They are already counted in the averages, report "
+        "cards and awards — nothing needs to be redone."
     )
+
+
+def _draft_counts_by_term(session, enrollment_ids) -> list[tuple[str, bool, int]]:
+    """`(term name, encoding open?, drafts)` per term that has any. One
+    query for the whole section, above every per-learner loop."""
+    return [
+        (name, status == GradeEncodingStatus.OPEN, count)
+        for name, status, count in (
+            session.query(Term.name, Term.grade_encoding_status, func.count(TermGrade.id))
+            .join(Term, Term.id == TermGrade.term_id)
+            .filter(
+                TermGrade.enrollment_id.in_(enrollment_ids),
+                TermGrade.status == GradeWorkflowStatus.DRAFT,
+                TermGrade.official_grade.isnot(None),
+            )
+            .group_by(Term.name, Term.grade_encoding_status, Term.term_number)
+            .order_by(Term.term_number)
+            .all()
+        )
+    ]
 
 
 def _fmt(value):
@@ -511,9 +539,17 @@ def render() -> None:
         # each.
         panel = _panel_data(session, enrollments, sy_choice)
 
-        pending = pending_submission_message(_draft_count(session, [e.id for e in enrollments]))
+        draft_counts = _draft_counts_by_term(session, [e.id for e in enrollments])
+        pending = pending_submission_message(
+            sum(count for _name, is_open, count in draft_counts if is_open)
+        )
         if pending:
             st.markdown(f"**:red[{pending}]**")
+        closed_note = closed_term_drafts_message(
+            [(name, count) for name, is_open, count in draft_counts if not is_open]
+        )
+        if closed_note:
+            st.info(closed_note)
 
         if not current_user.is_read_only():
             col_recompute, col_finalize = st.columns(2)

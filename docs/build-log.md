@@ -1880,3 +1880,37 @@ current number.
       submitted. The harness's `launch.json` entry was removed afterwards.
       **Not yet live** — needs a Reboot in Streamlit Cloud; the footer
       should read `f8919ae` or later once it is.
+- [x] **One "Save & submit grades" button; no VERIFIED step** (2026-09-26,
+      same day as the entry above, after the user asked whether the
+      red Grade Summary line meant GATES' grades were wrong).
+      **The finding that drove it:** nothing downstream reads the workflow
+      status. `grading_service` and `award_service` compute from every saved
+      grade, DRAFT or not, so Term 1's 111 GATES drafts were already in its
+      averages, report cards and certificates. A read-only re-judge of all
+      1,723 stored award rows against current data (via `award_service._evaluate`,
+      no writes) found GATES fully consistent. It did find 39 rows in 5 other
+      sections whose result would differ today — but none because of DRAFT
+      status: FREUD 16 (Term 1 record incomplete when computed, complete
+      now), MARSHALL 11 and DUCASSE 8 (attendance encoded after compute),
+      ARISTOTLE 1 (a grade raised 89 → 90+ after compute), and 3 in FREUD /
+      ERIKSON from **cleared overrides** — `clear_award_override` resets
+      `is_override` but leaves the overridden result standing until the next
+      Compute. Reported to the user; not fixed here.
+      **Decision (user):** Submit alone is the sign-off, no adviser
+      verification. Rule 7 and spec §45 (and §76 step 11) amended with
+      approval: DRAFT → SUBMITTED → FINALIZED. The Gradebook's two buttons
+      became one, `SUBMIT_BUTTON_LABEL = "Save & submit grades"` — named for
+      saving so teachers press it often (the 60-minute idle sign-out loses
+      unsaved typing). A new or changed grade is written as SUBMITTED with
+      `submitted_by/at`; an unchanged DRAFT with a value (import, reopen, or
+      a Term 1 leftover) is submitted with a `GRADE_SUBMITTED` audit; a
+      grade blanked back to not-yet-encoded goes to DRAFT. Blank boxes are
+      skipped, so a half-done class can be submitted and finished later.
+      **Grade Summary, closed terms:** drafts in a term closed for encoding
+      now show a blue note ("saved but not formally submitted … already
+      counted … nothing needs to be redone") instead of the red reminder,
+      which nobody could clear once teachers can't submit. `_draft_counts_by_term`
+      is still one grouped query above the per-learner loop.
+      Verified in the preview harness, viewing only: every term was closed,
+      so the harness remapped `GradeEncodingStatus.OPEN` to CLOSED in memory
+      to render the form. Full suite green (1284 passed, 14 skipped).

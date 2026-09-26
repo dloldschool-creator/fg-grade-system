@@ -35,27 +35,46 @@ ROSTER_STATUSES = {
 }
 
 
-# Shown by the buttons on every render. Unlike Attendance's grid, the grade
-# boxes live inside st.form, which sends nothing to the server until a button
-# is pressed — so there is no live moment to detect "you typed something"
-# and this has to be a standing reminder rather than a conditional one.
-# Submit also ignores whatever is typed but unsaved, hence "Save first".
-SAVE_THEN_SUBMIT_REMINDER = (
-    "✏️ Made changes? Press **Save grades** first so your work isn't lost, "
-    "then **Submit all draft grades** when the class is ready to turn in."
+# One button saves and submits (decided 2026-09-26). The two-button version
+# left grades saved-but-never-submitted in 20 sections by the time Term 1
+# closed, and nothing downstream reads the difference: averages, report
+# cards and awards count every saved grade, and there is no VERIFIED step
+# for SUBMITTED to hand on to. Shown on every render because the boxes are
+# inside st.form, which sends nothing to the server until the button is
+# pressed — there is no live moment to detect "you typed something".
+SUBMIT_BUTTON_LABEL = "Save & submit grades"
+SUBMIT_REMINDER = (
+    "✏️ Your changes aren't kept until you press **Save & submit grades**. "
+    "Press it as often as you like — blank boxes stay blank, so you can "
+    "finish the class later. If you edit a grade afterward, press it again."
 )
 
 
 def pending_submission_message(draft_count: int) -> str | None:
-    """The red nudge for grades that are saved but not yet submitted, or
-    None when there are none. Split out so the wording is testable."""
+    """The red nudge for grades sitting in DRAFT — which, with one button,
+    only happens to grades brought in by the Excel import or reopened by a
+    Super Admin. None when there are none. Split out so the wording is
+    testable."""
     if draft_count <= 0:
         return None
     noun = "grade is" if draft_count == 1 else "grades are"
     return (
-        f"{draft_count} saved {noun} still in draft — don't forget to press "
-        "**Submit all draft grades** once you're done checking them."
+        f"{draft_count} {noun} not yet submitted — "
+        f"check them, then press **{SUBMIT_BUTTON_LABEL}**."
     )
+
+
+def submit_result_message(changed: int, submitted_unchanged: int) -> str:
+    """What the teacher sees after pressing the one button."""
+    if not changed and not submitted_unchanged:
+        return "No changes — everything here is already submitted."
+    parts = []
+    if changed:
+        parts.append(f"Saved and submitted {changed} grade(s).")
+    if submitted_unchanged:
+        parts.append(f"Submitted {submitted_unchanged} grade(s) that were saved earlier but not yet submitted.")
+    parts.append(f"If you edit any of them later, press {SUBMIT_BUTTON_LABEL} again.")
+    return " ".join(parts)
 
 
 def _round_grade(value: float | None) -> Decimal | None:
@@ -276,9 +295,9 @@ def render() -> None:
         )
 
         st.caption(
-            "You can still edit a grade after submitting — doing so puts it back to "
-            "DRAFT, so remember to press **Save** then **Submit** again. Once a grade is verified or "
-            "finalized it locks; ask a Super Admin if one needs reopening."
+            "You can still edit a grade after submitting — just press **Save & "
+            "submit grades** again. Once a learner's year is finalized their "
+            "grades lock; ask a Super Admin if one needs reopening."
         )
 
         with st.form("gradebook_form"):
@@ -384,7 +403,7 @@ def render() -> None:
                     grade_inputs[enrollment.id] = (number_value, clear, reason)
                     col5.caption(existing.status.value.lower() if existing else "not yet encoded")
 
-            st.info(SAVE_THEN_SUBMIT_REMINDER)
+            st.info(SUBMIT_REMINDER)
             pending = pending_submission_message(
                 sum(
                     1
@@ -396,16 +415,15 @@ def render() -> None:
             )
             if pending:
                 st.markdown(f"**:red[{pending}]**")
-            save = st.form_submit_button("Save grades")
-            submit = st.form_submit_button("Submit all draft grades")
+            submit = st.form_submit_button(SUBMIT_BUTTON_LABEL, type="primary")
 
-            if save:
+            if submit:
                 # §50: blanking is the one edit here with no other trace of
                 # *why* — a typed-over grade still has the old number in the
                 # audit log, but a blank tells you nothing on its own about
                 # whether it's a dropout, a transfer, or a typo undone. Checked
                 # before anything is written, so a missing reason blocks the
-                # whole save rather than silently skipping just that row.
+                # whole submit rather than silently skipping just that row.
                 missing_reason = [
                     learner_names.get(enrollment_id, "?")
                     for enrollment_id, (_raw_value, clear, reason) in grade_inputs.items()
@@ -416,12 +434,19 @@ def render() -> None:
                         "error",
                         "Ticked Blank but no reason given for: "
                         + ", ".join(missing_reason)
-                        + ". Fill in why before saving.",
+                        + ". Fill in why, then press the button again.",
                     )
                     st.rerun()
 
+                now = datetime.now(timezone.utc)
+
+                def _mark_submitted(row) -> None:
+                    row.status = GradeWorkflowStatus.SUBMITTED
+                    row.submitted_by_user_id = current_user.id
+                    row.submitted_at = now
+
                 changed = 0
-                reverted = 0
+                submitted_unchanged = 0
                 touched_enrollment_ids = []
                 # (row, action, previous, new, reason) — recorded after one
                 # flush below, since a brand-new row has no id until then.
@@ -441,11 +466,19 @@ def render() -> None:
                             section_subject_offering_id=offering.id,
                             term_id=term.id,
                             official_grade=grade_value,
-                            status=GradeWorkflowStatus.DRAFT,
+                            status=GradeWorkflowStatus.SUBMITTED,
+                            submitted_by_user_id=current_user.id,
+                            submitted_at=now,
                         )
                         session.add(created)
                         pending_audits.append(
-                            (created, audit_service.GRADE_CREATED, None, {"official_grade": grade_value}, None)
+                            (
+                                created,
+                                audit_service.GRADE_CREATED,
+                                None,
+                                {"official_grade": grade_value, "status": GradeWorkflowStatus.SUBMITTED},
+                                None,
+                            )
                         )
                         changed += 1
                         touched_enrollment_ids.append(enrollment_id)
@@ -457,9 +490,12 @@ def render() -> None:
                             "learner": learner_names.get(enrollment_id),
                         }
                         existing.official_grade = grade_value
-                        if existing.status == GradeWorkflowStatus.SUBMITTED:
+                        if grade_value is None:
+                            # Blanked back to "not yet encoded" — there is
+                            # nothing left to have submitted.
                             existing.status = GradeWorkflowStatus.DRAFT
-                            reverted += 1
+                        else:
+                            _mark_submitted(existing)
                         existing.version += 1
                         pending_audits.append(
                             (
@@ -471,6 +507,27 @@ def render() -> None:
                             )
                         )
                         changed += 1
+                        touched_enrollment_ids.append(enrollment_id)
+                    elif existing.status == GradeWorkflowStatus.DRAFT and grade_value is not None:
+                        # Unchanged but never submitted — an imported grade,
+                        # or one a Super Admin reopened. Pressing the button
+                        # is the teacher confirming it.
+                        _mark_submitted(existing)
+                        existing.version += 1
+                        pending_audits.append(
+                            (
+                                existing,
+                                audit_service.GRADE_SUBMITTED,
+                                {
+                                    "status": GradeWorkflowStatus.DRAFT,
+                                    "section": section.name,
+                                    "learner": learner_names.get(enrollment_id),
+                                },
+                                {"status": GradeWorkflowStatus.SUBMITTED, "official_grade": grade_value},
+                                None,
+                            )
+                        )
+                        submitted_unchanged += 1
                         touched_enrollment_ids.append(enrollment_id)
                 try:
                     if pending_audits:
@@ -496,50 +553,8 @@ def render() -> None:
                         # pre-filled the moment the teacher types a new grade
                         # in for that learner, silently re-blanking it again.
                         clear_text_fields(f"gradebook_{offering.id}")
-                    message = f"Saved ({changed} updated)." if changed else "No changes to save."
-                    if reverted:
-                        message += f" {reverted} reverted to DRAFT for re-submission."
-                    flash("success", message)
+                    flash("success", submit_result_message(changed, submitted_unchanged))
                 except IntegrityError:
                     session.rollback()
                     flash("error", "Couldn't save — please try again.")
-                st.rerun()
-
-            if submit:
-                now = datetime.now(timezone.utc)
-                submitted_count = 0
-                touched_enrollment_ids = []
-                for enrollment_id in [e.id for e in roster]:
-                    existing = existing_grades.get(enrollment_id)
-                    if existing is not None and existing.status == GradeWorkflowStatus.DRAFT:
-                        existing.status = GradeWorkflowStatus.SUBMITTED
-                        existing.submitted_by_user_id = current_user.id
-                        existing.submitted_at = now
-                        existing.version += 1
-                        submitted_count += 1
-                        touched_enrollment_ids.append(enrollment_id)
-                        audit_service.record(
-                            session,
-                            action=audit_service.GRADE_SUBMITTED,
-                            object_type="term_grades",
-                            object_id=existing.id,
-                            user_id=current_user.id,
-                            previous={
-                                "status": GradeWorkflowStatus.DRAFT,
-                                "section": section.name,
-                                "learner": learner_names.get(enrollment_id),
-                            },
-                            new={
-                                "status": GradeWorkflowStatus.SUBMITTED,
-                                "official_grade": existing.official_grade,
-                            },
-                        )
-                session.commit()
-                recompute_enrollment_grades_batch(session, touched_enrollment_ids)
-                flash(
-                    "success",
-                    f"Submitted {submitted_count} grade(s). You can still edit them, but "
-                    "any change puts that grade back to draft, so press Save then "
-                    "Submit buttons again afterward.",
-                )
                 st.rerun()
