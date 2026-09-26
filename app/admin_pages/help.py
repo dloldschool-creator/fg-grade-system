@@ -186,14 +186,11 @@ BY_ROLE = {
                 "already encoded; it never invents a grade.",
             ),
             (
-                "A red note on Grade Summary means grades aren't submitted yet",
-                "Usually grades brought in by Excel import or reopened by a "
-                "Super Admin. Remind the subject teachers to press **Save & "
-                "submit grades** on the Gradebook. You don't need to approve "
-                "anything — submitted grades are final. Once a term is "
-                "closed for encoding this turns into a blue note instead: those "
-                "grades were saved but never formally submitted, and they are "
-                "already counted in the averages, report cards and awards.",
+                "You don't need to approve teachers' grades",
+                "A grade appears on Grade Summary as soon as the subject teacher "
+                "presses **Save & submit grades**, and it already counts in the "
+                "averages, report cards and awards. There is no separate "
+                "verification step.",
             ),
             (
                 "A learner's grades won't finalize until their record is complete",

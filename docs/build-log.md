@@ -1930,3 +1930,12 @@ current number.
       **Not repaired by this:** the three rows cleared before the fix
       (FREUD 2, ERIKSON 1) still carry their old result. Pressing Compute
       eligibility for all on those sections fixes them; no script was run.
+- [x] **Grade Summary's draft notes removed** (2026-09-26, the user's call
+      after the one-button Gradebook shipped). With saving and submitting
+      one action, the only new drafts are Excel-imported or reopened
+      grades — already counted everywhere, and already flagged to the
+      teacher on their own Gradebook, where one press clears them. So the
+      adviser-facing red line and the closed-term blue note had nothing
+      left for an adviser to do. Both gone, along with their one query per
+      page load; the Help item now says advisers don't need to approve
+      grades. The Gradebook's own reminder and red note stay.
