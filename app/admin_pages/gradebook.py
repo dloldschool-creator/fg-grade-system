@@ -277,7 +277,7 @@ def render() -> None:
 
         st.caption(
             "You can still edit a grade after submitting — doing so puts it back to "
-            "DRAFT, so remember to press Submit again. Once a grade is verified or "
+            "DRAFT, so remember to press **Save** then **Submit** again. Once a grade is verified or "
             "finalized it locks; ask a Super Admin if one needs reopening."
         )
 
