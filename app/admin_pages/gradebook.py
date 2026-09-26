@@ -45,8 +45,7 @@ ROSTER_STATUSES = {
 SUBMIT_BUTTON_LABEL = "Save & submit grades"
 SUBMIT_REMINDER = (
     "✏️ Your changes aren't kept until you press **Save & submit grades**. "
-    "Press it as often as you like — blank boxes stay blank, so you can "
-    "finish the class later. If you edit a grade afterward, press it again."
+    "If you edit grades, make sure to press **Save & submit grades** button again."
 )
 
 
