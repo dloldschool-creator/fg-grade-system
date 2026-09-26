@@ -1956,3 +1956,28 @@ current number.
       sure to press **Save & submit grades** button again." The dropped
       sentence ("press it as often as you like — blank boxes stay blank")
       is still true and still in Help under "One button saves and submits".
+- [x] **Uniform blue buttons, deadline closes encoding, wording** (2026-09-26).
+      **Buttons:** Streamlit's theme has no setting for secondary buttons,
+      so `streamlit_app.py` injects one CSS rule restyling every
+      `stBaseButton-secondary*` (plain, form-submit, download) in the
+      school blue with white text, on every page including sign-in.
+      Disabled buttons are excluded so they still read as unavailable; the
+      toolbar's `stBaseButton-header` is untouched. Checked in a browser:
+      Sign in computes to `rgb(27, 79, 156)` on white text.
+      **Deadline:** `terms.submission_deadline` was advisory — a warning
+      banner, with only the OPEN/CLOSED switch closing encoding. The user
+      decided a set deadline should close it. `gradebook.encoding_is_open`
+      requires both the switch and `days_past_deadline(...) is None`, with
+      *today* taken in `SCHOOL_TZ` (the host is UTC; `date.today()` would
+      close encoding at 8 a.m. Manila on the deadline day). Past it the
+      page is the read-only table with a message to ask a Super Admin to
+      extend the deadline; opening the term no longer overrides it — move
+      the date or tick No deadline on School Years & Terms (hint text
+      updated). The Excel grade import is not gated by the deadline. At
+      the time all three terms were CLOSED and only Term 1 had a deadline
+      (2026-09-17), so nothing changed on deploy.
+      `tests/test_gradebook_deadline.py` now pins the new rule; its old
+      "the banner must not block" test was the previous decision, removed.
+      **Wording:** sign-in note ("…change it once signed in."), Help's
+      edit-a-submitted-grade note shortened, and the deadline items in the
+      teacher and Super Admin Help sections rewritten.

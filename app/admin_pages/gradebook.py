@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from app import audit_service
 from app.admin_pages._helpers import clear_text_fields, flash, generation_key, get_session, render_flashes
 from app.auth import require_role
+from app.display_time import SCHOOL_TZ
 from app.grading_engine import round_half_up
 from app.grading_service import recompute_enrollment_grades_batch
 from app.models.academic_structure import Section
@@ -99,31 +100,28 @@ def days_past_deadline(deadline: date | None, today: date | None = None) -> int 
     return overdue if overdue > 0 else None
 
 
-def _deadline_banner(term) -> None:
-    """Warns once the submission deadline has passed.
+def encoding_is_open(status_open: bool, deadline: date | None, today: date) -> bool:
+    """Whether teachers may encode a term's grades.
 
-    `terms.submission_deadline` gates nothing — encoding is controlled
-    only by the OPEN/CLOSED toggle, and a Super Admin may leave a term
-    open well past its deadline on purpose. So this informs rather than
-    blocks: a teacher who is late should know, without being stopped from
-    doing the thing they are late with.
+    Two gates, both must pass: the term's OPEN/CLOSED switch, and — when a
+    deadline is set — the calendar. Until 2026-09-26 the deadline was
+    advisory (a warning banner) and only the switch closed encoding; the
+    school decided a set deadline should close it too. The deadline day
+    itself is still open (`days_past_deadline`). To let a late teacher
+    finish, a Super Admin moves or clears the deadline on School Years &
+    Terms — the switch alone no longer reopens a past-deadline term.
     """
-    overdue = days_past_deadline(term.submission_deadline)
-    if overdue is None:
-        if term.submission_deadline:
-            st.caption(
-                f"Submission deadline for {term.name}: "
-                f"{term.submission_deadline:%d %B %Y}."
-            )
-        return
+    return status_open and days_past_deadline(deadline, today=today) is None
 
-    st.warning(
-        f"**Past the submission deadline.** Grades for {term.name} were due "
-        f"{term.submission_deadline:%d %B %Y} — {overdue} day"
-        f"{'s' if overdue != 1 else ''} ago. Encoding is still open, so you can "
-        "save and submit as normal, but let your school head know.",
-        icon="⏰",
-    )
+
+def _deadline_banner(term) -> None:
+    """Tells teachers when encoding for an open term closes. Past the
+    deadline the page is read-only instead, with its own message."""
+    if term.submission_deadline:
+        st.caption(
+            f"Submission deadline for {term.name}: "
+            f"{term.submission_deadline:%d %B %Y}. Encoding closes after this date."
+        )
 
 
 def render() -> None:
@@ -164,12 +162,25 @@ def render() -> None:
         subject = session.get(Subject, offering.subject_id)
         term = session.get(Term, offering.term_id)
 
-        encoding_open = term.grade_encoding_status == GradeEncodingStatus.OPEN
-        if not encoding_open:
+        # The school's calendar date, not the host's: the host runs on UTC,
+        # which would close encoding at 8 a.m. Manila time on the deadline day.
+        today = datetime.now(SCHOOL_TZ).date()
+        status_open = term.grade_encoding_status == GradeEncodingStatus.OPEN
+        encoding_open = encoding_is_open(status_open, term.submission_deadline, today)
+        if not status_open:
             st.warning(
                 f"Grade encoding is CLOSED for {term.name} — ask a Super Admin to open it "
                 "on the School Years & Terms page to make changes. What you already "
                 "encoded is still shown below, read-only."
+            )
+        elif not encoding_open:
+            st.warning(
+                f"The submission deadline for {term.name} was "
+                f"{term.submission_deadline:%d %B %Y}, so encoding is closed. If you "
+                "still need to make changes, ask a Super Admin to extend the deadline "
+                "on the School Years & Terms page. What you already encoded is shown "
+                "below, read-only.",
+                icon="⏰",
             )
         else:
             _deadline_banner(term)

@@ -74,9 +74,7 @@ BY_ROLE = {
             ),
             (
                 "You can still edit a submitted grade",
-                "Change the number and press **Save & submit grades** again. "
-                "Grades only lock once a learner's year is finalized; after "
-                "that, ask a Super Admin to reopen.",
+                "Change the number and press **Save & submit grades** again.",
             ),
             (
                 "A red note means some grades aren't submitted yet",
@@ -85,17 +83,18 @@ BY_ROLE = {
                 "submit grades**.",
             ),
             (
-                "A deadline warning doesn't prevent you from encoding",
-                "If the Gradebook says you're past the submission deadline, you "
-                "can still save and submit — it's telling you, not blocking you. "
-                "What *does* stop you is encoding being closed, which is a "
-                "separate setting and says so plainly.",
+                "Encoding closes after the submission deadline",
+                "If a term has a deadline, the Gradebook shows it, and you can "
+                "encode up to and including that date. From the next day the "
+                "class is read-only. If you still need to make changes, ask a "
+                "Super Admin to extend the deadline.",
             ),
             (
                 "If you can't type anything, encoding is closed",
-                "Grade encoding is opened and closed per term by the Super "
-                "Admin. A closed term is read-only for everyone. Ask for it to "
-                "be opened rather than working around it.",
+                "Either the term's deadline has passed or a Super Admin has "
+                "closed encoding for that term; the Gradebook says which. A "
+                "closed term is read-only for everyone. Ask for it to be "
+                "opened rather than working around it.",
             ),
             (
                 "You only see your own assigned classes",
@@ -319,7 +318,10 @@ BY_ROLE = {
                 "Open the term before teachers can encode",
                 "On School Years & Terms. Closing it again makes that term "
                 "read-only school-wide, which is the safe state between "
-                "encoding periods.",
+                "encoding periods. A submission deadline, if set, also closes "
+                "encoding the day after it — opening the term does not override "
+                "that, so to let a teacher finish late, move the deadline or "
+                "tick **No deadline**.",
             ),
             (
                 "Generate the calendar, then check November and December",

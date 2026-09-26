@@ -43,6 +43,34 @@ from app.version import version_line
 
 st.set_page_config(page_title="FGNMHS Grading System", layout="wide")
 
+# Every button in the school's blue, not just the ones marked
+# type="primary" (asked for 2026-09-26: two button styles side by side read
+# as two kinds of action). Streamlit's theme has no setting for secondary
+# buttons, so this restyles them here, once, for every page including
+# sign-in. Disabled buttons keep Streamlit's greyed look — a blue disabled
+# button would read as clickable.
+st.markdown(
+    """
+    <style>
+      [data-testid^="stBaseButton-secondary"]:not(:disabled) {
+          background-color: #1B4F9C;
+          border-color: #1B4F9C;
+          color: #FFFFFF;
+      }
+      [data-testid^="stBaseButton-secondary"]:not(:disabled):hover,
+      [data-testid^="stBaseButton-secondary"]:not(:disabled):focus-visible {
+          background-color: #153E7A;
+          border-color: #153E7A;
+          color: #FFFFFF;
+      }
+      [data-testid^="stBaseButton-secondary"]:not(:disabled) p {
+          color: #FFFFFF;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # --- Navigation ------------------------------------------------------------
 #
 # One table rather than per-role blocks appending lists. Two reasons:

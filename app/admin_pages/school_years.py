@@ -71,18 +71,19 @@ def render() -> None:
                         t_end = col2.date_input(
                             "End", value=term.end_date, key=f"term_end_{term.id}"
                         )
-                        # Advisory only: nothing in the app enforces it.
-                        # Encoding is gated purely by the toggle below, so
-                        # a term can stay open long past its deadline on
-                        # purpose — the date just tells teachers they're
-                        # late, via a banner on the Gradebook.
+                        # Enforced since 2026-09-26: the day after this
+                        # date the Gradebook turns read-only even while the
+                        # toggle below says OPEN (gradebook.encoding_is_open).
+                        # Moving or clearing it is how a late teacher is let
+                        # back in.
                         deadline = st.date_input(
                             "Submission deadline (optional)",
                             value=term.submission_deadline,
                             key=f"term_deadline_{term.id}",
-                            help="Shows a 'past the deadline' warning on the Gradebook "
-                            "once it passes. It does not close encoding — use the "
-                            "setting below for that.",
+                            help="Teachers can encode up to and including this date; "
+                            "the day after, the Gradebook becomes read-only. To let "
+                            "a teacher finish late, move the date or tick 'No "
+                            "deadline'.",
                         )
                         clear_deadline = st.checkbox(
                             "No deadline for this term",

@@ -303,7 +303,7 @@ def login_form() -> None:
 
         st.caption(
             "Use the account issued to you by the school. If you were given a "
-            "temporary password, you can change it from the sidebar once signed in."
+            "temporary password, change it once signed in."
         )
         # Also shown here, not just in the sidebar: after a push the first
         # thing you see is this page, and checking whether the deploy
