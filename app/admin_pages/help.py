@@ -86,21 +86,19 @@ BY_ROLE = {
                 "Encoding closes after the submission deadline",
                 "If a term has a deadline, the Gradebook shows it, and you can "
                 "encode up to and including that date. From the next day the "
-                "class is read-only. If you still need to make changes, ask a "
-                "Super Admin to extend the deadline.",
+                "class is read-only.",
             ),
             (
                 "If you can't type anything, encoding is closed",
-                "Either the term's deadline has passed or a Super Admin has "
+                "Either the term's deadline has passed or an admin has "
                 "closed encoding for that term; the Gradebook says which. A "
-                "closed term is read-only for everyone. Ask for it to be "
-                "opened rather than working around it.",
+                "closed term is read-only for everyone.",
             ),
             (
                 "You only see your own assigned classes",
                 "If a class is missing, nobody has assigned you to it yet. Ask "
                 "**that section's adviser** — they can do it themselves on the "
-                "Teacher Assignments page — or a Super Admin.",
+                "Teacher Assignments page — or an admin.",
             ),
         ],
     ),
@@ -121,7 +119,7 @@ BY_ROLE = {
                 "A subject teacher sees a class **only** if they are assigned "
                 "to it. So when a colleague says your section isn't showing up "
                 "for them, this page is the answer — you don't need to wait for "
-                "the Super Admin.\n\n"
+                "the admin.\n\n"
                 "Because it hands out access, every assignment is recorded with "
                 "your name and the date.",
             ),
@@ -150,7 +148,7 @@ BY_ROLE = {
                 "A name only appears in the dropdown once the account exists "
                 "and carries the **Subject Teacher** role, and a subject only "
                 "appears once it is a Section Subject Offering for your "
-                "section. Both are Super Admin tasks — ask, rather than working "
+                "section. Both are admin tasks — ask, rather than working "
                 "around it.",
             ),
             (
@@ -172,8 +170,8 @@ BY_ROLE = {
             ),
             (
                 "Finalizing a month locks it",
-                "Fix everything shown in red first. After finalizing, only a "
-                "Super Admin can reopen it, and they must give a reason.",
+                "Fix everything shown in red first. After finalizing, only an "
+                "admin can reopen it, and they must give a reason.",
             ),
             (
                 "Recompute after grades change, before you print",
@@ -446,7 +444,7 @@ def render() -> None:
     st.caption(
         "Think of this as a quick guide sheet for the parts of the pages that "
         "aren't obvious. Everything else is pretty self-explanatory. Let "
-        "the super admin know if you get stuck on anything! -DL"
+        "the admin know if you get stuck on anything! -DL"
     )
     render_flashes()
 

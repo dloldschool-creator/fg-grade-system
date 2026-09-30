@@ -301,7 +301,7 @@ def _finalization_panel(
                         try_commit(session, "Reopened — attendance is editable again.")
                         st.rerun()
         else:
-            st.caption("Only a Super Admin can reopen a finalized month.")
+            st.caption("Only an admin can reopen a finalized month.")
         return
 
     report = validate_month(session, section_id, school_year_id, year, month)

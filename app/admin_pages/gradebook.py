@@ -136,7 +136,7 @@ def render() -> None:
             .all()
         )
         if not assignments:
-            st.info("You have no active teaching assignments yet — ask a Super Admin to assign you on the Teacher Assignments page.")
+            st.info("You have no active teaching assignments yet — ask an admin to assign you on the Teacher Assignments page.")
             return
 
         offering_by_id = {}
@@ -169,17 +169,14 @@ def render() -> None:
         encoding_open = encoding_is_open(status_open, term.submission_deadline, today)
         if not status_open:
             st.warning(
-                f"Grade encoding is CLOSED for {term.name} — ask a Super Admin to open it "
-                "on the School Years & Terms page to make changes. What you already "
+                f"Grade encoding is CLOSED for {term.name}. What you already "
                 "encoded is still shown below, read-only."
             )
         elif not encoding_open:
             st.warning(
                 f"The submission deadline for {term.name} was "
-                f"{term.submission_deadline:%d %B %Y}, so encoding is closed. If you "
-                "still need to make changes, ask a Super Admin to extend the deadline "
-                "on the School Years & Terms page. What you already encoded is shown "
-                "below, read-only.",
+                f"{term.submission_deadline:%d %B %Y}, so encoding is closed. What "
+                "you already encoded is shown below, read-only.",
                 icon="⏰",
             )
         else:
@@ -307,7 +304,7 @@ def render() -> None:
         st.caption(
             "You can still edit a grade after submitting — just press **Save & "
             "submit grades** again. Once a learner's year is finalized their "
-            "grades lock; ask a Super Admin if one needs reopening."
+            "grades lock."
         )
 
         with st.form("gradebook_form"):

@@ -496,7 +496,7 @@ def _render_my_classes(rows) -> None:
     if not rows:
         st.info(
             "You have no active teaching assignments in this school year. "
-            "A Super Admin or your adviser assigns classes on the Teacher "
+            "An admin or your adviser assigns classes on the Teacher "
             "Assignments page."
         )
         return
