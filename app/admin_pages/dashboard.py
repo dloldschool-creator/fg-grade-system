@@ -252,7 +252,7 @@ def _attendance_status(session, sy_id) -> list[dict]:
 
 def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
-    st.title("School Dashboard")
+    st.title("Dashboard")
     st.caption(
         "This page is for viewing data only."
     )
