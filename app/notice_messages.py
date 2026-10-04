@@ -81,7 +81,7 @@ def term_card_email(ctx: NoticeContext) -> tuple[str, str]:
         "---\n\n"
         "Magandang araw po!\n\n"
         f"Kalakip po nito ang pansamantalang report card ni {ctx.learner_prose} ng "
-        f"{ctx.grade_section} para sa {ctx.term_name}, Taong Panuruan "
+        f"{ctx.grade_section} para sa {ctx.term_name}, School Year "
         f"{ctx.school_year_dashed}. Para sa privacy ng inyong anak, may password po ang "
         "file: ang kaarawan ng inyong anak sa anyong YYYYMMDD. Halimbawa, kung "
         "Marso 5, 2009, ilagay ang 20090305. Kung may katanungan po, i-reply lamang "
@@ -321,7 +321,7 @@ def letter_paragraphs(ctx: NoticeContext, meeting) -> dict:
         "salutation_fil": f"Mahal na Magulang/Tagapag-alaga ni {ctx.learner_upper},",
         "body_fil": (
             "Nais po naming makausap kayo tungkol sa progreso ng inyong anak sa "
-            f"{ctx.term_name} ng Taong Panuruan {ctx.school_year_dashed} "
+            f"{ctx.term_name} ng School Year {ctx.school_year_dashed} "
             f"({ctx.grade_section}). Magalang po naming hinihiling na kayo ay pumunta sa "
             f"paaralan sa {date_long_fil(day)}, {time_fil(at)} upang makausap ako, ang "
             "tagapayo ng klase. Kung hindi po kayo makararating, mangyari pong isulat sa "

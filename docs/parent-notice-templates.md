@@ -47,7 +47,7 @@ prose and UPPERCASE where marked. `{first}` is their first name. Also
 >
 > Magandang araw po!
 >
-> Kalakip po nito ang pansamantalang report card ni **{learner}** ng {grade_section} para sa {term}, Taong Panuruan {sy}. Para sa privacy ng inyong anak, may password po ang file: ang **kaarawan ng inyong anak sa anyong YYYYMMDD**. Halimbawa, kung Marso 5, 2009, ilagay ang 20090305. Kung may katanungan po, i-reply lamang ang email na ito.
+> Kalakip po nito ang pansamantalang report card ni **{learner}** ng {grade_section} para sa {term}, School Year {sy}. Para sa privacy ng inyong anak, may password po ang file: ang **kaarawan ng inyong anak sa anyong YYYYMMDD**. Halimbawa, kung Marso 5, 2009, ilagay ang 20090305. Kung may katanungan po, i-reply lamang ang email na ito.
 >
 > {adviser}
 > Class Adviser / Tagapayo ng Klase, {section}
@@ -112,7 +112,7 @@ the default.
 >
 > Mahal na Magulang/Tagapag-alaga ni **{LEARNER}**,
 >
-> Nais po naming makausap kayo tungkol sa progreso ng inyong anak sa **{term}** ng Taong Panuruan {sy} ({grade_section}). Magalang po naming hinihiling na kayo ay pumunta sa paaralan sa **{date_long_fil}, {time_fil}** upang makausap ako, ang tagapayo ng klase. Kung hindi po kayo makararating, mangyari pong isulat sa ibabang bahagi ang nais ninyong araw at oras.
+> Nais po naming makausap kayo tungkol sa progreso ng inyong anak sa **{term}** ng School Year {sy} ({grade_section}). Magalang po naming hinihiling na kayo ay pumunta sa paaralan sa **{date_long_fil}, {time_fil}** upang makausap ako, ang tagapayo ng klase. Kung hindi po kayo makararating, mangyari pong isulat sa ibabang bahagi ang nais ninyong araw at oras.
 >
 > Respectfully / Lubos na gumagalang,
 > **{adviser_upper}**, Class Adviser / Tagapayo ng Klase

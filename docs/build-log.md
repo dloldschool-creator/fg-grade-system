@@ -2285,3 +2285,9 @@ current number.
       of the mailer, the encrypted PDF and the wording on the real host.
       Still unverified: the `sms:` link on a phone, a printed letter, and a
       real (non-test) send.
+- [x] **SMS link verified; wording change** (2026-10-04, user). The `sms:` link
+      opened the messaging app with number and text filled in on the user's
+      phone and through Phone Link on a laptop. In the Filipino half of the
+      term-card email and the letter, "Taong Panuruan" is now "School Year"
+      (the user's wording), in `app/notice_messages.py` and
+      `docs/parent-notice-templates.md`.

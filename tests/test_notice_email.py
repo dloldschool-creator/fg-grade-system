@@ -42,7 +42,7 @@ def test_the_body_is_english_then_filipino_and_states_only_the_password_format()
     _, body = term_card_email(CTX)
     english, filipino = body.split("\n---\n")
     assert english.startswith("Good day!") and "Juan Dela Cruz of Grade 11 – BEZOS" in english
-    assert "Magandang araw po!" in filipino and "Taong Panuruan 2026–2027" in filipino
+    assert "Magandang araw po!" in filipino and "School Year 2026–2027" in filipino
     assert "YYYYMMDD" in english and "YYYYMMDD" in filipino
     assert "Maria Santos\nClass Adviser / Tagapayo ng Klase, 11-BEZOS" in body
 
