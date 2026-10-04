@@ -2271,3 +2271,10 @@ current number.
       two widgets share a key. It reproduces the crash without the fix.
       The lesson for any per-row form: render the page with real rows
       before shipping, not just the save function.
+- [x] **Deploy state** (2026-10-04): live app rebooted onto `381ca3f`
+      (footer confirmed by the user), so all four steps of spec §78
+      (parent notices) are now running. Database migrations through
+      `a1d7e3c95f28` are applied. Not yet configured: `NOTICE_EMAIL_*` secrets
+      (emailing shows "isn't set up"). Not yet verified in a browser by
+      anyone: Parent Notices, the contact form/upload, the `sms:` link on a
+      phone, and a printed letter.
