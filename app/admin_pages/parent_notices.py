@@ -166,9 +166,7 @@ def _section_meeting_form(session, section, term, data, current_user) -> None:
 
 
 def _override_form(session, section, term, data, current_user) -> None:
-    candidates = [
-        row for row in data.rows if may_override(row.computed, record_complete=not row.incomplete)
-    ]
+    candidates = [row for row in data.rows if may_override(row.computed)]
     if not candidates:
         return
     st.subheader("Override a learner")
@@ -343,9 +341,7 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool,
             icon="✉️",
         )
         return
-    if kind == notices.TERM_CARD and notices.term_encoding_open(
-        term, datetime.now(SCHOOL_TZ).date()
-    ):
+    if kind == notices.TERM_CARD and data.encoding_open:
         st.warning(
             f"Grades for {term.name} can still be changed, so who belongs in which "
             "group isn't final yet. Emails open once encoding for the term has closed."
@@ -512,7 +508,7 @@ def _letters_panel(session, section, term, data, current_user) -> None:
     if not concern:
         return
     st.subheader("Print letters")
-    concern = [row for row in concern if not row.concern_held]
+    concern = notices.contactable_concern(concern)
     if not concern:
         st.caption("No learner in Concern can be contacted yet.")
         return
@@ -712,8 +708,9 @@ def render() -> None:
             if held:
                 st.info(
                     f"Grades for {term.name} can still be changed, so {len(held)} "
-                    "learner(s) in Concern for a grade, not attendance, wait until "
-                    "encoding closes. Attendance concerns can be contacted now."
+                    "learner(s) in Concern for a grade or by override, not for "
+                    "attendance, wait until encoding closes. Attendance concerns "
+                    "can be contacted now."
                 )
             _email_panel(
                 session, section, term, data, current_user,

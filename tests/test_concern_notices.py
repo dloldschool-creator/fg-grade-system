@@ -227,6 +227,40 @@ def test_only_attendance_concerns_go_out_while_encoding_is_open(attendance, enco
         ) == (None, [])
 
 
+def test_a_held_learner_already_emailed_still_reads_as_emailed():
+    """A re-send can wait, but the table must not hide that the parent
+    was already contacted."""
+    from datetime import datetime
+
+    from app import parent_notice_service as notices
+
+    row = _held_row(attendance=False, encoding_open=True)
+    row.notifications = [SimpleNamespace(
+        kind=notices.CONCERN, channel="EMAIL", status="SENT", recipient="parent@example.com",
+        sent_at=datetime(2026, 10, 5, 1, 0), basis_at=None,  # announced no meeting
+    )]
+    status = notices.concern_email_status(row)
+    assert not status.sendable
+    assert status.label.startswith("sent Oct 05")
+
+
+def test_a_term_card_never_goes_out_on_an_incomplete_record():
+    """An override can put an early attendance concern in Release; the card
+    would carry blanks, so the email waits for the record."""
+    from app import parent_notice_service as notices
+    from app.notice_rules import NoticeGroup
+
+    learner = SimpleNamespace(notices_consent=True, guardian_email="parent@example.com")
+    row = notices.NoticeRow(
+        enrollment_id=None, learner=learner, figures=None,
+        computed=NoticeGroup.CONCERN, reasons=("3 absences",), group=NoticeGroup.RELEASE,
+        incomplete=("2 attendance days not encoded",), override_decision=NoticeGroup.RELEASE,
+    )
+    status = notices.card_email_status(row)
+    assert not status.sendable
+    assert status.label == "record incomplete: 2 attendance days not encoded"
+
+
 def test_the_page_no_longer_gates_every_concern_channel_on_encoding():
     """The one page-level gate became the per-learner `concern_held`; a
     page gate back in front of the panels would hide attendance concerns."""

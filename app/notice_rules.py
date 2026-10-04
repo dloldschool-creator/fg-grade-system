@@ -14,9 +14,11 @@ merely because nothing *bad* has been encoded yet.
 Encoding more days can only add to a count, so 3 absences on the days
 encoded so far is 3 or more however the rest turn out. Such a learner is
 Concern at once, which is what lets the adviser contact the parent during
-the term. The missing items are still carried (`incomplete`), and while
-any remain the learner can't be overridden — overriding them to Release
-would email a card with blanks on it.
+the term. The missing items are still carried (`incomplete`). Such a
+learner can still be overridden — an adviser excusing medically certified
+absences mid-term is the ordinary case — and the term-card email refuses
+an incomplete record itself (`parent_notice_service.email_status`), so a
+card with blanks on it is never sent.
 """
 
 import enum
@@ -134,18 +136,17 @@ def classify(figures: LearnerTermFigures, thresholds: NoticeThresholds) -> Class
     return Classification(NoticeGroup.RELEASE, ())
 
 
-def effective_group(
-    computed: NoticeGroup, override: NoticeGroup | None, *, record_complete: bool = True
-) -> NoticeGroup:
+def effective_group(computed: NoticeGroup, override: NoticeGroup | None) -> NoticeGroup:
     """An adviser's override moves a learner between Release and Concern
-    (§78.3). It never applies to an incomplete record — Not ready, or
-    Concern on attendance with grades or days still missing — and while
-    the record is incomplete the override waits rather than being
-    discarded, so it applies again once the record is complete."""
-    if computed is NoticeGroup.NOT_READY or override is None or not record_complete:
+    (§78.3). It never lifts Not ready — the missing grades or attendance
+    have to be completed first — and while the learner is Not ready the
+    override waits rather than being discarded, so it applies again once
+    the learner is grouped. An attendance concern on an incomplete record
+    *is* grouped, so its override applies."""
+    if computed is NoticeGroup.NOT_READY or override is None:
         return computed
     return override
 
 
-def may_override(computed: NoticeGroup, record_complete: bool = True) -> bool:
-    return computed is not NoticeGroup.NOT_READY and record_complete
+def may_override(computed: NoticeGroup) -> bool:
+    return computed is not NoticeGroup.NOT_READY

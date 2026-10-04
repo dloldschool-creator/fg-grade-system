@@ -173,6 +173,10 @@ class SectionNotices:
     # class day (transferred out, dropped). Counted, not classified.
     left_before_term_end: int = 0
     section_meeting: Meeting | None = None
+    # The term's grade encoding was open when this was loaded. Read by the
+    # page for the term-card gate and copied onto each row for the
+    # row-based senders, so both gates read one value.
+    encoding_open: bool = False
 
     def in_group(self, group: NoticeGroup) -> list[NoticeRow]:
         return [row for row in self.rows if row.group is group]
@@ -216,7 +220,10 @@ def load_section_notices(session, section, term: Term, today: date | None = None
     )
     day_by_id = {day_id: day for day_id, day in class_days}
     all_days = [day for _, day in class_days]
-    result = SectionNotices(term=term, thresholds=thresholds, class_day_count=len(all_days))
+    result = SectionNotices(
+        term=term, thresholds=thresholds, class_day_count=len(all_days),
+        encoding_open=encoding_open,
+    )
 
     enrollments = (
         session.query(Enrollment)
@@ -363,9 +370,7 @@ def load_section_notices(session, section, term: Term, today: date | None = None
                 figures=figures,
                 computed=computed,
                 reasons=reasons,
-                group=effective_group(
-                    computed, override_decision, record_complete=not incomplete
-                ),
+                group=effective_group(computed, override_decision),
                 incomplete=incomplete,
                 attendance_concern=on_attendance,
                 encoding_open=encoding_open,
@@ -533,10 +538,19 @@ def email_status(row: NoticeRow, kind: str, now: datetime | None = None) -> Emai
         if _is_stuck(live, now or _utcnow()):
             return EmailStatus(False, "interrupted — may have gone out")
         return EmailStatus(False, "sending…")
-    # Held only blocks a *new* send; one already sent still reads as sent.
+    # Held only blocks a *new* send; one already sent still says it was.
     held = kind == CONCERN and row.concern_held
-    if held and (live is None or row.concern_is_outdated()):
+    if held and live is None:
         return EmailStatus(False, held)
+    if held and row.concern_is_outdated():
+        when = _naive_utc(live.sent_at)
+        return EmailStatus(
+            False, f"sent{f' {when:%b %d}' if when else ''}; meeting changed, re-send {held}"
+        )
+    # An override can put an incomplete record in Release; its card would
+    # carry blanks, so it waits for the record (§78.2, rule 2).
+    if kind == TERM_CARD and row.incomplete and (live is None or row.card_is_outdated()):
+        return EmailStatus(False, "record incomplete: " + "; ".join(row.incomplete))
     if not row.learner.notices_consent:
         return EmailStatus(False, "no consent on file")
     if not row.learner.guardian_email:
@@ -883,6 +897,11 @@ def release_stuck_sends(session, rows, *, term_id, user_id, kind=TERM_CARD) -> i
 # --- Text messages and letters (§78.5) ----------------------------------------
 
 
+def contactable_concern(rows) -> list[NoticeRow]:
+    """Concern learners whose parents may be contacted now (§78.5)."""
+    return [r for r in rows if r.group is NoticeGroup.CONCERN and not r.concern_held]
+
+
 def sms_status(row: NoticeRow) -> str | None:
     """Why this Concern learner's parent can't be texted, or None if they can."""
     if row.group is not NoticeGroup.CONCERN:
@@ -949,9 +968,7 @@ def build_concern_letters(session, section, term, rows, *, adviser, user_id, tod
     from app.models.organization import School
     from app.notice_messages import date_plain_en, letter_paragraphs
 
-    printable = [
-        r for r in rows if r.group is NoticeGroup.CONCERN and r.meeting and not r.concern_held
-    ]
+    printable = [r for r in contactable_concern(rows) if r.meeting]
     if not printable:
         return None, []
     school = session.query(School).one_or_none()

@@ -2302,10 +2302,14 @@ current number.
         (shown as "Still missing" on the Concern table). A failing count is
         only read off a complete grade record, so an early concern never
         names one from a partial summary.
-      - **No override on an incomplete record.** Overriding an early
-        attendance concern to Release would email a term card with blanks
-        on it; `may_override`/`effective_group` take `record_complete`, and
-        the override waits as it does for Not ready.
+      - **Overrides still apply to an early concern** (changed after
+        review, same day). The first version refused them on an incomplete
+        record, which mid-term is every record, so an adviser couldn't
+        excuse medically certified absences until the term ended, and a
+        Release override saved earlier was silently dropped when a record
+        went incomplete again. The guard moved to where the risk is:
+        `email_status(TERM_CARD)` refuses a row with `incomplete` set
+        ("record incomplete: ..."), so a card with blanks is never sent.
       - **The page-wide encoding gate became `NoticeRow.concern_held`**:
         attendance concerns can be emailed, texted and lettered at once;
         a grade-only (or override-only) concern waits for encoding to
@@ -2319,3 +2323,11 @@ current number.
       - Read-only tally on the live data: Term 1 Concern goes from 59 to
         200 — 141 learners are over an attendance limit on the days
         already encoded while their record is otherwise incomplete.
+      - Review fixes (same day): a held learner whose concern email already
+        went out reads "sent Oct 05; meeting changed, re-send waits..."
+        rather than hiding the send; the held note names overrides too;
+        `encoding_open` lives on `SectionNotices` and the page reads it for
+        the term-card gate (one clock); `contactable_concern()` is the one
+        filter for the letters panel and builder; and a database test
+        checks every loaded row against `classify` so a loader that stops
+        filling a field fails a test.

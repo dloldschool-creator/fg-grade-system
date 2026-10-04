@@ -99,6 +99,29 @@ def test_loading_a_section_is_a_fixed_handful_of_queries(session, section_term):
     assert counter.count <= 12, f"{counter.count} queries for {len(data.rows)} learners"
 
 
+def test_each_row_carries_the_rule_and_the_encoding_state_it_was_loaded_with(
+    session, section_term
+):
+    """The senders read `incomplete`, `attendance_concern` and
+    `encoding_open` off the row; a loader that stopped filling one would
+    default it silently and every pure test would still pass."""
+    from app.notice_rules import classify
+
+    section, term = section_term
+    today = date(2026, 10, 4)
+    data = notices.load_section_notices(session, section, term, today=today)
+    assert data.encoding_open == notices.term_encoding_open(term, today)
+    assert data.rows, "expected learners on the roll"
+    for row in data.rows:
+        assert row.encoding_open == data.encoding_open
+        expected = classify(row.figures, data.thresholds)
+        assert (row.computed, row.reasons) == (expected.group, expected.reasons)
+        assert row.incomplete == expected.incomplete
+        assert row.attendance_concern == expected.attendance_concern
+        if row.override_decision is None:
+            assert row.group is row.computed
+
+
 def test_everyone_enrolled_is_grouped_or_counted_as_having_left(session, section_term):
     section, term = section_term
     data = notices.load_section_notices(session, section, term)
@@ -114,10 +137,7 @@ def test_everyone_enrolled_is_grouped_or_counted_as_having_left(session, section
 def test_an_override_moves_the_learner_and_is_audited_with_its_reason(session, section_term):
     section, term = section_term
     data = notices.load_section_notices(session, section, term)
-    row = next(
-        (r for r in data.rows if may_override(r.computed, record_complete=not r.incomplete)),
-        None,
-    )
+    row = next((r for r in data.rows if may_override(r.computed)), None)
     if row is None:
         pytest.skip("nobody in this section is ready to be grouped yet")
     target = NoticeGroup.CONCERN if row.computed is NoticeGroup.RELEASE else NoticeGroup.RELEASE

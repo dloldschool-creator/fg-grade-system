@@ -161,12 +161,9 @@ def test_the_policy_reads_back_in_plain_words():
     )
 
 
-def test_an_incomplete_record_cannot_be_overridden():
-    """Overriding an early attendance concern to Release would email a
-    term card with blanks on it; the override waits instead."""
-    assert not may_override(NoticeGroup.CONCERN, record_complete=False)
-    assert (
-        effective_group(NoticeGroup.CONCERN, NoticeGroup.RELEASE, record_complete=False)
-        is NoticeGroup.CONCERN
-    )
-    assert may_override(NoticeGroup.CONCERN, record_complete=True)
+def test_an_early_attendance_concern_can_be_overridden():
+    """An adviser excusing medically certified absences mid-term is the
+    ordinary case; the term-card email, not the override, guards against
+    a card with blanks (tested in test_concern_notices)."""
+    assert may_override(NoticeGroup.CONCERN)
+    assert effective_group(NoticeGroup.CONCERN, NoticeGroup.RELEASE) is NoticeGroup.RELEASE
