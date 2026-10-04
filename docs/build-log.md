@@ -2062,6 +2062,23 @@ current number.
              consent date is decided, shared with the contact import. A
              re-saved form keeps the date consent was first recorded.
            - `import_specs` imports back in isort order.
+      **Message wording approved** (2026-10-04) and kept in
+      `docs/parent-notice-templates.md`, the source text for steps 3–4:
+      - Emails and the letter are bilingual, English then Filipino.
+      - An SMS is one language, the adviser's pick, defaulting to
+        Filipino; both would be about three texts.
+      - No adviser mobile number; the letter is signed by the adviser
+        only.
+      - "progreso", not "pag-unlad".
+      - **The letter carries an exact meeting date and time**, set once
+        per section and term and changeable per learner. The letter
+        can't print without one. The concern email and SMS include it
+        when set.
+
+        That means a small table (section, term, meeting datetime, plus
+        a per-enrollment override) in step 2 or 3, so it's another
+        additive migration. Spec §78.5 doesn't mention the schedule or
+        the languages yet, and amending it needs the user's approval.
       2. Classification and overrides page, preview only with nothing
          sent; check it against real Term 1 data.
       3. Term-card email.
