@@ -459,6 +459,10 @@ Stable identity, independent of any single year's enrollment.
 | sex | ENUM(`MALE`,`FEMALE`) NOT NULL | |
 | birthdate | DATE NOT NULL | |
 | created_by_user_id | UUID FK → users NULL ON DELETE SET NULL | who typed this learner in (`a7d2e91c4b60`) |
+| guardian_name, guardian_email | TEXT NULL | parent/guardian contact, spec §78.1 (`d8b3f5a17c24`) |
+| guardian_mobile | VARCHAR(13) NULL | normalised `+639XXXXXXXXX`; CHECK `ck_learners_guardian_mobile_format` |
+| notices_consent | BOOLEAN NOT NULL DEFAULT false | nothing is sent electronically unless true |
+| notices_consent_date | DATE NULL | set when consent is ticked, in school time; cleared when unticked |
 | created_at, updated_at | TIMESTAMPTZ | |
 
 `created_by_user_id` is what decides who may edit a learner who is

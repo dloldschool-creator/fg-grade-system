@@ -150,6 +150,8 @@ class ReportReadiness(str, enum.Enum):
 
 class ImportJobType(str, enum.Enum):
     LEARNERS = "LEARNERS"
+    # Parent/guardian contacts for existing learners, matched by LRN (§78.1).
+    LEARNER_CONTACTS = "LEARNER_CONTACTS"
     SUBJECT_CATALOG = "SUBJECT_CATALOG"
     SUBJECT_PROFILES = "SUBJECT_PROFILES"
     TERM_GRADES = "TERM_GRADES"

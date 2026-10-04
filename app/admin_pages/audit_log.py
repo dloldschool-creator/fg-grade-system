@@ -67,6 +67,7 @@ ACTION_GROUPS = {
         audit_service.LEARNER_CHANGED,
         audit_service.LEARNER_DELETED,
         audit_service.LEARNER_ADMISSION_CHANGED,
+        audit_service.LEARNER_CONTACT_CHANGED,
         audit_service.LEARNER_MOVEMENT_RECORDED,
     ],
     "Configuration": [

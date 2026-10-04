@@ -64,6 +64,11 @@ class RowError:
 class ValidationResult:
     parsed: list[dict] = field(default_factory=list)
     errors: list[RowError] = field(default_factory=list)
+    # A value that couldn't be read in an *optional* column, where refusing
+    # the row would cost more than the value is worth — the row still
+    # imports with that field left blank, and the page says so. Never
+    # used for anything an official record is printed from.
+    warnings: list[RowError] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -71,6 +76,9 @@ class ValidationResult:
 
     def error_dicts(self) -> list[dict]:
         return [e.as_dict() for e in self.errors]
+
+    def warning_dicts(self) -> list[dict]:
+        return [w.as_dict() for w in self.warnings]
 
 
 @dataclass

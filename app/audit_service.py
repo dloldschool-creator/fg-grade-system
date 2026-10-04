@@ -65,6 +65,10 @@ LEARNER_DELETED = "LEARNER_DELETED"
 # name looks wrong, and filing both under one action would mean scrolling
 # through spelling corrections to find it.
 LEARNER_ADMISSION_CHANGED = "LEARNER_ADMISSION_CHANGED"
+# Parent/guardian contact and notice consent (§78.1). Its own action
+# because it answers its own question — who changed where a learner's
+# term card gets emailed, and who recorded the parent's consent to it.
+LEARNER_CONTACT_CHANGED = "LEARNER_CONTACT_CHANGED"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
 # An irregular learner's substitute subject (app/models/subjects.py's
 # EnrollmentSubjectOverride) changes which subject counts toward their

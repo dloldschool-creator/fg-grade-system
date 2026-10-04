@@ -3023,3 +3023,74 @@ SF4 aggregates every learner in the school. Its data access must not scale with 
 SF5-A and SF5-B are **not** covered by this specification. Both are structured around 1st and 2nd semesters, which cannot be filled honestly from a three-term school year. They are deferred pending an updated form from the Schools Division.
 
 Note that SF5-A carries its own guidelines and indicator definitions inside the template (Complete/Incomplete, Regular/Irregular, and the exclusion of learners who are No Longer in School). Those definitions are authoritative when the form is eventually built and must not be re-derived.
+
+---
+
+# 78. PARENT NOTICES
+
+Added 2026-10-04 with approval. Numbered 78 so that every existing section reference stays valid.
+
+Per term, the adviser either **releases** a learner's temporary term card (§39) to the parent/guardian by email, or sends a **concern notice** asking the parent to contact the school. Concern notices go by email, by SMS from the adviser's own phone, or as a printed letter.
+
+## 78.1 Parent/guardian contact
+
+Each learner record carries one parent/guardian contact:
+
+- name;
+- email address;
+- mobile number — stored as **text**, validated as a Philippine mobile number (`09XXXXXXXXX`, stored normalised as `+639XXXXXXXXX`);
+- consent to receive school notices by email/SMS, with the date it was recorded.
+
+Editable by the adviser for their own learners (§3C) and by the registrar; importable through the Learner Masterlist upload. Every change is audit-logged (§50). A learner with no email address can still receive a printed letter or an SMS. With no consent recorded, nothing is sent electronically.
+
+## 78.2 Classification
+
+For the selected section and term, every learner on the roll on the term's last class day falls into **exactly one** of three groups:
+
+| Group | Rule |
+|---|---|
+| **Release** | No failing term grade, **and** at most 2 ABSENT days, **and** at most 2 LATE days, **and** no CUTTING |
+| **Concern** | Any failing term grade, **or** 3 or more ABSENT days, **or** 3 or more LATE days, **or** 1 or more CUTTING |
+| **Not ready** | Any required term grade is blank, **or** any of the learner's eligible class days in the term has no attendance mark |
+
+**Not ready is checked first.** A blank grade is not a passing grade (§65), and an unencoded day is not a day present. Without this check, a learner whose record is half-encoded would be classed as Release.
+
+- **Failing** is read from the stored term summary (`failed_subject_count`), never re-derived. That way the Grade 11 language pair and the passing mark in force for the term are honoured exactly as the term card shows them (§17, §21).
+- **Absences, lates and cuttings** are counted over the learner's **eligible** class days between the term's start and end dates (§31), using the attendance engine. Days outside the learner's active window do not count.
+- The thresholds (2 / 3 / 3 / 1) are stored in a **versioned policy record** scoped to the school year, not in code (§59, §74).
+
+## 78.3 Adviser override
+
+The adviser may move a learner from Release to Concern, or from Concern to Release. A **reason is required.** The override is stored per enrollment and term, shown beside the computed group, audit-logged, and can be cleared. Not ready cannot be overridden: the missing grades or attendance have to be completed first.
+
+## 78.4 Releasing the term card by email
+
+- Sending is only possible once the term's grade encoding is closed (deadline passed, or the term closed), so the card cannot change after it is sent.
+- One email per learner, with that learner's term card (§39 content) as a PDF attachment.
+- The PDF is **password-protected with the learner's birthdate as YYYYMMDD.** The email states the password's *format*, never its value. A learner with no birthdate on record is reported, not sent.
+- **Sender:** one school sending account (a dedicated Gmail account held by the ICT Coordinator and handed over with the role). The sender name shown is the adviser's, e.g. "Ms. Santos (FGNMHS Adviser)", and **Reply-To is the adviser's email address**, so replies go to the adviser. The adviser is **not** copied (CC/BCC) on each message; the sent record (§78.6) is their copy. The account's credentials live in the deployment's secrets, never in the database or the code.
+- Sent one section at a time, behind an explicit button, never on page render. The send must be **resumable and never duplicated**: every message is recorded as sent when it is sent, and an already-sent card is skipped on a retry, a reboot, or a second press by another user.
+- If a grade or attendance mark that the released card rests on changes after sending, the release is flagged as **outdated** on the page. It is not re-sent automatically.
+
+## 78.5 Concern notices
+
+Three channels; the adviser may use any of them for a learner:
+
+- **Email:** a general message asking the parent to contact or visit the adviser. Same sender rules as §78.4. No attachment.
+- **SMS:** sent from the adviser's **own phone**. The page provides, per learner, a link that opens the phone's messaging app with the number and message already filled in, and a copy-message button for desktop. The app records that the adviser opened it, not that the SMS was delivered.
+- **Printed letter:** a one-page letter per learner on school letterhead, with a tear-off acknowledgement slip (received by, date, signature). It can be printed for one learner or for the whole Concern group of a section as one PDF, built only on request.
+
+Concern notices on every channel are **general**. They name the learner and the term and ask the parent to contact the school. They do **not** list grades, failing subjects, or attendance counts. The adviser may edit the message text before sending.
+
+## 78.6 Record and access
+
+Every email sent, SMS link opened, and letter printed is recorded: learner, term, kind (term card / concern), channel, recipient, by whom, when, and any send error. The page shows this record per learner.
+
+- Adviser: own sections only.
+- Registrar and Super Administrator: all sections.
+- School Head: view the record only.
+- Subject teachers: no access.
+
+## 78.7 Performance
+
+Classifying a section must take a fixed handful of queries, not one per learner. PDFs are generated one learner at a time while sending and are not kept once sent. Nothing is generated or sent when the page is merely viewed.

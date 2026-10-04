@@ -26,6 +26,10 @@ class Learner(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "learners"
     __table_args__ = (
         CheckConstraint("lrn IS NULL OR lrn ~ '^[0-9]{12}$'", name="lrn_format"),
+        CheckConstraint(
+            "guardian_mobile IS NULL OR guardian_mobile ~ '^\\+639[0-9]{9}$'",
+            name="guardian_mobile_format",
+        ),
         Index("uq_learners_lrn", "lrn", unique=True, postgresql_where=text("lrn IS NOT NULL")),
     )
 
@@ -47,6 +51,18 @@ class Learner(UUIDPKMixin, TimestampMixin, Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Parent/guardian contact for term-card emails and concern notices
+    # (§78.1). All optional; NULL is "not given", never an empty string.
+    # The mobile number is stored normalised as +639XXXXXXXXX
+    # (`app.guardian_contact`). Nothing is sent electronically unless
+    # `notices_consent` is true.
+    guardian_name: Mapped[str | None] = mapped_column(String)
+    guardian_email: Mapped[str | None] = mapped_column(String)
+    guardian_mobile: Mapped[str | None] = mapped_column(String(13))
+    notices_consent: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    notices_consent_date: Mapped[date | None] = mapped_column(Date)
 
 
 class LearnerAdmissionRecord(UUIDPKMixin, TimestampMixin, Base):

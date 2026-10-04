@@ -12,6 +12,11 @@ unknown subject, invalid grade, impossible date, and a subject not
 offered during that term. Each has a test.
 """
 
+from datetime import datetime
+
+from app import audit_service
+from app.display_time import SCHOOL_TZ
+from app.guardian_contact import clean_email, contact_values, normalise_mobile, parse_consent
 from app.import_pipeline import (
     ColumnSpec,
     ImportSpec,
@@ -29,6 +34,7 @@ from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
 from app.models.organization import Term
 from app.models.subjects import SectionSubjectOffering, Subject
+from app.learner_access import may_edit
 from app.naming import normalize_name
 from app.section_access import is_advised_by
 
@@ -38,6 +44,37 @@ from app.section_access import is_advised_by
 GRADE_SOURCE_IMPORT = "IMPORT"
 
 # --- Learners --------------------------------------------------------------
+
+# Parent/guardian contact (§78.1), shared by the learner import and the
+# contact update below. All optional.
+#
+# Every alias names a parent or guardian. A bare "Email" or "Mobile" header
+# is deliberately *not* an alias: a masterlist often carries the learner's
+# own address under it, and auto-mapping that here would send the
+# learner's term card and concern notices to the learner. Left unmatched,
+# the person importing has to choose the column, which is the point.
+GUARDIAN_COLUMNS = [
+    ColumnSpec(
+        "guardian_name", "Parent/Guardian Name", False,
+        ("parentname", "guardianname", "parentguardian", "nameofparentorguardian"),
+    ),
+    ColumnSpec(
+        "guardian_email", "Parent/Guardian Email", False,
+        ("parentemail", "guardianemail", "parentemailaddress", "guardianemailaddress"),
+    ),
+    # A number Excel has turned into 9171234567 (leading zero dropped) is
+    # repaired by `normalise_mobile` rather than refused.
+    ColumnSpec(
+        "guardian_mobile", "Parent/Guardian Mobile", False,
+        (
+            "parentmobile", "guardianmobile", "parentcontact", "guardiancontact",
+            "parentcontactnumber", "guardiancontactnumber", "parentguardiancontactnumber",
+            "contactnumberofparentorguardian", "contactnumberofparentguardian",
+        ),
+    ),
+    # Yes/No. Blank is "not stated".
+    ColumnSpec("notices_consent", "Notice Consent", False, ("parentconsent", "noticeconsent")),
+]
 
 LEARNER_COLUMNS = [
     ColumnSpec("last_name", "Last Name", True, ("surname", "familyname")),
@@ -51,6 +88,7 @@ LEARNER_COLUMNS = [
     # one step; left blank, they are created and enrolled later on the
     # Enrollment page, which is what this import did before.
     ColumnSpec("section", "Section", False, ("sectionname", "class")),
+    *GUARDIAN_COLUMNS,
 ]
 
 
@@ -200,6 +238,25 @@ def validate_learners(
                     )
                     section = None
 
+        # Contact cells are optional, so an unreadable one is a *warning*:
+        # the learner is still created, with that field blank. Refusing the
+        # row would block a valid learner over data that isn't required.
+        guardian_email, email_error = clean_email(row.get("guardian_email"))
+        if email_error:
+            result.warnings.append(
+                RowError(number, "Parent/Guardian Email", f"{email_error} — left blank")
+            )
+        guardian_mobile, mobile_error = normalise_mobile(row.get("guardian_mobile"))
+        if mobile_error:
+            result.warnings.append(
+                RowError(number, "Parent/Guardian Mobile", f"{mobile_error} — left blank")
+            )
+        consent, consent_error = parse_consent(row.get("notices_consent"))
+        if consent_error:
+            result.warnings.append(
+                RowError(number, "Notice Consent", f"{consent_error} — recorded as no consent")
+            )
+
         if len(result.errors) == errors_before:
             result.parsed.append(
                 {
@@ -211,6 +268,10 @@ def validate_learners(
                     "sex": sex,
                     "birthdate": birthdate,
                     "lrn": lrn,
+                    "guardian_name": normalize_name(row.get("guardian_name")),
+                    "guardian_email": guardian_email,
+                    "guardian_mobile": guardian_mobile,
+                    "notices_consent": bool(consent),
                     "section_id": section.id if section else None,
                     "grade_level_id": section.grade_level_id if section else None,
                     "school_year_id": school_year_id if section else None,
@@ -240,6 +301,15 @@ def commit_learners(session, parsed: list[dict], user_id=None) -> int:
             sex=row["sex"],
             birthdate=row["birthdate"],
             lrn=row["lrn"],
+            guardian_name=row.get("guardian_name"),
+            guardian_email=row.get("guardian_email"),
+            guardian_mobile=row.get("guardian_mobile"),
+            notices_consent=row.get("notices_consent", False),
+            # Dated when it is recorded, in school time — the host runs on
+            # UTC and would date an 8 a.m. Manila import yesterday.
+            notices_consent_date=(
+                datetime.now(SCHOOL_TZ).date() if row.get("notices_consent") else None
+            ),
             created_by_user_id=user_id,
         )
         session.add(learner)
@@ -512,6 +582,147 @@ LEARNER_IMPORT = ImportSpec(
     ),
 )
 
+# --- Parent/guardian contacts (update by LRN) -----------------------------
+
+CONTACT_COLUMNS = [
+    ColumnSpec("lrn", "LRN", True, ("learnerreferencenumber",)),
+    *GUARDIAN_COLUMNS,
+]
+
+
+def validate_learner_contacts(
+    session, rows: list[dict], mapping: dict, *, adviser_user_id=None, editable_ids=None
+) -> ValidationResult:
+    """Contact details for learners **already in the system**, matched by LRN.
+
+    The learner import only ever INSERTs, so without this every existing
+    learner's contact would have to be typed one at a time.
+
+    **A blank cell leaves the stored value alone.** A file carrying only a
+    mobile column must not wipe everyone's email. Clearing a value is done
+    on the learner's own form.
+
+    Unlike in the learner import, an unreadable contact cell is an *error*
+    here: the contact is the whole of the row, so there is nothing else to
+    save from it.
+
+    `adviser_user_id`/`editable_ids` scope it as the Masterlist does (§3C):
+    an adviser may update only the learners they may edit. None is unscoped.
+    """
+    result = ValidationResult()
+
+    lrns = {lrn for lrn, _ in (parse_lrn(row.get("lrn")) for row in rows) if lrn}
+    # One query for the whole file.
+    learners = (
+        {row.lrn: row for row in session.query(Learner).filter(Learner.lrn.in_(lrns)).all()}
+        if lrns
+        else {}
+    )
+
+    seen_in_file: dict[str, int] = {}
+    for row in rows:
+        number = row.get("__row__")
+        errors_before = len(result.errors)
+
+        learner = None
+        lrn, lrn_error = parse_lrn(row.get("lrn"))
+        if lrn_error:
+            result.errors.append(RowError(number, "LRN", lrn_error))
+        elif not lrn:
+            result.errors.append(RowError(number, "LRN", "required"))
+        elif lrn in seen_in_file:
+            result.errors.append(
+                RowError(number, "LRN", f"same LRN as row {seen_in_file[lrn]} in this file")
+            )
+        else:
+            seen_in_file[lrn] = number
+            learner = learners.get(lrn)
+            if learner is None:
+                result.errors.append(RowError(number, "LRN", f"no learner with LRN {lrn}"))
+            elif not may_edit(learner.id, editable_ids or set(), adviser_user_id):
+                result.errors.append(RowError(number, "LRN", f"{lrn} is not one of your learners"))
+
+        email, email_error = clean_email(row.get("guardian_email"))
+        if email_error:
+            result.errors.append(RowError(number, "Parent/Guardian Email", email_error))
+        mobile, mobile_error = normalise_mobile(row.get("guardian_mobile"))
+        if mobile_error:
+            result.errors.append(RowError(number, "Parent/Guardian Mobile", mobile_error))
+        consent, consent_error = parse_consent(row.get("notices_consent"))
+        if consent_error:
+            result.errors.append(RowError(number, "Notice Consent", consent_error))
+
+        if len(result.errors) != errors_before:
+            continue
+        # Only what the row actually states; a blank cell is left out, so
+        # it can't overwrite anything.
+        changes = {
+            "guardian_name": normalize_name(row.get("guardian_name")),
+            "guardian_email": email,
+            "guardian_mobile": mobile,
+            "notices_consent": consent,
+        }
+        changes = {k: v for k, v in changes.items() if v is not None}
+        result.parsed.append(
+            {
+                "__row__": number,
+                "__changes__": changes,
+                "learner_id": learner.id,
+                "lrn": lrn,
+                "name": f"{learner.last_name}, {learner.first_name}",
+                **changes,
+            }
+        )
+    return result
+
+
+def commit_learner_contacts(session, parsed: list[dict], user_id=None) -> int:
+    """Returns the number of learners whose contact actually changed.
+
+    Audited **per learner**, with old and new values, unlike the learner
+    import's single DATA_IMPORTED entry (see `commit_learners`). That one
+    creates rows, so there is no old value to lose; this overwrites where a
+    term card will be emailed, and the previous address is exactly what
+    someone needs if a card goes to the wrong parent. Only learners whose
+    values differ are logged, so re-uploading the same file adds nothing.
+    """
+    ids = [row["learner_id"] for row in parsed]
+    if not ids:
+        return 0
+    learners = {
+        learner.id: learner
+        for learner in session.query(Learner).filter(Learner.id.in_(ids)).all()
+    }
+    # In school time; the host runs on UTC.
+    today = datetime.now(SCHOOL_TZ).date()
+    changed = 0
+    for row in parsed:
+        learner = learners.get(row["learner_id"])
+        if learner is None:
+            continue
+        previous = contact_values(learner)
+        for field, value in row["__changes__"].items():
+            if field == "notices_consent":
+                if value != learner.notices_consent:
+                    learner.notices_consent = value
+                    learner.notices_consent_date = today if value else None
+            else:
+                setattr(learner, field, value)
+        was, now = audit_service.changes(previous, contact_values(learner))
+        if was:
+            audit_service.record(
+                session,
+                action=audit_service.LEARNER_CONTACT_CHANGED,
+                object_type="learners",
+                object_id=learner.id,
+                user_id=user_id,
+                previous=was,
+                new=now,
+            )
+            changed += 1
+    return changed
+
+
 TERM_GRADE_IMPORT = ImportSpec(
     job_type=ImportJobType.TERM_GRADES,
     label="Term grades",
@@ -534,4 +745,20 @@ TERM_GRADE_IMPORT = ImportSpec(
     after_commit=recompute_after_term_grades,
 )
 
-SPECS = {spec.job_type: spec for spec in (LEARNER_IMPORT, TERM_GRADE_IMPORT)}
+LEARNER_CONTACT_IMPORT = ImportSpec(
+    job_type=ImportJobType.LEARNER_CONTACTS,
+    label="Parent/guardian contacts (update existing learners)",
+    description=(
+        "Adds or updates the parent/guardian name, email, mobile and notice consent "
+        "of learners already in the system, matched by LRN. A blank cell leaves "
+        "what is stored alone. Nobody is created or enrolled."
+    ),
+    columns=CONTACT_COLUMNS,
+    validate=validate_learner_contacts,
+    commit=commit_learner_contacts,
+)
+
+SPECS = {
+    spec.job_type: spec
+    for spec in (LEARNER_IMPORT, LEARNER_CONTACT_IMPORT, TERM_GRADE_IMPORT)
+}

@@ -1982,3 +1982,79 @@ current number.
       **Wording:** sign-in note ("…change it once signed in."), Help's
       edit-a-submitted-grade note shortened, and the deadline items in the
       teacher and Super Admin Help sections rewritten.
+- [ ] **Parent notices — designed, not built** (2026-10-04). Spec §78,
+      added with approval; read it first, it is the agreed design. The
+      user's decisions, so they aren't re-asked:
+      - **Groups:** Concern is *OR* across its triggers (failing, 3+ ABSENT,
+        3+ LATE, 1+ CUTTING), so Release and Concern are exact complements.
+        Missing grades or unencoded attendance → **Not ready**, checked
+        first.
+      - **Sender:** the adviser's own deped address was the user's first
+        choice and was talked out of: sending *as* it from a server needs
+        stored per-teacher credentials, a Google-verified Gmail-send OAuth
+        app, or spoofing that deped.gov.ph's DMARC would reject. Instead
+        there is one dedicated free Gmail account (ICT Coordinator holds it
+        and hands it over with the role) with the adviser as display name
+        and Reply-To.
+        **No CC to the adviser** (user's decision). Free Gmail allows about
+        500 recipients a day and a CC counts as one. The sent record on the
+        page is the adviser's copy.
+      - **SMS** is an `sms:` link from the adviser's own phone; no server
+        sending. Android takes `?body=`, iOS `&body=`, so test both.
+      - **PDF password** is the birthdate as YYYYMMDD; ReportLab's own
+        `StandardEncryption`, so there's no new dependency.
+      - **Printed letter** and all concern notices are general: no grades,
+        no subjects, no counts.
+
+      Build order:
+      1. ~~Contact fields plus Masterlist import column~~ **Done
+         2026-10-04**: migration `d8b3f5a17c24` (5 columns on `learners`,
+         applied to the live DB; code not yet pushed or rebooted),
+         `app/guardian_contact.py` (one definition of a valid email,
+         mobile and consent), four optional import columns, a "Save
+         contact" form on the Masterlist for editable learners only
+         (audited as `LEARNER_CONTACT_CHANGED`), `tests/test_guardian_contact.py`.
+         Full suite green (1319 passed, 14 skipped). The read-only
+         search card shows no contact details. Excel drops a mobile
+         number's leading zero, so `normalise_mobile` repairs
+         `9171234567` / `9171234567.0` instead of rejecting them.
+         Not done: Help page entry; nobody has seen the form in a browser.
+         **Review fixes, same day** (`/code-review high`):
+         - No bare "Email"/"Mobile"/"Contact Number"/"Consent" header
+           aliases. A masterlist's plain Email column is often the
+           learner's own, and auto-mapping it would send a learner their
+           own concern notice. Every alias now names a parent or guardian;
+           a test asserts the bare ones never map.
+         - An unreadable contact cell in the *learner* import is now a
+           warning (`ValidationResult.warnings`, new) and the learner is
+           still created with that field blank. Before, "N/A" or two
+           numbers in one cell refused a valid learner. Placeholders
+           ("N/A", "-", "none") read as blank everywhere.
+         - **New import, "Parent/guardian contacts (update existing
+           learners)"** (`LEARNER_CONTACT_IMPORT`), because the learner
+           import only INSERTs and every existing learner's row was refused
+           as a duplicate LRN. It is matched by LRN, on Import from Excel
+           and as a Masterlist panel scoped by `may_edit`. A blank cell
+           leaves the stored value alone, and a bad value is an error here,
+           since the contact is the whole row. Audited per changed learner
+           with old values. Needed a new enum value: migration
+           `e9c4a2b81d35` (`importjobtype` += `LEARNER_CONTACTS`), applied
+           to the live DB, and it must stay ahead of the code.
+         - Still open from that review: consent can be recorded with no
+           email or mobile; the form shows typed rather than stored text
+           after saving; the page tests only read the source.
+      2. Classification and overrides page, preview only with nothing
+         sent; check it against real Term 1 data.
+      3. Term-card email.
+      4. Concern email, SMS links and letters.
+
+      Traps already in CLAUDE.md that this walks straight into:
+      - `failed_subject_count` must be read, not re-derived.
+      - Attendance needs the batched `compute_active_window` and
+        `summarize_attendance` shape from `attendance_risk`, not
+        `active_window_for` per learner.
+      - The download/print PDF goes behind a Build button.
+      - `AuthUser.id` is a str (`is_advised_by`).
+      - Use `learner_order_by` for the roster.
+      - The sent-record needs a uniqueness guard so a rerun can't
+        double-send. Commit per message, so an interrupted batch resumes.

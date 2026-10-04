@@ -14,7 +14,7 @@ LRN are the identity every report the school issues is printed under, and
 until 2026-08-21 all four could be overwritten with no record at all.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import streamlit as st
 
@@ -32,8 +32,10 @@ from app.admin_pages._helpers import (
     try_delete,
 )
 from app.auth import require_role
+from app.display_time import SCHOOL_TZ
+from app.guardian_contact import clean_email, contact_values, display_mobile, normalise_mobile
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
-from app.import_specs import LEARNER_IMPORT
+from app.import_specs import LEARNER_CONTACT_IMPORT, LEARNER_IMPORT
 from app.learner_access import editable_learner_ids, may_edit
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
@@ -123,6 +125,63 @@ def _identity_form(session, learner: Learner, current_user, *, may_delete: bool)
                 previous=_identity_values(learner),
             )
             try_delete(session, learner, label)
+            st.rerun()
+
+
+def _contact_form(session, learner: Learner, current_user) -> None:
+    """Parent/guardian contact and consent (§78.1). Nothing is emailed or
+    texted to a parent unless consent is ticked here."""
+    st.caption(
+        "Where term cards and notices are sent. Tick consent only once the "
+        "parent/guardian has agreed to receive school notices by email or text."
+    )
+    with st.form(f"contact_{learner.id}"):
+        guardian_name = st.text_input(
+            "Parent/guardian name", value=learner.guardian_name or "", key=f"gn_{learner.id}"
+        )
+        col1, col2 = st.columns(2)
+        guardian_email = col1.text_input(
+            "Email", value=learner.guardian_email or "", key=f"ge_{learner.id}"
+        )
+        guardian_mobile = col2.text_input(
+            "Mobile (09XXXXXXXXX)",
+            value=display_mobile(learner.guardian_mobile),
+            key=f"gm_{learner.id}",
+        )
+        consent = st.checkbox(
+            "Parent/guardian consents to school notices by email/SMS",
+            value=learner.notices_consent,
+            key=f"gc_{learner.id}",
+        )
+        if learner.notices_consent and learner.notices_consent_date:
+            st.caption(f"Consent recorded {learner.notices_consent_date:%b %d, %Y}.")
+
+        if st.form_submit_button("Save contact"):
+            email, email_error = clean_email(guardian_email)
+            mobile, mobile_error = normalise_mobile(guardian_mobile)
+            if email_error or mobile_error:
+                st.error(email_error or mobile_error)
+                return
+            previous = contact_values(learner)
+            learner.guardian_name = normalize_name(guardian_name)
+            learner.guardian_email = email
+            learner.guardian_mobile = mobile
+            if consent != learner.notices_consent:
+                learner.notices_consent = consent
+                # Dated in school time; the host runs on UTC.
+                learner.notices_consent_date = datetime.now(SCHOOL_TZ).date() if consent else None
+            was, now = audit_service.changes(previous, contact_values(learner))
+            if was:
+                audit_service.record(
+                    session,
+                    action=audit_service.LEARNER_CONTACT_CHANGED,
+                    object_type="learners",
+                    object_id=learner.id,
+                    user_id=current_user.id,
+                    previous=was,
+                    new=now,
+                )
+            try_commit(session, "Contact saved.")
             st.rerun()
 
 
@@ -523,6 +582,12 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
         if result.errors:
             st.error(f"{len(result.errors)} row(s) need fixing before they can be added:")
             st.dataframe(result.error_dicts(), hide_index=True, width="stretch")
+        if result.warnings:
+            st.warning(
+                f"{len(result.warnings)} parent/guardian value(s) couldn't be read. Those "
+                "learners are still added, with that field left blank:"
+            )
+            st.dataframe(result.warning_dicts(), hide_index=True, width="stretch")
 
         if not result.parsed:
             return
@@ -540,6 +605,88 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
             # against the database they were just written to. On failure the
             # file stays, because the fix is usually to re-read the errors.
             if try_commit(session, f"Added {written} learner(s)."):
+                clear_text_fields(_UPLOAD_FORM)
+            st.rerun()
+
+
+def _contact_upload_section(session, current_user, adviser_user_id, editable: set) -> None:
+    """Parent/guardian contacts for learners already here, matched by LRN.
+
+    The bulk-add panel above only creates learners, so without this the
+    contact of everyone already in the masterlist would have to be typed
+    one at a time. Scoped like the rest of the page: an adviser's file may
+    only touch learners they may edit (`editable`). A blank cell leaves
+    the stored value alone — see `validate_learner_contacts`.
+    """
+    spec = LEARNER_CONTACT_IMPORT
+    _panel = "learner_contact_upload"
+    _UPLOAD_FORM = "learner_contact_upload_form"
+    with st.expander("Update parent/guardian contacts from a spreadsheet", expanded=panel_is_open(_panel)):
+        st.caption(
+            "For learners **already in the masterlist**. One row per learner, matched by "
+            "**LRN**. Columns: "
+            f"`{'`, `'.join(c.label for c in spec.columns)}` — only LRN is required. "
+            "A blank cell leaves what's stored alone, so a file with only mobile numbers "
+            "won't erase anyone's email. Notice Consent is Yes or No. Save the file as "
+            "Excel (.xlsx)."
+        )
+        uploaded = st.file_uploader(
+            "Excel file (.xlsx)",
+            type=["csv", "xlsx"],
+            # Generation-carrying for the same reason as the bulk-add panel:
+            # a retained file would re-validate after a successful update.
+            key=generation_key(_UPLOAD_FORM, "contact_csv"),
+            on_change=keep_panel_open, args=(_panel,),
+        )
+        if uploaded is None:
+            return
+
+        headers, rows = read_table(uploaded.getvalue(), uploaded.name)
+        if not rows:
+            st.warning("That file has a header row but no learners in it.")
+            return
+        mapping = suggest_mapping(headers, spec)
+        missing = missing_required(mapping, spec)
+        if missing:
+            st.error(
+                "Couldn't find a column for: **"
+                + "**, **".join(missing)
+                + f"**.\n\nThe file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+            )
+            return
+        if not any(column.field in mapping for column in spec.columns if column.field != "lrn"):
+            # Generic "Email"/"Mobile" headers are deliberately not matched
+            # (they are often the learner's own), so say what *is* wanted.
+            st.error(
+                "No parent/guardian column found. Name the headers "
+                "**Parent/Guardian Name**, **Parent/Guardian Email**, "
+                "**Parent/Guardian Mobile** or **Notice Consent**."
+            )
+            return
+
+        result = spec.validate(
+            session,
+            apply_mapping(rows, mapping),
+            mapping,
+            adviser_user_id=adviser_user_id,
+            editable_ids=editable,
+        )
+        st.write(f"**{len(result.parsed)} of {len(rows)} row(s) ready.**")
+        if result.errors:
+            st.error(f"{len(result.errors)} row(s) need fixing and will be skipped:")
+            st.dataframe(result.error_dicts(), hide_index=True, width="stretch")
+        if not result.parsed:
+            return
+
+        preview = [
+            {k: v for k, v in row.items() if not k.startswith("__") and not k.endswith("_id")}
+            for row in result.parsed
+        ]
+        st.dataframe(preview, hide_index=True, width="stretch")
+
+        if st.button(f"Update {len(result.parsed)} learner(s)", key="contact_upload_commit"):
+            changed = spec.commit(session, result.parsed, current_user.id)
+            if try_commit(session, f"Updated the contact of {changed} learner(s)."):
                 clear_text_fields(_UPLOAD_FORM)
             st.rerun()
 
@@ -607,6 +754,8 @@ def render() -> None:
             label += f"  —  LRN: {learner.lrn or 'not yet assigned'}"
             with st.expander(label):
                 _identity_form(session, learner, current_user, may_delete=may_delete)
+                st.divider()
+                _contact_form(session, learner, current_user)
                 st.divider()
                 _admission_record_form(
                     session, learner, current_user, admission_records.get(learner.id)
@@ -741,3 +890,4 @@ def render() -> None:
                     st.rerun()
 
         _bulk_upload_section(session, current_user, adviser_user_id)
+        _contact_upload_section(session, current_user, adviser_user_id, editable)

@@ -200,6 +200,15 @@ def render() -> None:
         col2.metric("Valid", len(result.parsed))
         col3.metric("Errors", len(result.errors))
 
+        # Optional values that couldn't be read. Those rows still import,
+        # with that field blank, so this never blocks the confirm below.
+        if result.warnings:
+            st.warning(
+                f"{len(result.warnings)} optional value(s) couldn't be read. Those rows "
+                "will still be imported, with that field left blank:"
+            )
+            st.dataframe(result.warning_dicts()[:MAX_ERRORS_SHOWN], hide_index=True, width="stretch")
+
         if result.errors:
             st.error(
                 f"{len(result.errors)} problem(s) found. Nothing has been imported — fix "
