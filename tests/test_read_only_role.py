@@ -146,4 +146,8 @@ def test_parent_notices_gates_every_write_on_the_read_only_check():
     tail = source[source.index("if not may_write:"):]
     for form in ("_section_meeting_form", "_learner_meeting_form", "_override_form"):
         assert form in tail
+    # The concern channels (text, letters) are drawn only for a writer.
+    for panel in ("_sms_panel", "_letters_panel"):
+        call = source.index(f"{panel}(session")
+        assert "if may_write and concern:" in source[:call]
 

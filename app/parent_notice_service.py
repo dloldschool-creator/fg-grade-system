@@ -38,6 +38,7 @@ from app.models.parent_notices import (
 )
 from app.models.rbac import User
 from app.notice_rules import (
+    GROUP_LABELS,
     LearnerTermFigures,
     NoticeGroup,
     NoticeThresholds,
@@ -102,6 +103,20 @@ class NoticeRow:
             ),
             None,
         )
+
+    @property
+    def meeting_at(self) -> datetime | None:
+        """The meeting as one naive datetime, or None. Stored as `basis_at`
+        on concern notices, so a later change of schedule is noticed."""
+        if self.meeting is None:
+            return None
+        return datetime.combine(self.meeting.meeting_date, self.meeting.meeting_time)
+
+    def concern_is_outdated(self) -> bool:
+        """A concern email went out announcing a different meeting (or none)
+        than the one now set (§78.5). Re-sending is then offered."""
+        sent = self.live_email(CONCERN)
+        return bool(sent and sent.status == "SENT" and sent.basis_at != self.meeting_at)
 
     def card_is_outdated(self) -> bool:
         """Sent, and the grades or attendance under it changed since (§78.4).
@@ -456,43 +471,61 @@ def clear_meeting(session, *, section_id, term_id, user_id, enrollment_id=None) 
 
 
 @dataclass(frozen=True)
-class CardEmailStatus:
-    """Where one Release learner stands for the term-card email."""
+class EmailStatus:
+    """Where one learner stands for one kind of email."""
 
     sendable: bool
     label: str
     is_resend: bool = False
 
 
-def card_email_status(row: NoticeRow, now: datetime | None = None) -> CardEmailStatus:
+# Kept under its step-3 name: the page and tests read it for term cards.
+CardEmailStatus = EmailStatus
+
+_GROUP_FOR_KIND = {TERM_CARD: NoticeGroup.RELEASE, CONCERN: NoticeGroup.CONCERN}
+
+
+def email_status(row: NoticeRow, kind: str, now: datetime | None = None) -> EmailStatus:
     """Read by both the page (to show it) and the sender (to obey it), so
-    what the table says is exactly what Send will do."""
-    if row.group is not NoticeGroup.RELEASE:
-        return CardEmailStatus(False, "not in Release")
-    live = row.live_email(TERM_CARD)
+    what the table says is exactly what Send will do. A term card goes to
+    Release, a concern email to Concern (§78.4, §78.5)."""
+    group = _GROUP_FOR_KIND[kind]
+    if row.group is not group:
+        return EmailStatus(False, f"not in {GROUP_LABELS[group]}")
+    live = row.live_email(kind)
     if live is not None and live.status == "PENDING":
         if _is_stuck(live, now or _utcnow()):
-            return CardEmailStatus(False, "interrupted — may have gone out")
-        return CardEmailStatus(False, "sending…")
+            return EmailStatus(False, "interrupted — may have gone out")
+        return EmailStatus(False, "sending…")
     if not row.learner.notices_consent:
-        return CardEmailStatus(False, "no consent on file")
+        return EmailStatus(False, "no consent on file")
     if not row.learner.guardian_email:
-        return CardEmailStatus(False, "no parent email on file")
+        return EmailStatus(False, "no parent email on file")
     if live is not None:
-        if row.card_is_outdated():
-            return CardEmailStatus(True, "outdated — grades or attendance changed since", True)
+        if kind == TERM_CARD and row.card_is_outdated():
+            return EmailStatus(True, "outdated — grades or attendance changed since", True)
+        if kind == CONCERN and row.concern_is_outdated():
+            return EmailStatus(True, "meeting changed since it was emailed", True)
         when = _naive_utc(live.sent_at)
-        return CardEmailStatus(False, f"sent{f' {when:%b %d}' if when else ''} to {live.recipient}")
+        return EmailStatus(False, f"sent{f' {when:%b %d}' if when else ''} to {live.recipient}")
     failed = next(
         (
             n for n in row.notifications
-            if n.kind == TERM_CARD and n.channel == "EMAIL" and n.status == "FAILED"
+            if n.kind == kind and n.channel == "EMAIL" and n.status == "FAILED"
         ),
         None,
     )
     if failed is not None:
-        return CardEmailStatus(True, f"ready — last try failed: {failed.error or 'unknown error'}")
-    return CardEmailStatus(True, "ready to email")
+        return EmailStatus(True, f"ready — last try failed: {failed.error or 'unknown error'}")
+    return EmailStatus(True, "ready to email")
+
+
+def card_email_status(row: NoticeRow, now: datetime | None = None) -> EmailStatus:
+    return email_status(row, TERM_CARD, now)
+
+
+def concern_email_status(row: NoticeRow, now: datetime | None = None) -> EmailStatus:
+    return email_status(row, CONCERN, now)
 
 
 def _is_stuck(notification, now: datetime) -> bool:
@@ -532,20 +565,71 @@ class _Prepared:
     committing expires the ORM objects, and re-reading each learner after
     it would be a round trip per email."""
 
+    kind: str
     enrollment_id: object
     to: str
-    password: str
     ctx: object
-    card: object
-    basis_at: datetime | None
-    supersede_id: object | None
+    basis_at: datetime | None = None
+    supersede_id: object | None = None
+    # Term card only.
+    password: str | None = None
+    card: object | None = None
+    # Concern only: (date, time) or None.
+    meeting: tuple | None = None
 
 
-def _prepare(session, section, term, rows, *, adviser) -> list:
+def notice_context(session, section, term, row, adviser):
+    """The one way a page or sender builds a learner's `NoticeContext`, so
+    a preview always matches what is sent."""
+    from app.models.academic_structure import GradeLevel
+
+    grade_level = session.get(GradeLevel, section.grade_level_id)
+    school_year = session.get(SchoolYear, term.school_year_id)
+    return _context_for(row.learner, section, term, grade_level, school_year, adviser)
+
+
+def _context_for(learner, section, term, grade_level, school_year, adviser):
+    from app.notice_messages import NoticeContext
+
+    return NoticeContext(
+        learner_first=learner.first_name,
+        learner_last=learner.last_name,
+        section=section.name,
+        grade_level=grade_level.name if grade_level else "",
+        term_name=term.name,
+        school_year=school_year.name if school_year else "",
+        adviser_name=adviser.full_name,
+    )
+
+
+def _prepare(session, section, term, rows, *, adviser, kind=TERM_CARD) -> list:
     from app.models.academic_structure import GradeLevel
     from app.models.organization import School
-    from app.notice_messages import NoticeContext, birthdate_password
+    from app.notice_messages import birthdate_password
     from app.report_card import load_report_context, term_card_data
+
+    grade_level = session.get(GradeLevel, section.grade_level_id)
+    school_year = session.get(SchoolYear, term.school_year_id)
+
+    if kind == CONCERN:
+        prepared = []
+        for row in rows:
+            live = row.live_email(CONCERN)
+            prepared.append(
+                _Prepared(
+                    kind=CONCERN,
+                    enrollment_id=row.enrollment_id,
+                    to=row.learner.guardian_email,
+                    ctx=_context_for(row.learner, section, term, grade_level, school_year, adviser),
+                    # The meeting announced, so a later change is noticed.
+                    basis_at=row.meeting_at,
+                    supersede_id=live.id if live is not None and live.status == "SENT" else None,
+                    meeting=(
+                        (row.meeting.meeting_date, row.meeting.meeting_time) if row.meeting else None
+                    ),
+                )
+            )
+        return prepared
 
     enrollments = (
         session.query(Enrollment).filter(Enrollment.id.in_([r.enrollment_id for r in rows])).all()
@@ -562,8 +646,6 @@ def _prepare(session, section, term, rows, *, adviser) -> list:
         .all()
     }
     school = session.query(School).one_or_none()
-    grade_level = session.get(GradeLevel, section.grade_level_id)
-    school_year = session.get(SchoolYear, term.school_year_id)
 
     prepared = []
     for row in rows:
@@ -574,25 +656,18 @@ def _prepare(session, section, term, rows, *, adviser) -> list:
         live = row.live_email(TERM_CARD)
         prepared.append(
             _Prepared(
+                kind=TERM_CARD,
                 enrollment_id=row.enrollment_id,
                 to=learner.guardian_email,
+                ctx=_context_for(learner, section, term, grade_level, school_year, adviser),
+                basis_at=row.basis_at,
+                supersede_id=live.id if live is not None and live.status == "SENT" else None,
                 password=birthdate_password(learner.birthdate),
-                ctx=NoticeContext(
-                    learner_first=learner.first_name,
-                    learner_last=learner.last_name,
-                    section=section.name,
-                    grade_level=grade_level.name if grade_level else "",
-                    term_name=term.name,
-                    school_year=school_year.name if school_year else "",
-                    adviser_name=adviser.full_name,
-                ),
                 card=term_card_data(
                     session, enrollment, learner, school=school, term=term,
                     grade_level=grade_level, section=section, adviser=adviser,
                     context=context, summary=summaries.get(enrollment.id),
                 ),
-                basis_at=row.basis_at,
-                supersede_id=live.id if live is not None and live.status == "SENT" else None,
             )
         )
     return prepared
@@ -600,10 +675,22 @@ def _prepare(session, section, term, rows, *, adviser) -> list:
 
 def _message_for(settings, item: _Prepared, sender: _Sender, *, to=None, test=False):
     from app.notice_mailer import build_message
-    from app.notice_messages import attachment_filename, sender_display_name, term_card_email
-    from app.term_card import generate_term_cards
+    from app.notice_messages import (
+        attachment_filename,
+        concern_email,
+        sender_display_name,
+        term_card_email,
+    )
 
-    subject, body = term_card_email(item.ctx)
+    attachment = attachment_name = None
+    if item.kind == TERM_CARD:
+        from app.term_card import generate_term_cards
+
+        subject, body = term_card_email(item.ctx)
+        attachment = generate_term_cards([item.card], password=item.password)
+        attachment_name = attachment_filename(item.ctx)
+    else:
+        subject, body = concern_email(item.ctx, item.meeting)
     if test:
         subject = f"[TEST, not sent to the parent] {subject}"
         body = f"This is a test. The real email goes to {item.to}.\n\n{body}"
@@ -614,24 +701,26 @@ def _message_for(settings, item: _Prepared, sender: _Sender, *, to=None, test=Fa
         reply_to=sender.email,
         subject=subject,
         body=body,
-        attachment=generate_term_cards([item.card], password=item.password),
-        attachment_name=attachment_filename(item.ctx),
+        attachment=attachment,
+        attachment_name=attachment_name,
     )
 
 
-def send_term_cards(
-    session, section, term, rows, *, user_id, adviser, settings, progress=None, mailer_cls=None
+def send_emails(
+    session, section, term, rows, *, kind, user_id, adviser, settings,
+    progress=None, mailer_cls=None,
 ) -> SendResult:
-    """Emails the term card to each sendable row's parent, one at a time.
+    """Emails each sendable row's parent, one at a time — the term card to
+    Release (§78.4) or the concern notice to Concern (§78.5).
 
     For each learner: commit a PENDING claim (the unique index refuses a
     second one, so a concurrent or repeated send skips that learner), build
-    the encrypted PDF, send, then commit SENT or FAILED. **Commits per
-    message**: an interrupted batch resumes where it stopped, and a crash
-    can never leave a parent emailed twice. One PDF in memory at a time.
+    the message, send, then commit SENT or FAILED. **Commits per message**:
+    an interrupted batch resumes where it stopped, and a crash can never
+    leave a parent emailed twice. One PDF in memory at a time.
 
-    Each row is re-checked with `card_email_status` here rather than
-    trusted from the page that drew the button.
+    Each row is re-checked with `email_status` here rather than trusted
+    from the page that drew the button.
     """
     from sqlalchemy.exc import IntegrityError
 
@@ -639,12 +728,12 @@ def send_term_cards(
 
     mailer_cls = mailer_cls or Mailer
     result = SendResult()
-    targets = [r for r in rows if card_email_status(r).sendable]
+    targets = [r for r in rows if email_status(r, kind).sendable]
     result.skipped = len(rows) - len(targets)
     if not targets:
         return result
 
-    prepared = _prepare(session, section, term, targets, adviser=adviser)
+    prepared = _prepare(session, section, term, targets, adviser=adviser, kind=kind)
     sender = _Sender(full_name=adviser.full_name, email=adviser.email)
     section_id, term_id = section.id, term.id
     with mailer_cls(settings) as mailer:
@@ -654,7 +743,7 @@ def send_term_cards(
                 if old is not None and old.status == "SENT":
                     old.status = "SUPERSEDED"
             claim = ParentNotification(
-                enrollment_id=item.enrollment_id, term_id=term_id, kind=TERM_CARD,
+                enrollment_id=item.enrollment_id, term_id=term_id, kind=kind,
                 channel="EMAIL", status="PENDING", recipient=item.to,
                 basis_at=item.basis_at, sent_by_user_id=user_id,
             )
@@ -662,7 +751,7 @@ def send_term_cards(
             try:
                 session.commit()
             except IntegrityError:
-                # Someone else is sending, or has sent, this learner's card.
+                # Someone else is sending, or has sent, this learner's email.
                 session.rollback()
                 result.skipped += 1
                 continue
@@ -694,7 +783,7 @@ def send_term_cards(
         object_id=section_id,
         user_id=user_id,
         new={
-            "term_id": term_id, "kind": TERM_CARD, "channel": "EMAIL",
+            "term_id": term_id, "kind": kind, "channel": "EMAIL",
             "sent": result.sent, "failed": result.failed, "skipped": result.skipped,
         },
     )
@@ -702,26 +791,39 @@ def send_term_cards(
     return result
 
 
-def send_test_card(session, section, term, row, *, adviser, to, settings, mailer_cls=None):
-    """Sends one learner's card to `to` (the person pressing the button)
+def send_term_cards(session, section, term, rows, **kwargs) -> SendResult:
+    return send_emails(session, section, term, rows, kind=TERM_CARD, **kwargs)
+
+
+def send_concern_emails(session, section, term, rows, **kwargs) -> SendResult:
+    return send_emails(session, section, term, rows, kind=CONCERN, **kwargs)
+
+
+def send_test_email(session, section, term, row, *, kind=TERM_CARD, adviser, to, settings,
+                    mailer_cls=None):
+    """Sends one learner's email to `to` (the person pressing the button)
     instead of the parent, marked as a test. Not recorded as a notice:
     nothing reached a parent. For checking the account and the wording."""
     from app.notice_mailer import Mailer
 
     mailer_cls = mailer_cls or Mailer
-    (item,) = _prepare(session, section, term, [row], adviser=adviser)
+    (item,) = _prepare(session, section, term, [row], adviser=adviser, kind=kind)
     sender = _Sender(full_name=adviser.full_name, email=adviser.email)
     with mailer_cls(settings) as mailer:
         mailer.send(_message_for(settings, item, sender, to=to, test=True))
 
 
-def release_stuck_sends(session, rows, *, term_id, user_id) -> int:
+def send_test_card(session, section, term, row, **kwargs):
+    return send_test_email(session, section, term, row, kind=TERM_CARD, **kwargs)
+
+
+def release_stuck_sends(session, rows, *, term_id, user_id, kind=TERM_CARD) -> int:
     """Marks interrupted sends (PENDING past `STUCK_AFTER`) FAILED so they
     can be retried. The page warns first: the email may already have gone."""
     now = _utcnow()
     released = 0
     for row in rows:
-        live = row.live_email(TERM_CARD)
+        live = row.live_email(kind)
         if live is not None and live.status == "PENDING" and _is_stuck(live, now):
             live.status = "FAILED"
             live.error = "interrupted before it finished; it may have been sent"
@@ -733,6 +835,107 @@ def release_stuck_sends(session, rows, *, term_id, user_id) -> int:
             object_type="terms",
             object_id=term_id,
             user_id=user_id,
-            new={"released_interrupted_sends": released},
+            new={"kind": kind, "released_interrupted_sends": released},
         )
     return released
+
+
+# --- Text messages and letters (§78.5) ----------------------------------------
+
+
+def sms_status(row: NoticeRow) -> str | None:
+    """Why this Concern learner's parent can't be texted, or None if they can."""
+    if row.group is not NoticeGroup.CONCERN:
+        return f"not in {GROUP_LABELS[NoticeGroup.CONCERN]}"
+    if not row.learner.notices_consent:
+        return "no consent on file"
+    if not row.learner.guardian_mobile:
+        return "no parent mobile on file"
+    return None
+
+
+def last_texted(row: NoticeRow):
+    return next(
+        (n for n in row.notifications if n.kind == CONCERN and n.channel == "SMS"), None
+    )
+
+
+def record_sms(session, row: NoticeRow, *, term_id, user_id) -> None:
+    """The adviser marks a text as sent from their own phone. The app never
+    sees the SMS itself, so this records the adviser's word that they sent
+    it, not that it was delivered (§78.5). Repeats are allowed — a second
+    text is a second row.
+
+    Re-checks eligibility itself rather than trusting the page, as the
+    email sender does: no text is recorded to a parent outside Concern or
+    without consent and a mobile on file.
+    """
+    blocked = sms_status(row)
+    if blocked is not None:
+        raise ValueError(f"Can't record a text: {blocked}.")
+    session.add(
+        ParentNotification(
+            enrollment_id=row.enrollment_id, term_id=term_id, kind=CONCERN,
+            channel="SMS", status="SENT", recipient=row.learner.guardian_mobile,
+            basis_at=row.meeting_at, sent_at=_utcnow(), sent_by_user_id=user_id,
+        )
+    )
+
+
+def sms_message(session, section, term, row: NoticeRow, *, adviser, language="FIL") -> str:
+    from app.notice_messages import sms_text
+
+    ctx = notice_context(session, section, term, row, adviser)
+    meeting = (row.meeting.meeting_date, row.meeting.meeting_time) if row.meeting else None
+    return sms_text(ctx, meeting, language=language)
+
+
+def build_concern_letters(session, section, term, rows, *, adviser, user_id, today: date):
+    """One letter per Concern row that has a meeting, as one PDF, and a
+    LETTER row in the sent record for each. Letters need no consent — they
+    go home on paper — but they do need a meeting, since they name one.
+
+    Returns (pdf_bytes, printed_rows). Built only on request (a button),
+    never on render.
+
+    A letter is recorded **once per learner per meeting**: building the
+    same letters again (a reprint, a jammed printer) adds no rows, and a
+    changed meeting — a genuinely different letter — is recorded anew.
+    """
+    from app.concern_letter import LetterData, generate_concern_letters
+    from app.models.academic_structure import GradeLevel
+    from app.models.organization import School
+    from app.notice_messages import date_plain_en, letter_paragraphs
+
+    printable = [r for r in rows if r.group is NoticeGroup.CONCERN and r.meeting]
+    if not printable:
+        return None, []
+    school = session.query(School).one_or_none()
+    grade_level = session.get(GradeLevel, section.grade_level_id)
+    school_year = session.get(SchoolYear, term.school_year_id)
+    letters = []
+    for row in printable:
+        ctx = _context_for(row.learner, section, term, grade_level, school_year, adviser)
+        letters.append(
+            LetterData(
+                school_name=school.school_name if school else "",
+                school_address=school.address if school else "",
+                letter_date=date_plain_en(today),
+                words=letter_paragraphs(
+                    ctx, (row.meeting.meeting_date, row.meeting.meeting_time)
+                ),
+            )
+        )
+        already = any(
+            n.kind == CONCERN and n.channel == "LETTER" and n.basis_at == row.meeting_at
+            for n in row.notifications
+        )
+        if not already:
+            session.add(
+                ParentNotification(
+                    enrollment_id=row.enrollment_id, term_id=term.id, kind=CONCERN,
+                    channel="LETTER", status="SENT", recipient=None,
+                    basis_at=row.meeting_at, sent_at=_utcnow(), sent_by_user_id=user_id,
+                )
+            )
+    return generate_concern_letters(letters), printable

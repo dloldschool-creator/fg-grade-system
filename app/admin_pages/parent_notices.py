@@ -1,10 +1,12 @@
 """Parent Notices — spec §78: who gets the term card by email, whose
 parents are asked to come in, and who isn't ready yet, per section and term.
 
-Step 3 sends the Release group's term cards (§78.4) through
-`parent_notice_service.send_term_cards`, which owns the double-send guard
-and the per-message commits; this page only decides whether to offer the
-button and reports the result. Concern notices are step 4.
+Release learners' term cards are emailed (§78.4); Concern learners'
+parents are emailed, texted from the adviser's own phone, or sent a printed
+letter (§78.5). Both kinds of email go through
+`parent_notice_service.send_emails`, which owns the double-send guard and
+the per-message commits; this page only decides whether to offer the
+button and reports the result.
 
 The page also writes the adviser's own input: an override with its reason
 (§78.3) and the parent-meeting schedule (§78.5). The grouping itself is
@@ -23,6 +25,7 @@ import streamlit as st
 
 from app import parent_notice_service as notices
 from app.admin_pages._helpers import (
+    _forget_stale,
     clear_text_fields,
     flash,
     get_session,
@@ -34,7 +37,7 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.display_time import SCHOOL_TZ
 from app.models.organization import SchoolYear, Term
-from app.notice_messages import NoticeContext, term_card_email
+from app.notice_messages import concern_email, sms_link, term_card_email
 from app.notice_rules import GROUP_LABELS, NoticeGroup, may_override
 from app.section_access import is_advised_by
 
@@ -64,6 +67,20 @@ def _contact_text(row) -> str:
     return " + ".join(parts) + ("" if row.learner.notices_consent else " (no consent)")
 
 
+def _other_channels(row) -> str:
+    """Texts marked and letters printed for this learner, newest first."""
+    parts = []
+    for channel, word in (("SMS", "texted"), ("LETTER", "letter printed")):
+        latest = next(
+            (n for n in row.notifications if n.kind == notices.CONCERN and n.channel == channel),
+            None,
+        )
+        if latest is not None:
+            when = notices._naive_utc(latest.sent_at)
+            parts.append(f"{word} {when:%b %d}" if when else word)
+    return ", ".join(parts)
+
+
 def _group_table(rows, *, concern: bool) -> list[dict]:
     table = []
     for row in rows:
@@ -83,6 +100,8 @@ def _group_table(rows, *, concern: bool) -> list[dict]:
         }
         if concern:
             entry["Meeting"] = _meeting_text(row.meeting)
+            entry["Email"] = notices.concern_email_status(row).label
+            entry["Text / letter"] = _other_channels(row)
         else:
             entry["Term card email"] = status
         table.append(entry)
@@ -158,6 +177,9 @@ def _override_form(session, section, term, data, current_user) -> None:
     # Section and term both in the key, so switching either builds fresh
     # widgets rather than one whose stored learner isn't in the new list.
     form = f"notice_override_{section.id}_{term.id}"
+    # The list moves under the stored pick (a grade lands, a learner goes
+    # Not ready); a stored id no longer offered would raise.
+    _forget_stale(f"{form}_learner", by_id)
     with st.form(form):
         choice = st.selectbox(
             "Learner",
@@ -216,6 +238,8 @@ def _learner_meeting_form(session, section, term, data, current_user) -> None:
     with st.expander("Give one learner a different meeting time"):
         by_id = {row.enrollment_id: row for row in concern}
         form = f"notice_learner_meeting_{section.id}_{term.id}"
+        # An override can move the stored learner out of Concern.
+        _forget_stale(f"{form}_learner", by_id)
         with st.form(form):
             choice = st.selectbox(
                 "Learner",
@@ -250,29 +274,60 @@ def _learner_meeting_form(session, section, term, data, current_user) -> None:
             st.rerun()
 
 
-def _email_panel(session, section, term, data, current_user, *, may_write: bool) -> None:
-    """Emailing the Release group's term cards (step 3)."""
+_EMAIL_COPY = {
+    notices.TERM_CARD: {
+        "group": NoticeGroup.RELEASE,
+        "title": "Email the term cards",
+        "caption": (
+            "Each parent gets one email with their child's term card attached, "
+            "protected by the child's birthdate (YYYYMMDD) as the password. Replies "
+            "go to the adviser. A card is never emailed twice."
+        ),
+        "thing": "term card",
+        "confirm": "I've checked the Release list above",
+        "resend": "Also re-send {n} card(s) whose grades or attendance changed after they were emailed",
+    },
+    notices.CONCERN: {
+        "group": NoticeGroup.CONCERN,
+        "title": "Email the concern notices",
+        "caption": (
+            "A short message in English and Filipino asking the parent to come in, "
+            "with the meeting date and time if one is set. It never mentions grades "
+            "or attendance. Replies go to the adviser."
+        ),
+        "thing": "concern notice",
+        "confirm": "I've checked the Concern list above",
+        "resend": "Also re-send {n} notice(s) whose meeting changed after they were emailed",
+    },
+}
+
+
+def _adviser_for(session, section):
     from app.models.rbac import User
+
+    return session.get(User, section.adviser_user_id) if section.adviser_user_id else None
+
+
+def _email_panel(session, section, term, data, current_user, *, may_write: bool,
+                 kind: str = notices.TERM_CARD) -> None:
+    """Emailing one group's parents: term cards to Release (step 3) or
+    concern notices to Concern (step 4). One panel, one sender, one
+    double-send guard for both."""
     from app.notice_mailer import MailAuthError, MailNotConfigured, MailSettings
 
-    release = data.in_group(NoticeGroup.RELEASE)
-    if not release:
+    copy = _EMAIL_COPY[kind]
+    rows = data.in_group(copy["group"])
+    if not rows:
         return
-    statuses = {row.enrollment_id: notices.card_email_status(row) for row in release}
-    ready = [row for row in release if statuses[row.enrollment_id].sendable]
+    statuses = {row.enrollment_id: notices.email_status(row, kind) for row in rows}
+    ready = [row for row in rows if statuses[row.enrollment_id].sendable]
     fresh = [row for row in ready if not statuses[row.enrollment_id].is_resend]
     outdated = [row for row in ready if statuses[row.enrollment_id].is_resend]
-    stuck = [
-        row for row in release
-        if statuses[row.enrollment_id].label.startswith("interrupted")
-    ]
+    stuck = [row for row in rows if statuses[row.enrollment_id].label.startswith("interrupted")]
+    tag = f"{kind}_{section.id}_{term.id}"
 
-    st.subheader("Email the term cards")
-    st.caption(
-        "Each parent gets one email with their child's term card attached, "
-        "protected by the child's birthdate (YYYYMMDD) as the password. Replies "
-        "go to the adviser. A card is never emailed twice."
-    )
+    st.subheader(copy["title"])
+    st.caption(copy["caption"])
     if not may_write:
         st.caption(f"{len(fresh)} ready to email.")
         return
@@ -287,11 +342,11 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
         return
     if notices.term_encoding_open(term, datetime.now(SCHOOL_TZ).date()):
         st.warning(
-            f"Grades for {term.name} can still be changed, so term cards can't be "
-            "emailed yet. Sending opens once encoding for the term has closed."
+            f"Grades for {term.name} can still be changed, so who belongs in which "
+            "group isn't final yet. Emails open once encoding for the term has closed."
         )
         return
-    adviser = session.get(User, section.adviser_user_id) if section.adviser_user_id else None
+    adviser = _adviser_for(session, section)
     if adviser is None:
         st.warning("This section has no adviser on record, so there's nobody for replies to reach.")
         return
@@ -301,8 +356,10 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
             f"{len(stuck)} email(s) were interrupted before they finished and may "
             "already have reached the parent. Check with the parent before sending again."
         )
-        if st.button("Allow these to be sent again", key=f"release_stuck_{section.id}_{term.id}"):
-            notices.release_stuck_sends(session, stuck, term_id=term.id, user_id=current_user.id)
+        if st.button("Allow these to be sent again", key=f"release_stuck_{tag}"):
+            notices.release_stuck_sends(
+                session, stuck, term_id=term.id, user_id=current_user.id, kind=kind
+            )
             try_commit(session, "Interrupted emails can be sent again.")
             st.rerun()
 
@@ -313,17 +370,24 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
     if fresh:
         first = fresh[0]
         with st.expander("Preview the email"):
-            ctx = _preview_context(first, section, term, adviser, session)
-            subject, body = term_card_email(ctx)
+            ctx = notices.notice_context(session, section, term, first, adviser)
+            if kind == notices.TERM_CARD:
+                subject, body = term_card_email(ctx)
+            else:
+                meeting = (
+                    (first.meeting.meeting_date, first.meeting.meeting_time)
+                    if first.meeting else None
+                )
+                subject, body = concern_email(ctx, meeting)
             st.text(f"To: {first.learner.guardian_email}\nSubject: {subject}\n\n{body}")
         if st.button(
             "Send a test to my own email first",
-            key=f"test_card_{section.id}_{term.id}",
-            help=f"Sends {_name(first)}'s card to {current_user.email}, marked as a test.",
+            key=f"test_{tag}",
+            help=f"Sends {_name(first)}'s {copy['thing']} to {current_user.email}, marked as a test.",
         ):
             try:
-                notices.send_test_card(
-                    session, section, term, first, adviser=adviser,
+                notices.send_test_email(
+                    session, section, term, first, kind=kind, adviser=adviser,
                     to=current_user.email, settings=settings,
                 )
                 flash("success", f"Test email sent to {current_user.email}.")
@@ -332,26 +396,21 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
             st.rerun()
 
     targets = fresh
-    label = f"Email {len(fresh)} term card(s)"
     if outdated:
-        resend = st.checkbox(
-            f"Also re-send {len(outdated)} card(s) that changed after they were emailed",
-            key=f"resend_{section.id}_{term.id}",
-        )
+        resend = st.checkbox(copy["resend"].format(n=len(outdated)), key=f"resend_{tag}")
         if resend:
             targets = fresh + outdated
-            label = f"Email {len(targets)} term card(s)"
     if not targets:
         return
-    confirmed = st.checkbox(
-        "I've checked the Release list above", key=f"confirm_send_{section.id}_{term.id}"
-    )
-    if st.button(label, type="primary", disabled=not confirmed,
-                 key=f"send_cards_{section.id}_{term.id}"):
+    confirmed = st.checkbox(copy["confirm"], key=f"confirm_send_{tag}")
+    if st.button(
+        f"Email {len(targets)} {copy['thing']}(s)", type="primary",
+        disabled=not confirmed, key=f"send_{tag}",
+    ):
         bar = st.progress(0.0, text="Sending…")
         try:
-            result = notices.send_term_cards(
-                session, section, term, targets, user_id=current_user.id,
+            result = notices.send_emails(
+                session, section, term, targets, kind=kind, user_id=current_user.id,
                 adviser=adviser, settings=settings,
                 progress=lambda done, total: bar.progress(
                     done / total, text=f"Sending… {done} of {total}"
@@ -364,7 +423,7 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
         bar.empty()
         if result.stopped:
             flash("error", f"Sending stopped: {result.stopped}")
-        message = f"Emailed {result.sent} term card(s)."
+        message = f"Emailed {result.sent} {copy['thing']}(s)."
         if result.failed:
             message += f" {result.failed} failed; they're listed below and can be retried."
         if result.skipped:
@@ -373,19 +432,127 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool)
         st.rerun()
 
 
-def _preview_context(row, section, term, adviser, session):
-    from app.models.academic_structure import GradeLevel
+def _sms_panel(session, section, term, data, current_user) -> None:
+    """Texting a Concern parent from the adviser's own phone (§78.5). One
+    learner at a time through a picker, so the page draws one set of
+    widgets rather than one per learner."""
+    concern = data.in_group(NoticeGroup.CONCERN)
+    if not concern:
+        return
+    textable = [row for row in concern if notices.sms_status(row) is None]
+    st.subheader("Text a parent")
+    st.caption(
+        "Texts go from your own phone, on your own load. Pick a learner, open the "
+        "message on your phone (or copy it), send it, then mark it as texted here. "
+        "The app can't see your phone, so it records that you marked it, not that "
+        "it arrived."
+    )
+    if not textable:
+        st.caption("No parent in Concern has both a mobile number and consent on file.")
+        return
+    adviser = _adviser_for(session, section)
+    if adviser is None:
+        st.warning("This section has no adviser on record.")
+        return
 
-    grade_level = session.get(GradeLevel, section.grade_level_id)
-    school_year = session.get(SchoolYear, term.school_year_id)
-    return NoticeContext(
-        learner_first=row.learner.first_name,
-        learner_last=row.learner.last_name,
-        section=section.name,
-        grade_level=grade_level.name if grade_level else "",
-        term_name=term.name,
-        school_year=school_year.name if school_year else "",
-        adviser_name=adviser.full_name,
+    by_id = {row.enrollment_id: row for row in textable}
+    tag = f"sms_{section.id}_{term.id}"
+
+    def label(enrollment_id):
+        row = by_id[enrollment_id]
+        texted = notices.last_texted(row)
+        done = notices._naive_utc(texted.sent_at) if texted else None
+        return f"{_name(row)}" + (f" — texted {done:%b %d}" if done else "")
+
+    # An override, or a consent change, can take the stored learner out
+    # of this list; a stored id no longer offered would raise.
+    _forget_stale(f"{tag}_learner", by_id)
+    choice = st.selectbox("Learner", options=list(by_id), format_func=label, key=f"{tag}_learner")
+    language = st.radio(
+        "Language", options=["FIL", "EN"],
+        format_func=lambda v: "Filipino" if v == "FIL" else "English",
+        horizontal=True, key=f"{tag}_language",
+    )
+    row = by_id[choice]
+    text = notices.sms_message(session, section, term, row, adviser=adviser, language=language)
+    st.code(text, language=None, wrap_lines=True)
+    texts = -(-len(text) // 153) if len(text) > 160 else 1
+    st.caption(
+        f"To {row.mobile_display} · {len(text)} characters, about {texts} text(s)."
+        + ("" if row.meeting else " No meeting is set, so it asks the parent to reply or visit.")
+    )
+    st.markdown(
+        f'<a href="{sms_link(row.learner.guardian_mobile, text)}" target="_self">'
+        "📱 Open in my phone's messaging app</a>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Mark as texted", key=f"{tag}_mark"):
+        try:
+            notices.record_sms(session, row, term_id=term.id, user_id=current_user.id)
+        except ValueError as exc:
+            flash("error", str(exc))
+        else:
+            try_commit(session, f"Recorded a text to {_name(row)}'s parent.")
+        st.rerun()
+
+
+def _letters_panel(session, section, term, data, current_user) -> None:
+    """Printing concern letters (§78.5): the whole Concern group, or one
+    learner, as one PDF — built only when asked. Paper needs no consent,
+    but every letter names a meeting, so learners without one are left out."""
+    concern = data.in_group(NoticeGroup.CONCERN)
+    if not concern:
+        return
+    st.subheader("Print letters")
+    with_meeting = [row for row in concern if row.meeting]
+    st.caption(
+        "One page per learner, in English and Filipino, signed by the adviser, with a "
+        "slip for the parent to sign and return. Each letter names the meeting date "
+        "and time."
+    )
+    if not with_meeting:
+        st.warning("Set a parent meeting date and time below first; the letter names it.")
+        return
+    if len(with_meeting) < len(concern):
+        st.caption(f"{len(concern) - len(with_meeting)} learner(s) have no meeting and are left out.")
+    adviser = _adviser_for(session, section)
+    if adviser is None:
+        st.warning("This section has no adviser on record to sign the letters.")
+        return
+
+    tag = f"letters_{section.id}_{term.id}"
+    by_id = {row.enrollment_id: row for row in with_meeting}
+    _forget_stale(f"{tag}_choice", {"ALL", *by_id})
+    choice = st.selectbox(
+        "Which letters",
+        options=["ALL", *by_id],
+        format_func=lambda v: (
+            f"Everyone in Concern with a meeting ({len(with_meeting)})" if v == "ALL"
+            else _name(by_id[v])
+        ),
+        key=f"{tag}_choice",
+    )
+    if not st.button("Build letters", key=f"{tag}_build"):
+        return
+    rows = with_meeting if choice == "ALL" else [by_id[choice]]
+    pdf, printed = notices.build_concern_letters(
+        session, section, term, rows, adviser=adviser, user_id=current_user.id,
+        today=datetime.now(SCHOOL_TZ).date(),
+    )
+    if not pdf:
+        st.warning("Nothing to print.")
+        return
+    committed = try_commit(session, f"Recorded {len(printed)} printed letter(s).")
+    # No rerun follows (the download button has to render in this run), so
+    # show the message here rather than one click later at the top.
+    render_flashes()
+    if not committed:
+        return
+    stem = f"ConcernLetters_{section.name.replace(' ', '')}_{term.name.replace(' ', '')}"
+    st.success(f"{len(printed)} letter(s) ready.")
+    st.download_button(
+        "Download letters (PDF)", data=pdf, file_name=f"{stem}.pdf",
+        mime="application/pdf", type="primary", key=f"{tag}_download",
     )
 
 
@@ -421,8 +588,8 @@ def render() -> None:
         "and who isn't ready yet — per section and term."
     )
     st.caption(
-        "Term cards are emailed from here. Concern notices (email, text and "
-        "printed letter) are coming next."
+        "Term cards are emailed from here, and parents in Concern are emailed, "
+        "texted or sent a printed letter."
     )
     render_flashes()
 
@@ -522,6 +689,25 @@ def render() -> None:
 
         st.divider()
         _email_panel(session, section, term, data, current_user, may_write=may_write)
+        if may_write and concern:
+            st.divider()
+            st.markdown("#### Contact the parents in Concern")
+            # One gate for all three channels: while grades can still change,
+            # a learner can still leave Concern, and a letter or text already
+            # sent can't be taken back.
+            if notices.term_encoding_open(term, datetime.now(SCHOOL_TZ).date()):
+                st.warning(
+                    f"Grades for {term.name} can still be changed, so who is in "
+                    "Concern isn't final yet. Emails, texts and letters open once "
+                    "encoding for the term has closed."
+                )
+            else:
+                _email_panel(
+                    session, section, term, data, current_user,
+                    may_write=may_write, kind=notices.CONCERN,
+                )
+                _sms_panel(session, section, term, data, current_user)
+                _letters_panel(session, section, term, data, current_user)
         st.divider()
         _sent_record(data)
         if not may_write:

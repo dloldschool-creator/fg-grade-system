@@ -164,9 +164,13 @@ BY_ROLE = {
                 "Set the **parent meeting** date and time there, and you can "
                 "give one learner a different time. If the numbers don't tell "
                 "the whole story, **override** a learner into the other group "
-                "with a reason. For now the page only shows the groups; "
-                "sending comes later. Parent contacts and consent go on the "
-                "**Learner Masterlist**.",
+                "with a reason.\n\n"
+                "Once grade encoding for the term has closed you can **email** "
+                "the term cards to Release and a short notice to Concern. "
+                "Concern parents can also be **texted** from your own phone "
+                "(press *Mark as texted* after sending) or sent a **printed "
+                "letter**. "
+                "Parent contacts and consent go on the **Learner Masterlist**.",
             ),
             (
                 "Prepare the month's sheet before encoding attendance",

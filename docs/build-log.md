@@ -2178,7 +2178,73 @@ current number.
            Consent and parent emails are empty for nearly every learner,
            so in practice nobody is sendable until contacts are filled
            in.
-      4. Concern email, SMS links and letters.
+      4. ~~Concern email, SMS links and letters~~ **Built 2026-10-04.**
+         No migration: everything lands in `parent_notifications`
+         (kind CONCERN, channel EMAIL / SMS / LETTER).
+         - **Email:** the term-card sender became `send_emails(kind=...)`,
+           so concern emails share the claim-then-send loop and the
+           double-send guard (the unique index is per kind).
+           `email_status(row, kind)` replaced `card_email_status`, which
+           stays as a wrapper. A term card can't go to a Concern learner,
+           nor a concern email to Release. Every channel (emails, texts,
+           letters) waits for the term's encoding to close, because the
+           groups aren't final until then. For concern notices that goes
+           beyond the spec, on purpose.
+         - **SMS:** `sms_text` (one language, Filipino default) passed
+           through `gsm_safe`, plain characters only; ñ/Ñ/É survive and
+           í becomes i. The page shows the message in a copyable box, an
+           `sms:+63...?&body=` link, and a **"Mark as texted"** button.
+           §78.5 says the app records that the adviser *opened* the
+           link, but a link tap never reaches the server, so it records
+           the adviser's mark instead. Repeats are separate rows. One
+           learner at a time through a picker, so no per-learner widgets.
+           Needs consent and a mobile (§78.1: nothing electronic without
+           consent).
+         - **Letter:** `app/concern_letter.py`, one long-bond page per
+           learner: letterhead and seal, bilingual body, adviser
+           signature, and a tear-off slip with drawn tick boxes
+           (Helvetica has no ballot-box glyph). Built only on a button,
+           for everyone in Concern who has a meeting or for one learner,
+           and each letter is recorded as LETTER. It needs no consent but
+           does need a meeting. Rendered and checked by eye via PyMuPDF
+           (scratchpad only).
+         - The wording, dates and times are in `app/notice_messages.py`:
+           Filipino days, months and `ika-9:00 ng umaga / tanghali /
+           hapon / gabi`, with times built by hand rather than strftime's
+           platform-dependent `%p`. SMS run 173–210 characters, two texts.
+           Advisers are named by full name, not "Ms. Santos": no title is
+           stored.
+         - Tests: `test_concern_notices.py` (pure, including a regex that
+           no concern text mentions failing, absences, lates, cutting or
+           averages) and `test_concern_sending.py` (live DB, savepoints,
+           fake mailer).
+         - **Review fixes, same day** (`/code-review high`, all eight
+           fixed):
+           1. The learner pickers (text, letters, per-learner meeting,
+              override) now call `_forget_stale` first. Without it, an
+              override moving the chosen learner out of the list crashed
+              the page on the next rerun.
+           2. **All three Concern channels now wait for encoding to
+              close**, not just email. A letter or text can't be taken
+              back if a late grade moves the learner out of Concern.
+           3. A concern email records the meeting it announced in
+              `basis_at`. Changing the meeting shows "meeting changed since
+              it was emailed", and re-sending supersedes the old row.
+           4. `record_sms` re-checks group, consent and mobile itself and
+              raises otherwise, as the email sender re-checks.
+           5. Letters are recorded **once per learner per meeting**:
+              reprints add nothing, and a new meeting is a new letter.
+           6. The letter build shows its result where it happened, not one
+              rerun later.
+           7. English day and month names are spelt out by hand
+              (`date_plain_en`, etc.), not taken from `%A/%B`, which
+              follow the host's locale.
+           8. The page's preview builds its context through
+              `parent_notice_service.notice_context`, the same path the
+              sender uses.
+         - **Not yet done:** the `sms:` link hasn't been tried on a real
+           Android or iPhone, and the letter hasn't been printed on the
+           school's paper.
 
       Traps already in CLAUDE.md that this walks straight into:
       - `failed_subject_count` must be read, not re-derived.
