@@ -2278,3 +2278,10 @@ current number.
       (emailing shows "isn't set up"). Not yet verified in a browser by
       anyone: Parent Notices, the contact form/upload, the `sms:` link on a
       phone, and a printed letter.
+- [x] **Term-card email verified live** (2026-10-04, user): the sending
+      Gmail account is configured in Secrets, "Send a test to my own email
+      first" delivered, and the attached term card opened with the learner's
+      birthdate (YYYYMMDD) as the password. That's the first end-to-end proof
+      of the mailer, the encrypted PDF and the wording on the real host.
+      Still unverified: the `sms:` link on a phone, a printed letter, and a
+      real (non-test) send.
