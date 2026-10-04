@@ -2040,9 +2040,28 @@ current number.
            with old values. Needed a new enum value: migration
            `e9c4a2b81d35` (`importjobtype` += `LEARNER_CONTACTS`), applied
            to the live DB, and it must stay ahead of the code.
-         - Still open from that review: consent can be recorded with no
-           email or mobile; the form shows typed rather than stored text
-           after saving; the page tests only read the source.
+         - The rest of that review, fixed the same day:
+           - **Consent needs somewhere to send.** This is checked on the
+             values a save would *leave*, stored ones included
+             (`guardian_contact.consent_without_contact`). The form
+             refuses it, the contact import errors that row, and the
+             learner import keeps the learner but records no consent,
+             with a warning. Blanking the only contact of a consented
+             learner is refused too.
+           - **The form shows what was stored after a save**, e.g.
+             `09171234567` rather than the `9171234567` that was typed.
+             Its widgets are `generation_key`-ed and `clear_text_fields`
+             runs on a successful commit only, so a refused save keeps
+             the typing to correct. That's the same mechanism Sections
+             was verified with in a browser, but this form hasn't been
+             seen in one: signing in locally means a real account on
+             the live Supabase Auth.
+           - **The save path is now run, not read.** `_save_contact` holds
+             the validate/apply/audit logic and the tests call it.
+             `guardian_contact.apply_contact` is the one place the
+             consent date is decided, shared with the contact import. A
+             re-saved form keeps the date consent was first recorded.
+           - `import_specs` imports back in isort order.
       2. Classification and overrides page, preview only with nothing
          sent; check it against real Term 1 data.
       3. Term-card email.

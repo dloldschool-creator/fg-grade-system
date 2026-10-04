@@ -16,7 +16,16 @@ from datetime import datetime
 
 from app import audit_service
 from app.display_time import SCHOOL_TZ
-from app.guardian_contact import clean_email, contact_values, normalise_mobile, parse_consent
+from app.grading_service import recompute_enrollment_grades_batch
+from app.guardian_contact import (
+    CONSENT_NEEDS_CONTACT,
+    apply_contact,
+    clean_email,
+    consent_without_contact,
+    contact_values,
+    normalise_mobile,
+    parse_consent,
+)
 from app.import_pipeline import (
     ColumnSpec,
     ImportSpec,
@@ -27,14 +36,13 @@ from app.import_pipeline import (
     parse_grade,
     parse_lrn,
 )
-from app.grading_service import recompute_enrollment_grades_batch
+from app.learner_access import may_edit
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeWorkflowStatus, ImportJobType, Sex
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
 from app.models.organization import Term
 from app.models.subjects import SectionSubjectOffering, Subject
-from app.learner_access import may_edit
 from app.naming import normalize_name
 from app.section_access import is_advised_by
 
@@ -256,6 +264,14 @@ def validate_learners(
             result.warnings.append(
                 RowError(number, "Notice Consent", f"{consent_error} — recorded as no consent")
             )
+        elif consent and consent_without_contact(
+            {"notices_consent": consent, "guardian_email": guardian_email,
+             "guardian_mobile": guardian_mobile}
+        ):
+            result.warnings.append(
+                RowError(number, "Notice Consent", f"{CONSENT_NEEDS_CONTACT} — recorded as no consent")
+            )
+            consent = False
 
         if len(result.errors) == errors_before:
             result.parsed.append(
@@ -663,6 +679,11 @@ def validate_learner_contacts(
             "notices_consent": consent,
         }
         changes = {k: v for k, v in changes.items() if v is not None}
+        # Against what the save would leave, stored values included: "Yes"
+        # for a learner with no email or mobile on file *or* in the file.
+        if consent_without_contact({**contact_values(learner), **changes}):
+            result.errors.append(RowError(number, "Notice Consent", CONSENT_NEEDS_CONTACT))
+            continue
         result.parsed.append(
             {
                 "__row__": number,
@@ -701,13 +722,7 @@ def commit_learner_contacts(session, parsed: list[dict], user_id=None) -> int:
         if learner is None:
             continue
         previous = contact_values(learner)
-        for field, value in row["__changes__"].items():
-            if field == "notices_consent":
-                if value != learner.notices_consent:
-                    learner.notices_consent = value
-                    learner.notices_consent_date = today if value else None
-            else:
-                setattr(learner, field, value)
+        apply_contact(learner, row["__changes__"], today)
         was, now = audit_service.changes(previous, contact_values(learner))
         if was:
             audit_service.record(

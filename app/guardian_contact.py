@@ -38,6 +38,42 @@ def contact_values(learner) -> dict:
     return {field: getattr(learner, field) for field in CONTACT_FIELDS}
 
 
+CONSENT_NEEDS_CONTACT = (
+    "consent needs a parent/guardian email or mobile number to send to"
+)
+
+
+def consent_without_contact(values: dict) -> bool:
+    """True for a contact that would be consented with nowhere to send.
+
+    Checked on the values a save *would leave*, not on what was typed: an
+    update that blanks the only email of a consented learner fails it too.
+    A consented learner with no address would otherwise reach the notice
+    queue looking ready and fail only at send time.
+    """
+    return bool(values.get("notices_consent")) and not (
+        values.get("guardian_email") or values.get("guardian_mobile")
+    )
+
+
+def apply_contact(learner, changes: dict, today) -> None:
+    """Writes `changes` (any subset of CONTACT_FIELDS) onto `learner`.
+
+    The one place the consent date is decided, shared by the Masterlist
+    form and the contact import: dated `today` when consent turns on,
+    cleared when it turns off, and left alone when it doesn't change — a
+    re-saved form must not move the date consent was first recorded.
+    `today` is the caller's, in school time; the host runs on UTC.
+    """
+    for field, value in changes.items():
+        if field == "notices_consent":
+            if value != learner.notices_consent:
+                learner.notices_consent = value
+                learner.notices_consent_date = today if value else None
+        else:
+            setattr(learner, field, value)
+
+
 def clean_email(raw) -> tuple[str | None, str | None]:
     value = _text(raw).lower()
     if not value:

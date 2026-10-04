@@ -33,7 +33,15 @@ from app.admin_pages._helpers import (
 )
 from app.auth import require_role
 from app.display_time import SCHOOL_TZ
-from app.guardian_contact import clean_email, contact_values, display_mobile, normalise_mobile
+from app.guardian_contact import (
+    CONSENT_NEEDS_CONTACT,
+    apply_contact,
+    clean_email,
+    consent_without_contact,
+    contact_values,
+    display_mobile,
+    normalise_mobile,
+)
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.import_specs import LEARNER_CONTACT_IMPORT, LEARNER_IMPORT
 from app.learner_access import editable_learner_ids, may_edit
@@ -128,60 +136,103 @@ def _identity_form(session, learner: Learner, current_user, *, may_delete: bool)
             st.rerun()
 
 
+def _save_contact(session, learner, user_id, *, name, email, mobile, consent) -> str | None:
+    """Validates and writes the contact form's values onto `learner`.
+
+    Returns an error to show, or None once the change (and its audit
+    entry, if anything differs) is on the session for the caller to
+    commit. Nothing is written when it returns an error. Kept out of the
+    form so a test can run the real save path rather than read it.
+
+    Unlike the contact import, a blank box here *clears* the stored value:
+    the form shows what is stored, so emptying a box is a deliberate act.
+    """
+    email, email_error = clean_email(email)
+    mobile, mobile_error = normalise_mobile(mobile)
+    if email_error or mobile_error:
+        return email_error or mobile_error
+    changes = {
+        "guardian_name": normalize_name(name),
+        "guardian_email": email,
+        "guardian_mobile": mobile,
+        "notices_consent": consent,
+    }
+    if consent_without_contact(changes):
+        return (
+            f"Can't save: {CONSENT_NEEDS_CONTACT}. Add one, or untick consent."
+        )
+
+    previous = contact_values(learner)
+    # Dated in school time; the host runs on UTC.
+    apply_contact(learner, changes, datetime.now(SCHOOL_TZ).date())
+    was, now = audit_service.changes(previous, contact_values(learner))
+    if was:
+        audit_service.record(
+            session,
+            action=audit_service.LEARNER_CONTACT_CHANGED,
+            object_type="learners",
+            object_id=learner.id,
+            user_id=user_id,
+            previous=was,
+            new=now,
+        )
+    return None
+
+
 def _contact_form(session, learner: Learner, current_user) -> None:
     """Parent/guardian contact and consent (§78.1). Nothing is emailed or
-    texted to a parent unless consent is ticked here."""
+    texted to a parent unless consent is ticked here.
+
+    The widgets are generation-keyed and the generation moves on a
+    successful save. A keyed widget otherwise keeps what was *typed*
+    across the rerun — "9171234567" stays on screen while the database
+    holds +639171234567 — and a form widget's frontend copy survives even
+    a deleted session_state key (see `clear_text_fields`). A refused save
+    keeps the generation, so the typing is still there to correct.
+    """
+    form = f"contact_{learner.id}"
     st.caption(
         "Where term cards and notices are sent. Tick consent only once the "
         "parent/guardian has agreed to receive school notices by email or text."
     )
-    with st.form(f"contact_{learner.id}"):
+    with st.form(form):
         guardian_name = st.text_input(
-            "Parent/guardian name", value=learner.guardian_name or "", key=f"gn_{learner.id}"
+            "Parent/guardian name",
+            value=learner.guardian_name or "",
+            key=generation_key(form, "name"),
         )
         col1, col2 = st.columns(2)
         guardian_email = col1.text_input(
-            "Email", value=learner.guardian_email or "", key=f"ge_{learner.id}"
+            "Email", value=learner.guardian_email or "", key=generation_key(form, "email")
         )
         guardian_mobile = col2.text_input(
             "Mobile (09XXXXXXXXX)",
             value=display_mobile(learner.guardian_mobile),
-            key=f"gm_{learner.id}",
+            key=generation_key(form, "mobile"),
         )
         consent = st.checkbox(
             "Parent/guardian consents to school notices by email/SMS",
             value=learner.notices_consent,
-            key=f"gc_{learner.id}",
+            key=generation_key(form, "consent"),
         )
         if learner.notices_consent and learner.notices_consent_date:
             st.caption(f"Consent recorded {learner.notices_consent_date:%b %d, %Y}.")
 
         if st.form_submit_button("Save contact"):
-            email, email_error = clean_email(guardian_email)
-            mobile, mobile_error = normalise_mobile(guardian_mobile)
-            if email_error or mobile_error:
-                st.error(email_error or mobile_error)
+            error = _save_contact(
+                session,
+                learner,
+                current_user.id,
+                name=guardian_name,
+                email=guardian_email,
+                mobile=guardian_mobile,
+                consent=consent,
+            )
+            if error:
+                st.error(error)
                 return
-            previous = contact_values(learner)
-            learner.guardian_name = normalize_name(guardian_name)
-            learner.guardian_email = email
-            learner.guardian_mobile = mobile
-            if consent != learner.notices_consent:
-                learner.notices_consent = consent
-                # Dated in school time; the host runs on UTC.
-                learner.notices_consent_date = datetime.now(SCHOOL_TZ).date() if consent else None
-            was, now = audit_service.changes(previous, contact_values(learner))
-            if was:
-                audit_service.record(
-                    session,
-                    action=audit_service.LEARNER_CONTACT_CHANGED,
-                    object_type="learners",
-                    object_id=learner.id,
-                    user_id=current_user.id,
-                    previous=was,
-                    new=now,
-                )
-            try_commit(session, "Contact saved.")
+            if try_commit(session, "Contact saved."):
+                clear_text_fields(form)
             st.rerun()
 
 

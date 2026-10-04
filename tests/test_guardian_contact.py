@@ -1,6 +1,7 @@
 """Parent/guardian contact (§78.1): validation, importer and wiring."""
 
 import uuid
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -297,16 +298,117 @@ def test_the_contact_update_is_offered_on_the_import_page_and_the_masterlist():
     assert "_contact_upload_section(" in inspect.getsource(learners.render)
 
 
-def test_the_contact_form_is_drawn_for_editable_learners_and_audited():
+def test_the_contact_form_is_drawn_for_editable_learners():
     import inspect
 
     from app.admin_pages import learners
 
     assert "_contact_form(session, learner, current_user)" in inspect.getsource(learners.render)
-    source = inspect.getsource(learners._contact_form)
-    assert "LEARNER_CONTACT_CHANGED" in source
-    # Consent is dated in school time, never the UTC host's date.
-    assert "SCHOOL_TZ" in source
+
+
+# --- The Masterlist form's save path, run rather than read -----------------
+
+
+def _save(learner, session=None, **values):
+    from app.admin_pages.learners import _save_contact
+
+    session = session or _LearnerSession([])
+    form = {"name": "", "email": "", "mobile": "", "consent": False, **values}
+    return _save_contact(session, learner, uuid.uuid4(), **form), session
+
+
+def test_saving_the_form_normalises_dates_consent_and_audits():
+    from app.display_time import SCHOOL_TZ
+
+    learner = _learner(LRN_A)
+    error, session = _save(
+        learner, name="maria cruz", email="Maria@Gmail.com", mobile="9171234567", consent=True
+    )
+    assert error is None
+    assert learner.guardian_name == "MARIA CRUZ"
+    assert learner.guardian_email == "maria@gmail.com"
+    assert learner.guardian_mobile == "+639171234567"
+    # Dated in school time, never the UTC host's date.
+    assert learner.notices_consent_date == datetime.now(SCHOOL_TZ).date()
+    (entry,) = session.added
+    assert entry.action == "LEARNER_CONTACT_CHANGED"
+    assert entry.new_value["guardian_mobile"] == "+639171234567"
+
+
+def test_a_re_saved_form_keeps_the_date_consent_was_first_recorded():
+    first = date(2026, 6, 1)
+    learner = _learner(
+        LRN_A, guardian_email="a@b.com", notices_consent=True, notices_consent_date=first
+    )
+    error, session = _save(learner, email="a@b.com", name="new name", consent=True)
+    assert error is None and learner.notices_consent_date == first
+
+
+def test_unticking_consent_clears_its_date():
+    learner = _learner(
+        LRN_A, guardian_email="a@b.com", notices_consent=True, notices_consent_date=date(2026, 6, 1)
+    )
+    error, _ = _save(learner, email="a@b.com", consent=False)
+    assert error is None
+    assert learner.notices_consent is False and learner.notices_consent_date is None
+
+
+def test_an_unchanged_form_writes_no_audit_entry():
+    learner = _learner(LRN_A, guardian_mobile="+639171234567")
+    error, session = _save(learner, mobile="09171234567")
+    assert error is None and session.added == []
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"email": "not-an-email"},
+        {"mobile": "12345"},
+        # Consent with nowhere to send.
+        {"consent": True},
+        {"name": "MARIA CRUZ", "consent": True},
+    ],
+)
+def test_a_refused_save_writes_nothing(values):
+    learner = _learner(LRN_A, guardian_email="keep@me.com")
+    before = vars(learner).copy()
+    error, session = _save(learner, **values)
+    assert error
+    assert vars(learner) == before and session.added == []
+
+
+def test_blanking_the_only_contact_of_a_consented_learner_is_refused():
+    learner = _learner(
+        LRN_A, guardian_email="a@b.com", notices_consent=True, notices_consent_date=date(2026, 6, 1)
+    )
+    error, _ = _save(learner, email="", consent=True)
+    assert error and learner.guardian_email == "a@b.com"
+
+
+# --- Consent needs somewhere to send, on every path ------------------------
+
+
+def test_the_learner_import_keeps_the_learner_but_drops_consent_with_no_contact():
+    result = validate_learners(_EmptySession(), [_row(notices_consent="yes")], {})
+    assert result.ok and result.parsed[0]["notices_consent"] is False
+    assert [w.column for w in result.warnings] == ["Notice Consent"]
+
+
+def test_the_contact_update_refuses_consent_with_no_contact_anywhere():
+    result = validate_learner_contacts(
+        _LearnerSession([_learner(LRN_A)]),
+        [{"__row__": 2, "lrn": LRN_A, "notices_consent": "yes"}],
+        {},
+    )
+    assert not result.parsed and result.errors[0].column == "Notice Consent"
+
+
+def test_the_contact_update_accepts_consent_when_a_contact_is_already_stored():
+    learner = _learner(LRN_A, guardian_mobile="+639171234567")
+    result = validate_learner_contacts(
+        _LearnerSession([learner]), [{"__row__": 2, "lrn": LRN_A, "notices_consent": "yes"}], {}
+    )
+    assert result.ok and result.parsed[0]["notices_consent"] is True
 
 
 def test_the_read_only_card_shows_no_contact_details():
