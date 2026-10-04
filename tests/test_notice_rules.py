@@ -81,10 +81,45 @@ def test_an_incomplete_record_is_not_ready_never_released(missing):
     assert group(**missing) is NoticeGroup.NOT_READY
 
 
-def test_not_ready_wins_even_over_an_obvious_concern():
-    """A learner failing with blank grades still waits: the blank grades
-    might be failures too, and the parent should get one complete notice."""
-    assert group(failed_count=3, absences=10, unencoded_days=2) is NoticeGroup.NOT_READY
+def test_a_failing_grade_on_an_incomplete_record_still_waits():
+    """Blank grades might be failures too, and grades can still change:
+    a grade concern is only read off a complete record."""
+    assert group(failed_count=3, unencoded_days=2) is NoticeGroup.NOT_READY
+    assert group(failed_count=3, grades_complete=False) is NoticeGroup.NOT_READY
+
+
+def test_attendance_over_the_limit_is_concern_before_the_record_is_complete():
+    """§78.2 as amended 2026-10-04: encoding the rest can only add to a
+    count, so 3 absences so far is already over the limit."""
+    result = classify(figures(absences=3, unencoded_days=20, grades_complete=False), POLICY)
+    assert result.group is NoticeGroup.CONCERN
+    assert result.attendance_concern
+    assert result.reasons == ("3 absences",)
+    assert result.incomplete == (
+        "some grades for this term are still blank",
+        "20 attendance days not encoded",
+    )
+    assert not result.record_complete
+
+
+def test_an_early_concern_never_names_a_failing_count_from_blank_grades():
+    """A partial summary's failing count is not a fact yet."""
+    result = classify(
+        figures(cuttings=1, failed_count=2, grades_complete=False, summary_found=True), POLICY
+    )
+    assert result.reasons == ("1 cutting",)
+
+
+def test_failing_counts_once_grades_are_complete_even_with_days_missing():
+    result = classify(figures(failed_count=1, lates=3, unencoded_days=4), POLICY)
+    assert result.group is NoticeGroup.CONCERN
+    assert result.reasons == ("failing 1 subject", "3 lates")
+    assert result.incomplete == ("4 attendance days not encoded",)
+
+
+def test_a_grade_only_concern_is_not_an_attendance_concern():
+    result = classify(figures(failed_count=1), POLICY)
+    assert not result.attendance_concern and result.record_complete
 
 
 def test_a_half_encoded_month_is_not_mistaken_for_perfect_attendance():
@@ -124,3 +159,14 @@ def test_the_policy_reads_back_in_plain_words():
     assert POLICY.describe() == (
         "no failing grade, at most 2 absence(s), at most 2 late(s) and no cutting"
     )
+
+
+def test_an_incomplete_record_cannot_be_overridden():
+    """Overriding an early attendance concern to Release would email a
+    term card with blanks on it; the override waits instead."""
+    assert not may_override(NoticeGroup.CONCERN, record_complete=False)
+    assert (
+        effective_group(NoticeGroup.CONCERN, NoticeGroup.RELEASE, record_complete=False)
+        is NoticeGroup.CONCERN
+    )
+    assert may_override(NoticeGroup.CONCERN, record_complete=True)

@@ -14,6 +14,15 @@ completeness are read from `term_grade_summaries` exactly as
 `grading_service` stored them, against the passing mark in force when the
 grades were saved. The decision itself is `app.notice_rules.classify`.
 
+**When Concern parents can be contacted** (§78.5, amended 2026-10-04).
+A learner in Concern on attendance can be contacted at once, encoding
+open or not: an absence is not graded and can't be undone by later
+encoding. Anyone else in Concern — a failing grade, or an adviser's
+override — waits until the term's encoding closes, since the grade can
+still change. `NoticeRow.concern_held` is that one rule, and the email,
+SMS and letter paths all read it, so the page can't offer what the
+sender would refuse.
+
 Writes (`set_override`, `clear_override`, `set_meeting`, `clear_meeting`)
 add to the caller's session with their audit entries and leave the commit
 to the caller, so a refused commit rolls both back together.
@@ -84,6 +93,12 @@ class NoticeRow:
     computed: NoticeGroup
     reasons: tuple[str, ...]
     group: NoticeGroup
+    # Still missing (grades, attendance days). Non-empty for Not ready, and
+    # for Concern reached on attendance before the record was complete.
+    incomplete: tuple[str, ...] = ()
+    attendance_concern: bool = False
+    # The term's grade encoding was open when this was loaded.
+    encoding_open: bool = False
     override_decision: NoticeGroup | None = None
     override_reason: str | None = None
     override_by: str | None = None
@@ -103,6 +118,14 @@ class NoticeRow:
             ),
             None,
         )
+
+    @property
+    def concern_held(self) -> str | None:
+        """Why this Concern learner's parent can't be contacted yet, or None.
+        Only an attendance concern goes out while encoding is open (§78.5)."""
+        if self.encoding_open and not self.attendance_concern:
+            return "waits until grade encoding closes"
+        return None
 
     @property
     def meeting_at(self) -> datetime | None:
@@ -174,7 +197,12 @@ def resolve_thresholds(session, school_year_id) -> NoticeThresholds | None:
     )
 
 
-def load_section_notices(session, section, term: Term) -> SectionNotices:
+def load_section_notices(session, section, term: Term, today: date | None = None) -> SectionNotices:
+    if today is None:
+        from app.display_time import SCHOOL_TZ
+
+        today = datetime.now(SCHOOL_TZ).date()
+    encoding_open = term_encoding_open(term, today)
     thresholds = resolve_thresholds(session, term.school_year_id)
 
     class_days = (
@@ -317,12 +345,15 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
             cuttings=attendance.cutting_count,
         )
         if thresholds is None:
-            computed, reasons = NoticeGroup.NOT_READY, (
-                "no parent-notice policy for this school year",
+            no_policy = ("no parent-notice policy for this school year",)
+            computed, reasons, incomplete, on_attendance = (
+                NoticeGroup.NOT_READY, no_policy, no_policy, False
             )
         else:
             classification = classify(figures, thresholds)
             computed, reasons = classification.group, classification.reasons
+            incomplete = classification.incomplete
+            on_attendance = classification.attendance_concern
         override = overrides.get(enrollment.id)
         override_decision = NoticeGroup(override.decision) if override else None
         result.rows.append(
@@ -332,7 +363,12 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
                 figures=figures,
                 computed=computed,
                 reasons=reasons,
-                group=effective_group(computed, override_decision),
+                group=effective_group(
+                    computed, override_decision, record_complete=not incomplete
+                ),
+                incomplete=incomplete,
+                attendance_concern=on_attendance,
+                encoding_open=encoding_open,
                 override_decision=override_decision,
                 override_reason=override.reason if override else None,
                 override_by=setters.get(override.set_by_user_id) if override else None,
@@ -497,6 +533,10 @@ def email_status(row: NoticeRow, kind: str, now: datetime | None = None) -> Emai
         if _is_stuck(live, now or _utcnow()):
             return EmailStatus(False, "interrupted — may have gone out")
         return EmailStatus(False, "sending…")
+    # Held only blocks a *new* send; one already sent still reads as sent.
+    held = kind == CONCERN and row.concern_held
+    if held and (live is None or row.concern_is_outdated()):
+        return EmailStatus(False, held)
     if not row.learner.notices_consent:
         return EmailStatus(False, "no consent on file")
     if not row.learner.guardian_email:
@@ -847,6 +887,8 @@ def sms_status(row: NoticeRow) -> str | None:
     """Why this Concern learner's parent can't be texted, or None if they can."""
     if row.group is not NoticeGroup.CONCERN:
         return f"not in {GROUP_LABELS[NoticeGroup.CONCERN]}"
+    if row.concern_held:
+        return row.concern_held
     if not row.learner.notices_consent:
         return "no consent on file"
     if not row.learner.guardian_mobile:
@@ -907,7 +949,9 @@ def build_concern_letters(session, section, term, rows, *, adviser, user_id, tod
     from app.models.organization import School
     from app.notice_messages import date_plain_en, letter_paragraphs
 
-    printable = [r for r in rows if r.group is NoticeGroup.CONCERN and r.meeting]
+    printable = [
+        r for r in rows if r.group is NoticeGroup.CONCERN and r.meeting and not r.concern_held
+    ]
     if not printable:
         return None, []
     school = session.query(School).one_or_none()

@@ -9,6 +9,14 @@ and any later report all read the same rule.
 not a passing grade (rule 2) and an unencoded attendance day is not a day
 present, so a learner whose record is half-encoded must never be released
 merely because nothing *bad* has been encoded yet.
+
+**Except attendance already over the limit** (§78.2, amended 2026-10-04).
+Encoding more days can only add to a count, so 3 absences on the days
+encoded so far is 3 or more however the rest turn out. Such a learner is
+Concern at once, which is what lets the adviser contact the parent during
+the term. The missing items are still carried (`incomplete`), and while
+any remain the learner can't be overridden — overriding them to Release
+would email a card with blanks on it.
 """
 
 import enum
@@ -72,6 +80,15 @@ class LearnerTermFigures:
 class Classification:
     group: NoticeGroup
     reasons: tuple[str, ...]
+    # What is still missing. Always set for Not ready; set for Concern only
+    # when attendance put the learner there before the record was complete.
+    incomplete: tuple[str, ...] = ()
+    # Concern on attendance — contactable while encoding is open (§78.5).
+    attendance_concern: bool = False
+
+    @property
+    def record_complete(self) -> bool:
+        return not self.incomplete
 
 
 def _plural(count: int, word: str) -> str:
@@ -79,44 +96,56 @@ def _plural(count: int, word: str) -> str:
 
 
 def classify(figures: LearnerTermFigures, thresholds: NoticeThresholds) -> Classification:
-    not_ready = []
+    missing_grades = []
     if not figures.summary_found:
-        not_ready.append("grades not yet saved for this term")
+        missing_grades.append("grades not yet saved for this term")
     elif not figures.grades_complete:
-        not_ready.append("some grades for this term are still blank")
+        missing_grades.append("some grades for this term are still blank")
     elif figures.failed_count is None:
-        not_ready.append("grades not yet summarised for this term")
+        missing_grades.append("grades not yet summarised for this term")
+    not_ready = list(missing_grades)
     if figures.eligible_days == 0:
         not_ready.append("no class days on the calendar for this term")
     elif figures.unencoded_days:
         not_ready.append(f"{_plural(figures.unencoded_days, 'attendance day')} not encoded")
-    if not_ready:
-        return Classification(NoticeGroup.NOT_READY, tuple(not_ready))
 
-    concern = []
-    if figures.failed_count:
-        concern.append(f"failing {_plural(figures.failed_count, 'subject')}")
+    attendance = []
     if figures.absences > thresholds.max_absences:
-        concern.append(_plural(figures.absences, "absence"))
+        attendance.append(_plural(figures.absences, "absence"))
     if figures.lates > thresholds.max_lates:
-        concern.append(_plural(figures.lates, "late"))
+        attendance.append(_plural(figures.lates, "late"))
     if figures.cuttings > thresholds.max_cuttings:
-        concern.append(_plural(figures.cuttings, "cutting"))
+        attendance.append(_plural(figures.cuttings, "cutting"))
+
+    # A failing count is only read off a complete grade record.
+    failing = (
+        [f"failing {_plural(figures.failed_count, 'subject')}"]
+        if not missing_grades and figures.failed_count
+        else []
+    )
+    if not_ready and not attendance:
+        return Classification(NoticeGroup.NOT_READY, tuple(not_ready), incomplete=tuple(not_ready))
+    concern = failing + attendance
     if concern:
-        return Classification(NoticeGroup.CONCERN, tuple(concern))
+        return Classification(
+            NoticeGroup.CONCERN, tuple(concern),
+            incomplete=tuple(not_ready), attendance_concern=bool(attendance),
+        )
     return Classification(NoticeGroup.RELEASE, ())
 
 
-def effective_group(computed: NoticeGroup, override: NoticeGroup | None) -> NoticeGroup:
+def effective_group(
+    computed: NoticeGroup, override: NoticeGroup | None, *, record_complete: bool = True
+) -> NoticeGroup:
     """An adviser's override moves a learner between Release and Concern
-    (§78.3). It never lifts Not ready — the missing grades or attendance
-    have to be completed first — and while the learner is Not ready the
-    override waits rather than being discarded, so it applies again once
-    the record is complete."""
-    if computed is NoticeGroup.NOT_READY or override is None:
+    (§78.3). It never applies to an incomplete record — Not ready, or
+    Concern on attendance with grades or days still missing — and while
+    the record is incomplete the override waits rather than being
+    discarded, so it applies again once the record is complete."""
+    if computed is NoticeGroup.NOT_READY or override is None or not record_complete:
         return computed
     return override
 
 
-def may_override(computed: NoticeGroup) -> bool:
-    return computed is not NoticeGroup.NOT_READY
+def may_override(computed: NoticeGroup, record_complete: bool = True) -> bool:
+    return computed is not NoticeGroup.NOT_READY and record_complete

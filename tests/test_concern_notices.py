@@ -190,12 +190,49 @@ def test_every_learner_picker_forgets_a_stale_choice_before_it_is_built():
         assert source.index(key) < source.index("st.selectbox("), function.__name__
 
 
-def test_texts_and_letters_wait_for_encoding_to_close_like_emails():
+def _held_row(*, attendance: bool, encoding_open: bool):
+    from app import parent_notice_service as notices
+    from app.notice_rules import NoticeGroup
+
+    learner = SimpleNamespace(
+        notices_consent=True, guardian_mobile="+639171234567",
+        guardian_email="parent@example.com",
+    )
+    return notices.NoticeRow(
+        enrollment_id=None, learner=learner, figures=None,
+        computed=NoticeGroup.CONCERN, reasons=(), group=NoticeGroup.CONCERN,
+        attendance_concern=attendance, encoding_open=encoding_open,
+        meeting=notices.Meeting(MEETING[0], MEETING[1]),
+    )
+
+
+@pytest.mark.parametrize("attendance, encoding_open, held", [
+    (True, True, False),    # attendance: contact at once, mid-term
+    (False, True, True),    # failing grade: waits while grades can change
+    (False, False, False),  # failing grade, encoding closed
+    (True, False, False),
+])
+def test_only_attendance_concerns_go_out_while_encoding_is_open(attendance, encoding_open, held):
+    """§78.5 as amended 2026-10-04. Email, text and letter all read the
+    same rule, so no channel can be used for a learner another refuses."""
+    from app import parent_notice_service as notices
+
+    row = _held_row(attendance=attendance, encoding_open=encoding_open)
+    assert bool(row.concern_held) is held
+    assert notices.concern_email_status(row).sendable is not held
+    assert (notices.sms_status(row) is None) is not held
+    if held:
+        assert notices.build_concern_letters(
+            None, None, None, [row], adviser=None, user_id=None, today=MEETING[0]
+        ) == (None, [])
+
+
+def test_the_page_no_longer_gates_every_concern_channel_on_encoding():
+    """The one page-level gate became the per-learner `concern_held`; a
+    page gate back in front of the panels would hide attendance concerns."""
     import inspect
 
     from app.admin_pages import parent_notices as page
 
     source = inspect.getsource(page.render)
-    gate = source.index("term_encoding_open(term")
-    for panel in ("_sms_panel(", "_letters_panel(", "kind=notices.CONCERN"):
-        assert gate < source.index(panel), panel
+    assert "term_encoding_open" not in source

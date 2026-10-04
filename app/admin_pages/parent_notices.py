@@ -91,6 +91,7 @@ def _group_table(rows, *, concern: bool) -> list[dict]:
             "Late": row.figures.lates,
             "Cutting": row.figures.cuttings,
             "Why": "; ".join(row.reasons) or "—",
+            **({"Still missing": "; ".join(row.incomplete)} if concern else {}),
             "Override": (
                 f"{GROUP_LABELS[row.override_decision]} — {row.override_reason}"
                 if row.override_decision
@@ -165,7 +166,9 @@ def _section_meeting_form(session, section, term, data, current_user) -> None:
 
 
 def _override_form(session, section, term, data, current_user) -> None:
-    candidates = [row for row in data.rows if may_override(row.computed)]
+    candidates = [
+        row for row in data.rows if may_override(row.computed, record_complete=not row.incomplete)
+    ]
     if not candidates:
         return
     st.subheader("Override a learner")
@@ -340,7 +343,9 @@ def _email_panel(session, section, term, data, current_user, *, may_write: bool,
             icon="✉️",
         )
         return
-    if notices.term_encoding_open(term, datetime.now(SCHOOL_TZ).date()):
+    if kind == notices.TERM_CARD and notices.term_encoding_open(
+        term, datetime.now(SCHOOL_TZ).date()
+    ):
         st.warning(
             f"Grades for {term.name} can still be changed, so who belongs in which "
             "group isn't final yet. Emails open once encoding for the term has closed."
@@ -448,7 +453,10 @@ def _sms_panel(session, section, term, data, current_user) -> None:
         "it arrived."
     )
     if not textable:
-        st.caption("No parent in Concern has both a mobile number and consent on file.")
+        st.caption(
+            "No parent in Concern can be texted yet: each needs a mobile number and "
+            "consent on file, and only attendance concerns go out before encoding closes."
+        )
         return
     adviser = _adviser_for(session, section)
     if adviser is None:
@@ -504,6 +512,10 @@ def _letters_panel(session, section, term, data, current_user) -> None:
     if not concern:
         return
     st.subheader("Print letters")
+    concern = [row for row in concern if not row.concern_held]
+    if not concern:
+        st.caption("No learner in Concern can be contacted yet.")
+        return
     with_meeting = [row for row in concern if row.meeting]
     st.caption(
         "One page per learner, in English and Filipino, signed by the adviser, with a "
@@ -692,22 +704,23 @@ def render() -> None:
         if may_write and concern:
             st.divider()
             st.markdown("#### Contact the parents in Concern")
-            # One gate for all three channels: while grades can still change,
-            # a learner can still leave Concern, and a letter or text already
-            # sent can't be taken back.
-            if notices.term_encoding_open(term, datetime.now(SCHOOL_TZ).date()):
-                st.warning(
-                    f"Grades for {term.name} can still be changed, so who is in "
-                    "Concern isn't final yet. Emails, texts and letters open once "
-                    "encoding for the term has closed."
+            # One rule for all three channels (§78.5): attendance concerns can
+            # go out at once; a failing grade waits for encoding to close,
+            # since it can still change and a text or letter can't be taken
+            # back. `concern_held` is that rule; each panel reads it.
+            held = [row for row in concern if row.concern_held]
+            if held:
+                st.info(
+                    f"Grades for {term.name} can still be changed, so {len(held)} "
+                    "learner(s) in Concern for a grade, not attendance, wait until "
+                    "encoding closes. Attendance concerns can be contacted now."
                 )
-            else:
-                _email_panel(
-                    session, section, term, data, current_user,
-                    may_write=may_write, kind=notices.CONCERN,
-                )
-                _sms_panel(session, section, term, data, current_user)
-                _letters_panel(session, section, term, data, current_user)
+            _email_panel(
+                session, section, term, data, current_user,
+                may_write=may_write, kind=notices.CONCERN,
+            )
+            _sms_panel(session, section, term, data, current_user)
+            _letters_panel(session, section, term, data, current_user)
         st.divider()
         _sent_record(data)
         if not may_write:

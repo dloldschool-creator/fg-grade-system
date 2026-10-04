@@ -114,7 +114,10 @@ def test_everyone_enrolled_is_grouped_or_counted_as_having_left(session, section
 def test_an_override_moves_the_learner_and_is_audited_with_its_reason(session, section_term):
     section, term = section_term
     data = notices.load_section_notices(session, section, term)
-    row = next((r for r in data.rows if may_override(r.computed)), None)
+    row = next(
+        (r for r in data.rows if may_override(r.computed, record_complete=not r.incomplete)),
+        None,
+    )
     if row is None:
         pytest.skip("nobody in this section is ready to be grouped yet")
     target = NoticeGroup.CONCERN if row.computed is NoticeGroup.RELEASE else NoticeGroup.RELEASE

@@ -3055,6 +3055,8 @@ For the selected section and term, every learner on the roll on the term's last 
 
 **Not ready is checked first.** A blank grade is not a passing grade (§65), and an unencoded day is not a day present. Without this check, a learner whose record is half-encoded would be classed as Release.
 
+**Except for attendance already over the limit** (amended 2026-10-04). If the days already encoded reach 3 ABSENT, 3 LATE or 1 CUTTING, the learner is **Concern** even while grades are blank or other days are unencoded. Encoding the remaining days can only add to a count, never lower it, so the record does not have to be complete for that count to be over the limit. The parent can then be contacted during the term rather than after it closes (§78.5). A learner held back only by blank grades or unencoded days, with no attendance count over the limit, stays Not ready.
+
 - **Failing** is read from the stored term summary (`failed_subject_count`), never re-derived. That way the Grade 11 language pair and the passing mark in force for the term are honoured exactly as the term card shows them (§17, §21).
 - **Absences, lates and cuttings** are counted over the learner's **eligible** class days between the term's start and end dates (§31), using the attendance engine. Days outside the learner's active window do not count.
 - The thresholds (2 / 3 / 3 / 1) are stored in a **versioned policy record** scoped to the school year, not in code (§59, §74).
@@ -3075,6 +3077,8 @@ The adviser may move a learner from Release to Concern, or from Concern to Relea
 ## 78.5 Concern notices
 
 Three channels; the adviser may use any of them for a learner:
+
+**When they open** (amended 2026-10-04). A learner in Concern for **attendance** (any count over the limit, §78.2) can be contacted at any time, including while the term's grade encoding is still open. Absences and lates are not graded, so they are not waiting on anything. A learner in Concern **only** for a failing grade, or only by override, is contacted once encoding is closed (§78.4), since the grade can still change until then. Concern notices use the same general wording whatever the reason, and still go **once per learner per term** on each channel. A parent contacted about attendance mid-term is not contacted again at the term's close unless the meeting schedule changes.
 
 - **Email:** a general message asking the parent to come to the school or reply. Same sender rules as §78.4. No attachment.
 - **SMS:** sent from the adviser's **own phone**. The page provides, per learner, a link that opens the phone's messaging app with the number and message already filled in, and a copy-message button for desktop. The app records that the adviser opened it, not that the SMS was delivered.

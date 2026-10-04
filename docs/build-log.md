@@ -2291,3 +2291,31 @@ current number.
       term-card email and the letter, "Taong Panuruan" is now "School Year"
       (the user's wording), in `app/notice_messages.py` and
       `docs/parent-notice-templates.md`.
+- [x] **Attendance concerns go out mid-term** (2026-10-04, spec §78.2 and
+      §78.5 amended with approval). Before this, a parent could only be
+      contacted once the term's encoding closed **and** the learner's
+      record was complete, so attendance problems surfaced weeks late.
+      - `notice_rules.classify`: if the days encoded so far already reach
+        3 absences, 3 lates or 1 cutting, the learner is **Concern** even
+        with blank grades or unencoded days. Encoding more can only add
+        to a count. What is still missing rides along as `incomplete`
+        (shown as "Still missing" on the Concern table). A failing count is
+        only read off a complete grade record, so an early concern never
+        names one from a partial summary.
+      - **No override on an incomplete record.** Overriding an early
+        attendance concern to Release would email a term card with blanks
+        on it; `may_override`/`effective_group` take `record_complete`, and
+        the override waits as it does for Not ready.
+      - **The page-wide encoding gate became `NoticeRow.concern_held`**:
+        attendance concerns can be emailed, texted and lettered at once;
+        a grade-only (or override-only) concern waits for encoding to
+        close. `email_status`, `sms_status` and `build_concern_letters`
+        all read it, so the page can't offer what the sender refuses. The
+        term-card email keeps its own encoding gate.
+      - Same wording as before (the user's call: the concern messages
+        never mention grades, so they fit attendance as they are), and
+        still once per learner per term; a later meeting change re-offers
+        the email as before.
+      - Read-only tally on the live data: Term 1 Concern goes from 59 to
+        200 — 141 learners are over an attendance limit on the days
+        already encoded while their record is otherwise incomplete.
