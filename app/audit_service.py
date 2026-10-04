@@ -69,6 +69,14 @@ LEARNER_ADMISSION_CHANGED = "LEARNER_ADMISSION_CHANGED"
 # because it answers its own question — who changed where a learner's
 # term card gets emailed, and who recorded the parent's consent to it.
 LEARNER_CONTACT_CHANGED = "LEARNER_CONTACT_CHANGED"
+# Parent notices (§78.3, §78.5). An override decides whether a parent gets
+# the term card or a concern notice, so it carries a required reason, as
+# an award override does. Clearing one restores the computed group and
+# needs none. The meeting entry covers set, change and removal alike —
+# `new` is None for a removal.
+PARENT_NOTICE_OVERRIDDEN = "PARENT_NOTICE_OVERRIDDEN"
+PARENT_NOTICE_OVERRIDE_CLEARED = "PARENT_NOTICE_OVERRIDE_CLEARED"
+PARENT_MEETING_SCHEDULED = "PARENT_MEETING_SCHEDULED"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
 # An irregular learner's substitute subject (app/models/subjects.py's
 # EnrollmentSubjectOverride) changes which subject counts toward their
@@ -145,6 +153,7 @@ REASON_REQUIRED = {
     GRADE_REOPENED,
     ATTENDANCE_MONTH_REOPENED,
     AWARD_OVERRIDDEN,
+    PARENT_NOTICE_OVERRIDDEN,
     CALENDAR_DAY_CHANGED,
     AUDIT_LOG_ARCHIVED,
     SUBJECT_OVERRIDE_CREATED,

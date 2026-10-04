@@ -68,6 +68,9 @@ ACTION_GROUPS = {
         audit_service.LEARNER_DELETED,
         audit_service.LEARNER_ADMISSION_CHANGED,
         audit_service.LEARNER_CONTACT_CHANGED,
+        audit_service.PARENT_NOTICE_OVERRIDDEN,
+        audit_service.PARENT_NOTICE_OVERRIDE_CLEARED,
+        audit_service.PARENT_MEETING_SCHEDULED,
         audit_service.LEARNER_MOVEMENT_RECORDED,
     ],
     "Configuration": [

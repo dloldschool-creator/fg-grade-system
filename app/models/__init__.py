@@ -13,6 +13,7 @@ from app.models import (  # noqa: F401
     grades,
     learners,
     organization,
+    parent_notices,
     rbac,
     reports,
     subjects,

@@ -18,6 +18,7 @@ from app.admin_pages import (
     help as help_page,
     insights,
     learners,
+    parent_notices,
     school_info,
     school_years,
     section_offerings,
@@ -136,6 +137,11 @@ GROUPS = [
             (sf4, "SF4", "📈", "sf4", ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
             (term_cards, "Term Cards", "🎫", "term-cards",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            # Not for the School Head yet: this page writes overrides and
+            # meeting schedules, and the sent record a head may view
+            # arrives with the senders.
+            (parent_notices, "Parent Notices", "📨", "parent-notices",
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
             (awards, "Awards", "🏆", "awards",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
             (data_export, "Export", "📤", "export",

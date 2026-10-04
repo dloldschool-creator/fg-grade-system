@@ -960,6 +960,59 @@ versioning table would just duplicate that.
 
 ---
 
+## 11. Parent notices (spec §78, `f3a8c61d04e7`)
+
+### `parent_notice_policies`
+The Release thresholds per school year, **versioned**: a change is a new
+row, and the highest `version` for the year applies.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| school_year_id | UUID FK → school_years NOT NULL | |
+| version | SMALLINT NOT NULL | UNIQUE with school_year_id |
+| max_absences, max_lates, max_cuttings | SMALLINT NOT NULL | most allowed for Release; CHECK ≥ 0 |
+| created_by_user_id | UUID FK → users NULL ON DELETE SET NULL | |
+| created_at | TIMESTAMP | |
+
+Seeded v1 = 2 / 2 / 0 for every school year existing at migration time.
+**A school year created later has no row** and the Parent Notices page
+says so instead of grouping anyone.
+
+### `parent_notice_overrides`
+An adviser moving a learner between Release and Concern for one term.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| enrollment_id | UUID FK → enrollments NOT NULL | UNIQUE with term_id |
+| term_id | UUID FK → terms NOT NULL | |
+| decision | VARCHAR(10) NOT NULL | CHECK `RELEASE` / `CONCERN` |
+| reason | TEXT NOT NULL | CHECK not blank |
+| set_by_user_id | UUID FK → users NULL ON DELETE SET NULL | |
+| created_at, updated_at, version | | VersionMixin |
+
+Clearing deletes the row (audited). It never lifts Not ready; it waits.
+
+### `parent_meeting_schedules`
+The meeting date and time on concern letters.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| section_id | UUID FK → sections NOT NULL | |
+| term_id | UUID FK → terms NOT NULL | |
+| enrollment_id | UUID FK → enrollments NULL | NULL = the section's schedule |
+| meeting_date | DATE NOT NULL | wall-clock, school-local |
+| meeting_time | TIME NOT NULL | stored naive on purpose |
+| set_by_user_id | UUID FK → users NULL ON DELETE SET NULL | |
+| created_at, updated_at, version | | VersionMixin |
+
+Partial unique indexes: one section row per (section, term) where
+`enrollment_id IS NULL`, one per (enrollment, term) otherwise.
+
+---
+
 ## Table index by domain
 
 1. **Organization** — `schools`, `school_years`, `terms`
@@ -977,6 +1030,8 @@ versioning table would just duplicate that.
 8. **Awards** — `award_policies`/`_versions`, `learner_awards`
 9. **Reports** — `report_templates`, `report_generation_logs` *(`report_snapshots` deferred)*
 10. **Administration** — `audit_logs`, `import_jobs`, `export_jobs`
+11. **Parent notices** — `parent_notice_policies`, `parent_notice_overrides`,
+    `parent_meeting_schedules`
 
 42 tables total. Notably lighter than the original per-domain estimate in
 two places: `programs` dropped (Academic Structure), and the

@@ -2079,8 +2079,45 @@ current number.
         a per-enrollment override) in step 2 or 3, so it's another
         additive migration. Spec §78.5 was amended to match, with
         approval, the same day.
-      2. Classification and overrides page, preview only with nothing
-         sent; check it against real Term 1 data.
+      2. ~~Classification and overrides page~~ **Done 2026-10-04.**
+         - **Forms & Reports → Parent Notices**
+           (`app/admin_pages/parent_notices.py`), for Super Admin,
+           Registrar and Adviser. Preview only: it writes overrides and
+           meeting schedules, and sends nothing.
+         - The rule is `app/notice_rules.py`: pure, Not ready first,
+           Concern lists every trigger. The data comes from
+           `app/parent_notice_service.py`, at most 12 queries per section
+           whatever the roster size. It reads `failed_subject_count` and
+           completion straight from `term_grade_summaries`, and builds
+           attendance with the engine's `compute_active_window` +
+           `summarize_attendance`, batched.
+         - Migration `f3a8c61d04e7` (applied to the live DB) adds three
+           tables. `parent_notice_policies` is versioned and seeded v1 =
+           2/2/0 for existing school years; a new school year needs its
+           own row, and nothing creates one yet. Also
+           `parent_notice_overrides` (reason required, audited as
+           PARENT_NOTICE_OVERRIDDEN, which is in REASON_REQUIRED) and
+           `parent_meeting_schedules` (per section and term, plus
+           per-learner rows; naive DATE + TIME on purpose).
+         - **Not granted to the School Head.** The page writes, and §78.6
+           gives that role only the sent record, which arrives in step 3.
+           Add SCHOOL_HEAD then, with the writes gated on
+           `is_read_only()`, and update the two lists in
+           `test_read_only_role.py` / `test_navigation.py`.
+         - **Real Term 1 data, read-only tally:** 160 Release, 59 Concern
+           (58 of them on absences, 4 failing), 447 Not ready.
+           Nearly all the Not ready are **1–15 September unencoded**.
+           Term 1 runs to 15 Sep, but 21 of 30 sections have no records
+           for those 11 class days. MASLOW, VYGOTSKY, MONTESSORI and
+           SKINNER also have learners with no Term 1 attendance at all.
+           ARISTOTLE, MARSHALL, BAILEY, FREUD, BOURDAIN, DUCASSE, MUSK and
+           JOBS are fully encoded. This is a data gap, not a code one:
+           the rule refuses to read an unencoded day as present.
+         - Tests: `test_notice_rules.py` (pure), `test_parent_notice_service.py`
+           (live DB, rolled back, query count), and
+           `test_parent_notices_render.py` (AppTest, the real `render()`
+           as a stand-in admin for every section in Term 1, pressing
+           nothing). Not seen in a browser.
       3. Term-card email.
       4. Concern email, SMS links and letters.
 

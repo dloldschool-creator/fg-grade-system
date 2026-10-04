@@ -152,6 +152,23 @@ BY_ROLE = {
                 "around it.",
             ),
             (
+                "Parent Notices: who gets the term card, whose parents come in",
+                "**Forms & Reports → Parent Notices** sorts your section, per "
+                "term, into three groups:\n\n"
+                "- **Release**: no failing grade, at most 2 absences, at most 2 "
+                "lates and no cutting. Their term card will be emailed to the "
+                "parent.\n"
+                "- **Concern**: anything more. The parent is asked to come in.\n"
+                "- **Not ready**: a grade is still blank or an attendance day "
+                "isn't encoded. Finish those and the learner is grouped.\n\n"
+                "Set the **parent meeting** date and time there, and you can "
+                "give one learner a different time. If the numbers don't tell "
+                "the whole story, **override** a learner into the other group "
+                "with a reason. For now the page only shows the groups; "
+                "sending comes later. Parent contacts and consent go on the "
+                "**Learner Masterlist**.",
+            ),
+            (
                 "Prepare the month's sheet before encoding attendance",
                 "Press **Prepare / refresh this month's sheet** first. It marks "
                 "everyone present for every class day, so you only change the "
