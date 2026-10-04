@@ -2077,8 +2077,8 @@ current number.
 
         That means a small table (section, term, meeting datetime, plus
         a per-enrollment override) in step 2 or 3, so it's another
-        additive migration. Spec §78.5 doesn't mention the schedule or
-        the languages yet, and amending it needs the user's approval.
+        additive migration. Spec §78.5 was amended to match, with
+        approval, the same day.
       2. Classification and overrides page, preview only with nothing
          sent; check it against real Term 1 data.
       3. Term-card email.

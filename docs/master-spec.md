@@ -3076,11 +3076,26 @@ The adviser may move a learner from Release to Concern, or from Concern to Relea
 
 Three channels; the adviser may use any of them for a learner:
 
-- **Email:** a general message asking the parent to contact or visit the adviser. Same sender rules as §78.4. No attachment.
+- **Email:** a general message asking the parent to come to the school or reply. Same sender rules as §78.4. No attachment.
 - **SMS:** sent from the adviser's **own phone**. The page provides, per learner, a link that opens the phone's messaging app with the number and message already filled in, and a copy-message button for desktop. The app records that the adviser opened it, not that the SMS was delivered.
-- **Printed letter:** a one-page letter per learner on school letterhead, with a tear-off acknowledgement slip (received by, date, signature). It can be printed for one learner or for the whole Concern group of a section as one PDF, built only on request.
+- **Printed letter:** a one-page letter per learner on school letterhead, signed by the **adviser only**. It ends with a tear-off acknowledgement slip: received by, signature, date, and whether the parent will attend the scheduled meeting or prefers another day. It can be printed for one learner or for the whole Concern group of a section as one PDF, built only on request.
 
-Concern notices on every channel are **general**. They name the learner and the term and ask the parent to contact the school. They do **not** list grades, failing subjects, or attendance counts. The adviser may edit the message text before sending.
+**Meeting schedule.** The adviser sets one meeting **date and time** per section and term, which applies to every learner in the Concern group and can be changed for an individual learner.
+
+- The letter **cannot be printed without a schedule**.
+- The concern email and SMS include the schedule when one is set. Without one, they ask the parent to reply or visit at their earliest convenience.
+
+**Language.**
+
+- The term-card email (§78.4), the concern email and the letter are **bilingual**: English first, then Filipino.
+- An SMS is in **one language**, chosen by the adviser for each text and defaulting to Filipino. Both languages together would arrive as about three texts.
+- An SMS uses plain characters only, since a single dash, curly apostrophe or emoji cuts each text from 160 characters to 70.
+
+No message carries the adviser's mobile number. Replies go by email Reply-To (§78.4) or, for SMS, to the adviser's own phone.
+
+The approved wording of every message is kept in `docs/parent-notice-templates.md`.
+
+Concern notices on every channel are **general**. They name the learner, the section and the term, and ask the parent to come to the school. They do **not** list grades, failing subjects, or attendance counts. The adviser may edit the message text before sending.
 
 ## 78.6 Record and access
 
