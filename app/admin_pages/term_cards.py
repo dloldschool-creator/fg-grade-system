@@ -7,7 +7,7 @@ from app.models.grades import TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
-from app.report_card import build_term_subject_rows, load_report_context
+from app.report_card import build_term_subject_rows, load_report_context, term_card_data
 from app.roster_order import learner_order_by
 from app.term_card import (
     CARDS_PER_PAGE,
@@ -21,30 +21,6 @@ DASH = "—"
 
 def _fmt(value):
     return int(value) if value is not None else DASH
-
-
-def _card_for(session, enrollment, learner, *, school, term, grade_level, section, adviser,
-              context=None, summary=None) -> TermCardData:
-    comment = {
-        1: enrollment.term1_adviser_comment,
-        2: enrollment.term2_adviser_comment,
-        3: enrollment.term3_adviser_comment,
-    }.get(term.term_number)
-    return TermCardData(
-        school_name=school.school_name if school else "",
-        term_name=term.name,
-        learner_name=(
-            f"{learner.last_name}, {learner.first_name}"
-            f"{f' {learner.middle_name}' if learner.middle_name else ''}"
-        ),
-        lrn=learner.lrn or "",
-        grade_level=(grade_level.code or grade_level.name) if grade_level else "",
-        section_name=section.name if section else "",
-        subjects=build_term_subject_rows(session, enrollment, term.term_number, context),
-        term_average=summary.term_average if summary else None,
-        adviser_name=adviser.full_name if adviser else "",
-        adviser_comment=comment,
-    )
 
 
 def render() -> None:
@@ -128,7 +104,7 @@ def render() -> None:
         }
 
         def card(enrollment):
-            return _card_for(
+            return term_card_data(
                 session, enrollment, learner_by_enrollment[enrollment.id],
                 school=school, term=term, grade_level=grade_level,
                 section=section, adviser=adviser,

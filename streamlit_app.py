@@ -137,11 +137,10 @@ GROUPS = [
             (sf4, "SF4", "📈", "sf4", ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
             (term_cards, "Term Cards", "🎫", "term-cards",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
-            # Not for the School Head yet: this page writes overrides and
-            # meeting schedules, and the sent record a head may view
-            # arrives with the senders.
+            # The School Head sees the sent record read-only; every write
+            # on the page is gated on is_read_only().
             (parent_notices, "Parent Notices", "📨", "parent-notices",
-             ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
+             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
             (awards, "Awards", "🏆", "awards",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
             (data_export, "Export", "📤", "export",

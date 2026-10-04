@@ -77,6 +77,9 @@ LEARNER_CONTACT_CHANGED = "LEARNER_CONTACT_CHANGED"
 PARENT_NOTICE_OVERRIDDEN = "PARENT_NOTICE_OVERRIDDEN"
 PARENT_NOTICE_OVERRIDE_CLEARED = "PARENT_NOTICE_OVERRIDE_CLEARED"
 PARENT_MEETING_SCHEDULED = "PARENT_MEETING_SCHEDULED"
+# One entry per send batch (counts), not per email: every email already
+# has its own row in `parent_notifications`, which is the sent record.
+PARENT_NOTICES_SENT = "PARENT_NOTICES_SENT"
 SUBJECT_OFFERING_CHANGED = "SUBJECT_OFFERING_CHANGED"
 # An irregular learner's substitute subject (app/models/subjects.py's
 # EnrollmentSubjectOverride) changes which subject counts toward their

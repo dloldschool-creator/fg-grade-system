@@ -1011,6 +1011,30 @@ The meeting date and time on concern letters.
 Partial unique indexes: one section row per (section, term) where
 `enrollment_id IS NULL`, one per (enrollment, term) otherwise.
 
+### `parent_notifications` (`a1d7e3c95f28`)
+The sent record: every notice to a parent, sent or attempted.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| enrollment_id | UUID FK → enrollments NOT NULL | |
+| term_id | UUID FK → terms NOT NULL | |
+| kind | VARCHAR(10) NOT NULL | CHECK `TERM_CARD` / `CONCERN` |
+| channel | VARCHAR(10) NOT NULL | CHECK `EMAIL` / `SMS` / `LETTER` |
+| status | VARCHAR(12) NOT NULL | CHECK `PENDING` / `SENT` / `FAILED` / `SUPERSEDED` |
+| recipient | TEXT NULL | the address or number used |
+| error | TEXT NULL | why a send failed |
+| basis_at | TIMESTAMP NULL | when the grades/attendance under the card last changed, as of sending |
+| sent_at | TIMESTAMP NULL | UTC |
+| sent_by_user_id | UUID FK → users NULL ON DELETE SET NULL | |
+| created_at, updated_at | TIMESTAMP | |
+
+**`uq_parent_notifications_one_live_email`** — UNIQUE (enrollment_id,
+term_id, kind) WHERE channel = 'EMAIL' AND status IN ('PENDING','SENT'). This
+is the double-send guard: the sender commits a PENDING row before talking
+to the mail server, so a second press, user or rerun loses here. A re-send
+of an outdated card first marks the old row SUPERSEDED.
+
 ---
 
 ## Table index by domain
@@ -1031,7 +1055,7 @@ Partial unique indexes: one section row per (section, term) where
 9. **Reports** — `report_templates`, `report_generation_logs` *(`report_snapshots` deferred)*
 10. **Administration** — `audit_logs`, `import_jobs`, `export_jobs`
 11. **Parent notices** — `parent_notice_policies`, `parent_notice_overrides`,
-    `parent_meeting_schedules`
+    `parent_meeting_schedules`, `parent_notifications`
 
 42 tables total. Notably lighter than the original per-domain estimate in
 two places: `programs` dropped (Academic Structure), and the

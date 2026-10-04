@@ -118,3 +118,55 @@ class ParentMeetingSchedule(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
     set_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
+
+
+class ParentNotification(UUIDPKMixin, TimestampMixin, Base):
+    """Every notice that went to a parent, or was attempted (§78.6).
+
+    **The double-send guard is the partial unique index**, not page logic:
+    at most one PENDING-or-SENT term-card email per learner and term. The
+    sender inserts a PENDING row and commits it *before* talking to the
+    mail server, so a second press, a second user or a rerun after a crash
+    loses the race at the database and skips that learner. A row stuck in
+    PENDING means the process died mid-send; it is shown as "may have
+    gone out" rather than retried silently.
+
+    `basis_at` is when the grades or attendance the card rests on last
+    changed, as of sending. A later change makes the sent card outdated
+    (§78.4); re-sending marks the old row SUPERSEDED, freeing the slot.
+    """
+
+    __tablename__ = "parent_notifications"
+    __table_args__ = (
+        CheckConstraint("kind IN ('TERM_CARD', 'CONCERN')", name="kind_valid"),
+        CheckConstraint("channel IN ('EMAIL', 'SMS', 'LETTER')", name="channel_valid"),
+        CheckConstraint(
+            "status IN ('PENDING', 'SENT', 'FAILED', 'SUPERSEDED')", name="status_valid"
+        ),
+        Index(
+            "uq_parent_notifications_one_live_email",
+            "enrollment_id",
+            "term_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("channel = 'EMAIL' AND status IN ('PENDING', 'SENT')"),
+        ),
+        Index("ix_parent_notifications_enrollment_term", "enrollment_id", "term_id"),
+    )
+
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enrollments.id", ondelete="RESTRICT"), nullable=False
+    )
+    term_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("terms.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    channel: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    recipient: Mapped[str | None] = mapped_column(String)
+    error: Mapped[str | None] = mapped_column(String)
+    basis_at: Mapped[datetime | None]
+    sent_at: Mapped[datetime | None]
+    sent_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )

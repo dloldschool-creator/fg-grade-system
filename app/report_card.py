@@ -480,3 +480,34 @@ def build_term_subject_rows(
     # sharing an order.
     ordered.sort(key=lambda row: (row[0], row[1], row[2]))
     return [(name, grade) for _, _, name, grade in ordered]
+
+
+def term_card_data(session, enrollment, learner, *, school, term, grade_level, section,
+                   adviser, context=None, summary=None):
+    """One learner's temporary term card (§39), ready for
+    `term_card.generate_term_cards`. Shared by the Term Cards page and the
+    parent-notice emailer (§78.4), so the card a parent receives is the
+    card the adviser prints. Pass `context` from `load_report_context` for
+    a roster, or the subject rows cost queries per learner."""
+    from app.term_card import TermCardData
+
+    comment = {
+        1: enrollment.term1_adviser_comment,
+        2: enrollment.term2_adviser_comment,
+        3: enrollment.term3_adviser_comment,
+    }.get(term.term_number)
+    return TermCardData(
+        school_name=school.school_name if school else "",
+        term_name=term.name,
+        learner_name=(
+            f"{learner.last_name}, {learner.first_name}"
+            f"{f' {learner.middle_name}' if learner.middle_name else ''}"
+        ),
+        lrn=learner.lrn or "",
+        grade_level=(grade_level.code or grade_level.name) if grade_level else "",
+        section_name=section.name if section else "",
+        subjects=build_term_subject_rows(session, enrollment, term.term_number, context),
+        term_average=summary.term_average if summary else None,
+        adviser_name=adviser.full_name if adviser else "",
+        adviser_comment=comment,
+    )

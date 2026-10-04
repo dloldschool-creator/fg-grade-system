@@ -65,6 +65,23 @@ SUPABASE_URL
 SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 SESSION_TIMEOUT_MINUTES
+NOTICE_EMAIL_ADDRESS
+NOTICE_EMAIL_APP_PASSWORD
+```
+
+The two `NOTICE_EMAIL_*` values are the school's sending Gmail account for
+parent notices (spec §78.4): its address and a Google **app password**,
+not the account's normal password. Making the app password needs 2-Step
+Verification turned on (Google Account → Security → App passwords).
+Spaces in it are fine; the app drops them. Leave both unset and the
+Parent Notices page says emailing isn't set up and sends nothing.
+`NOTICE_SMTP_HOST` / `NOTICE_SMTP_PORT` are optional (default
+`smtp.gmail.com`, 465). In the Streamlit Cloud secrets box they are
+top-level lines like the others:
+
+```
+NOTICE_EMAIL_ADDRESS = "fgnmhs.shs.notices@gmail.com"
+NOTICE_EMAIL_APP_PASSWORD = "abcd efgh ijkl mnop"
 ```
 
 **Never commit `.env`.** It is already in `.gitignore` — check that it

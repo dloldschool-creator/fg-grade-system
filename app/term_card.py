@@ -22,10 +22,11 @@ arrives already in the name, exactly as it does on the SF9.
 
 import io
 import os
+import secrets
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from reportlab.lib import colors
+from reportlab.lib import colors, pdfencrypt
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
@@ -202,12 +203,29 @@ def _draw_card(c, data: TermCardData, *, x: float, y: float, width: float, heigh
     )
 
 
-def generate_term_cards(cards: list[TermCardData]) -> bytes:
+def generate_term_cards(cards: list[TermCardData], *, password: str | None = None) -> bytes:
     """Tiles the cards eight to a page, paginating automatically (§39 —
-    the adviser never works out batches by hand)."""
+    the adviser never works out batches by hand).
+
+    `password` encrypts the PDF so it cannot be opened without it — used
+    for the copy emailed to a parent, where it is the learner's birthdate
+    (§78.4). The owner password is random and thrown away, so the file's
+    permissions (print, but not edit or copy text) can't be lifted with it.
+    """
     buffer = io.BytesIO()
     page_w, page_h = PAGE_SIZE
-    c = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
+    encrypt = None
+    if password:
+        encrypt = pdfencrypt.StandardEncryption(
+            password,
+            ownerPassword=secrets.token_hex(16),
+            canPrint=1,
+            canModify=0,
+            canCopy=0,
+            canAnnotate=0,
+            strength=128,
+        )
+    c = canvas.Canvas(buffer, pagesize=PAGE_SIZE, encrypt=encrypt)
 
     margin = 0.3 * inch
     gutter = 0.12 * inch

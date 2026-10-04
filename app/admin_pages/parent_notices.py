@@ -1,17 +1,20 @@
-"""Parent Notices — step 2 of spec §78: who gets the term card, who gets a
-concern notice, and who isn't ready yet, per section and term.
+"""Parent Notices — spec §78: who gets the term card by email, whose
+parents are asked to come in, and who isn't ready yet, per section and term.
 
-**Preview only.** Nothing is emailed, texted or printed from here yet
-(steps 3 and 4). What this page writes is the adviser's own input: an
-override with its reason (§78.3) and the parent-meeting schedule (§78.5).
+Step 3 sends the Release group's term cards (§78.4) through
+`parent_notice_service.send_term_cards`, which owns the double-send guard
+and the per-message commits; this page only decides whether to offer the
+button and reports the result. Concern notices are step 4.
 
-The grouping itself is `app.notice_rules.classify`, fed by
-`parent_notice_service.load_section_notices` in a fixed number of queries.
-No per-learner panel exists, so there's no expander to pay for on every
-rerun; the three groups are tables.
+The page also writes the adviser's own input: an override with its reason
+(§78.3) and the parent-meeting schedule (§78.5). The grouping itself is
+`app.notice_rules.classify`, fed by `load_section_notices` in a fixed
+number of queries; the three groups are tables, so there is no
+per-learner expander to pay for on every rerun.
 
-Not granted to the School Head yet. §78.6 gives that role the sent record,
-which does not exist until step 3, and this page writes.
+**The School Head reaches it read-only** (§78.6: the sent record). Every
+write — sending, overrides, schedules — sits behind `may_write`, which is
+False for `is_read_only()` accounts.
 """
 
 from datetime import datetime, time
@@ -31,6 +34,7 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.display_time import SCHOOL_TZ
 from app.models.organization import SchoolYear, Term
+from app.notice_messages import NoticeContext, term_card_email
 from app.notice_rules import GROUP_LABELS, NoticeGroup, may_override
 from app.section_access import is_advised_by
 
@@ -63,6 +67,7 @@ def _contact_text(row) -> str:
 def _group_table(rows, *, concern: bool) -> list[dict]:
     table = []
     for row in rows:
+        status = None if concern else notices.card_email_status(row).label
         entry = {
             "Learner": _name(row),
             "Absent": row.figures.absences,
@@ -78,6 +83,8 @@ def _group_table(rows, *, concern: bool) -> list[dict]:
         }
         if concern:
             entry["Meeting"] = _meeting_text(row.meeting)
+        else:
+            entry["Term card email"] = status
         table.append(entry)
     return table
 
@@ -243,20 +250,184 @@ def _learner_meeting_form(session, section, term, data, current_user) -> None:
             st.rerun()
 
 
+def _email_panel(session, section, term, data, current_user, *, may_write: bool) -> None:
+    """Emailing the Release group's term cards (step 3)."""
+    from app.models.rbac import User
+    from app.notice_mailer import MailAuthError, MailNotConfigured, MailSettings
+
+    release = data.in_group(NoticeGroup.RELEASE)
+    if not release:
+        return
+    statuses = {row.enrollment_id: notices.card_email_status(row) for row in release}
+    ready = [row for row in release if statuses[row.enrollment_id].sendable]
+    fresh = [row for row in ready if not statuses[row.enrollment_id].is_resend]
+    outdated = [row for row in ready if statuses[row.enrollment_id].is_resend]
+    stuck = [
+        row for row in release
+        if statuses[row.enrollment_id].label.startswith("interrupted")
+    ]
+
+    st.subheader("Email the term cards")
+    st.caption(
+        "Each parent gets one email with their child's term card attached, "
+        "protected by the child's birthdate (YYYYMMDD) as the password. Replies "
+        "go to the adviser. A card is never emailed twice."
+    )
+    if not may_write:
+        st.caption(f"{len(fresh)} ready to email.")
+        return
+
+    settings = MailSettings.from_env()
+    if settings is None:
+        st.info(
+            "Emailing isn't set up yet: the school's sending account has to be "
+            "added to the app's settings first. Ask the ICT Coordinator.",
+            icon="✉️",
+        )
+        return
+    if notices.term_encoding_open(term, datetime.now(SCHOOL_TZ).date()):
+        st.warning(
+            f"Grades for {term.name} can still be changed, so term cards can't be "
+            "emailed yet. Sending opens once encoding for the term has closed."
+        )
+        return
+    adviser = session.get(User, section.adviser_user_id) if section.adviser_user_id else None
+    if adviser is None:
+        st.warning("This section has no adviser on record, so there's nobody for replies to reach.")
+        return
+
+    if stuck:
+        st.warning(
+            f"{len(stuck)} email(s) were interrupted before they finished and may "
+            "already have reached the parent. Check with the parent before sending again."
+        )
+        if st.button("Allow these to be sent again", key=f"release_stuck_{section.id}_{term.id}"):
+            notices.release_stuck_sends(session, stuck, term_id=term.id, user_id=current_user.id)
+            try_commit(session, "Interrupted emails can be sent again.")
+            st.rerun()
+
+    if not ready:
+        st.caption("Nothing to send right now.")
+        return
+
+    if fresh:
+        first = fresh[0]
+        with st.expander("Preview the email"):
+            ctx = _preview_context(first, section, term, adviser, session)
+            subject, body = term_card_email(ctx)
+            st.text(f"To: {first.learner.guardian_email}\nSubject: {subject}\n\n{body}")
+        if st.button(
+            "Send a test to my own email first",
+            key=f"test_card_{section.id}_{term.id}",
+            help=f"Sends {_name(first)}'s card to {current_user.email}, marked as a test.",
+        ):
+            try:
+                notices.send_test_card(
+                    session, section, term, first, adviser=adviser,
+                    to=current_user.email, settings=settings,
+                )
+                flash("success", f"Test email sent to {current_user.email}.")
+            except (MailNotConfigured, MailAuthError, OSError) as exc:
+                flash("error", f"The test email couldn't be sent: {exc}")
+            st.rerun()
+
+    targets = fresh
+    label = f"Email {len(fresh)} term card(s)"
+    if outdated:
+        resend = st.checkbox(
+            f"Also re-send {len(outdated)} card(s) that changed after they were emailed",
+            key=f"resend_{section.id}_{term.id}",
+        )
+        if resend:
+            targets = fresh + outdated
+            label = f"Email {len(targets)} term card(s)"
+    if not targets:
+        return
+    confirmed = st.checkbox(
+        "I've checked the Release list above", key=f"confirm_send_{section.id}_{term.id}"
+    )
+    if st.button(label, type="primary", disabled=not confirmed,
+                 key=f"send_cards_{section.id}_{term.id}"):
+        bar = st.progress(0.0, text="Sending…")
+        try:
+            result = notices.send_term_cards(
+                session, section, term, targets, user_id=current_user.id,
+                adviser=adviser, settings=settings,
+                progress=lambda done, total: bar.progress(
+                    done / total, text=f"Sending… {done} of {total}"
+                ),
+            )
+        except (MailNotConfigured, MailAuthError, OSError) as exc:
+            bar.empty()
+            flash("error", f"Nothing was sent: {exc}")
+            st.rerun()
+        bar.empty()
+        if result.stopped:
+            flash("error", f"Sending stopped: {result.stopped}")
+        message = f"Emailed {result.sent} term card(s)."
+        if result.failed:
+            message += f" {result.failed} failed; they're listed below and can be retried."
+        if result.skipped:
+            message += f" {result.skipped} skipped (already sent or being sent)."
+        flash("warning" if result.failed else "success", message)
+        st.rerun()
+
+
+def _preview_context(row, section, term, adviser, session):
+    from app.models.academic_structure import GradeLevel
+
+    grade_level = session.get(GradeLevel, section.grade_level_id)
+    school_year = session.get(SchoolYear, term.school_year_id)
+    return NoticeContext(
+        learner_first=row.learner.first_name,
+        learner_last=row.learner.last_name,
+        section=section.name,
+        grade_level=grade_level.name if grade_level else "",
+        term_name=term.name,
+        school_year=school_year.name if school_year else "",
+        adviser_name=adviser.full_name,
+    )
+
+
+def _sent_record(data) -> None:
+    """Every notice sent or attempted for the term (§78.6)."""
+    entries = []
+    for row in data.rows:
+        for n in row.notifications:
+            when = notices._naive_utc(n.sent_at or n.created_at)
+            entries.append(
+                {
+                    "Learner": _name(row),
+                    "What": "Term card" if n.kind == notices.TERM_CARD else "Concern notice",
+                    "How": n.channel.title(),
+                    "Status": n.status.title(),
+                    "To": n.recipient or "",
+                    "When (UTC)": f"{when:%b %d, %Y %H:%M}" if when else "",
+                    "Problem": n.error or "",
+                }
+            )
+    st.subheader("Sent record")
+    if entries:
+        st.dataframe(entries, hide_index=True, width="stretch")
+    else:
+        st.caption("Nothing has been sent for this term yet.")
+
+
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
     st.title("Parent Notices")
     st.caption(
         "Who gets their term card by email, whose parents are asked to come in, "
         "and who isn't ready yet — per section and term."
     )
-    st.info(
-        "Preview only: nothing is emailed, texted or printed from this page yet.",
-        icon="👀",
+    st.caption(
+        "Term cards are emailed from here. Concern notices (email, text and "
+        "printed letter) are coming next."
     )
     render_flashes()
 
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    # A School Head sees every section, read-only (the sent record, §78.6).
+    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -274,10 +445,15 @@ def render() -> None:
         if section is None:
             return
         # The picker already scopes an adviser; this is the guard beside
-        # the writes, which every form below relies on.
+        # the writes, which every form below relies on. A School Head who
+        # also advises edits only their own section.
         if adviser_scoped and not is_advised_by(section, str(current_user.id)):
             st.error("You can only manage notices for a section you advise.")
             return
+        may_write = not current_user.is_read_only() and (
+            current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+            or is_advised_by(section, str(current_user.id))
+        )
 
         terms = session.query(Term).filter_by(school_year_id=sy_choice).order_by(Term.term_number).all()
         if not terms:
@@ -344,6 +520,12 @@ def render() -> None:
         else:
             st.caption("Everyone's record is complete.")
 
+        st.divider()
+        _email_panel(session, section, term, data, current_user, may_write=may_write)
+        st.divider()
+        _sent_record(data)
+        if not may_write:
+            return
         st.divider()
         _section_meeting_form(session, section, term, data, current_user)
         _learner_meeting_form(session, section, term, data, current_user)

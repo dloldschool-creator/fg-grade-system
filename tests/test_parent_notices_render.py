@@ -69,3 +69,38 @@ def test_the_later_terms_render(app):
         _box(app, "Term").select_index(index)
         _run(app)
         assert _grouped_or_empty(app)
+
+
+HEAD_SCRIPT = SCRIPT.replace('role_codes={"SUPER_ADMIN"}', 'role_codes={"SCHOOL_HEAD"}')
+
+
+def test_a_school_head_sees_the_groups_and_record_but_no_controls():
+    at = _run(AppTest.from_string(HEAD_SCRIPT, default_timeout=120))
+    assert {"Release", "Concern", "Not ready"} <= {m.label for m in at.metric}
+    assert any(s.value == "Sent record" for s in at.subheader)
+    assert not at.button, [b.label for b in at.button]
+    assert not at.text_input
+
+
+CONFIGURED_SCRIPT = (
+    "import os\n"
+    "os.environ['NOTICE_EMAIL_ADDRESS'] = 'school@example.com'\n"
+    "os.environ['NOTICE_EMAIL_APP_PASSWORD'] = 'not-a-real-password'\n"
+    + SCRIPT
+)
+
+
+def test_with_email_configured_the_panel_renders_for_every_section_and_sends_nothing():
+    """Rendering never contacts the mail server; only the Send button
+    would, and nothing here presses it."""
+    import os
+
+    at = _run(AppTest.from_string(CONFIGURED_SCRIPT, default_timeout=120))
+    try:
+        for option in _box(at, "Section").options:
+            _box(at, "Section").select(option)
+            _run(at)
+            assert not any("isn't set up" in i.value for i in at.info)
+    finally:
+        os.environ.pop("NOTICE_EMAIL_ADDRESS", None)
+        os.environ.pop("NOTICE_EMAIL_APP_PASSWORD", None)

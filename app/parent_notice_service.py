@@ -20,7 +20,7 @@ to the caller, so a refused commit rolls both back together.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, datetime, time, timedelta, timezone
 
 from app import audit_service
 from app.attendance_engine import Movement, compute_active_window, summarize_attendance
@@ -34,6 +34,7 @@ from app.models.parent_notices import (
     ParentMeetingSchedule,
     ParentNoticeOverride,
     ParentNoticePolicy,
+    ParentNotification,
 )
 from app.models.rbac import User
 from app.notice_rules import (
@@ -44,6 +45,27 @@ from app.notice_rules import (
     effective_group,
 )
 from app.roster_order import learner_sort_key
+
+
+TERM_CARD = "TERM_CARD"
+CONCERN = "CONCERN"
+# A PENDING row older than this belongs to a send that never finished.
+STUCK_AFTER = timedelta(minutes=10)
+
+
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Timestamps here are written both tz-aware (from Python) and naive
+    (from Postgres `now()` into a column without a time zone), all UTC.
+    Normalised so they compare — the same trap Insights' `_is_stale` met."""
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -65,6 +87,30 @@ class NoticeRow:
     override_reason: str | None = None
     override_by: str | None = None
     meeting: Meeting | None = None
+    # When the grades or attendance this term's card rests on last changed.
+    basis_at: datetime | None = None
+    # This learner's sent record for the term, newest first.
+    notifications: list = field(default_factory=list)
+
+    def live_email(self, kind: str):
+        """The PENDING or SENT email of `kind`, if any — at most one, by the
+        table's unique index."""
+        return next(
+            (
+                n for n in self.notifications
+                if n.kind == kind and n.channel == "EMAIL" and n.status in ("PENDING", "SENT")
+            ),
+            None,
+        )
+
+    def card_is_outdated(self) -> bool:
+        """Sent, and the grades or attendance under it changed since (§78.4).
+        Unknowable without both timestamps, so that reads as not outdated."""
+        sent = self.live_email(TERM_CARD)
+        return bool(
+            sent and sent.status == "SENT" and sent.basis_at and self.basis_at
+            and self.basis_at > sent.basis_at
+        )
 
     @property
     def has_email(self) -> bool:
@@ -155,12 +201,14 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
     # Three columns, not ORM objects — a term is ~60 class days times the
     # roster, and hydrating that many instances is the expensive part.
     statuses: dict = {}
+    attendance_changed: dict = {}
     if day_by_id:
-        for enrollment_id, calendar_date_id, status in (
+        for enrollment_id, calendar_date_id, status, updated_at in (
             session.query(
                 AttendanceRecord.enrollment_id,
                 AttendanceRecord.calendar_date_id,
                 AttendanceRecord.status,
+                AttendanceRecord.updated_at,
             )
             .filter(
                 AttendanceRecord.enrollment_id.in_(enrollment_ids),
@@ -171,6 +219,9 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
             day = day_by_id.get(calendar_date_id)
             if day is not None:
                 statuses.setdefault(enrollment_id, {})[day] = status
+            updated_at = _naive_utc(updated_at)
+            if updated_at and updated_at > attendance_changed.get(enrollment_id, datetime.min):
+                attendance_changed[enrollment_id] = updated_at
 
     summaries = {
         s.enrollment_id: s
@@ -190,6 +241,17 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
         )
         .all()
     }
+    notifications: dict = {}
+    for notification in (
+        session.query(ParentNotification)
+        .filter(
+            ParentNotification.enrollment_id.in_(enrollment_ids),
+            ParentNotification.term_id == term.id,
+        )
+        .order_by(ParentNotification.created_at.desc())
+        .all()
+    ):
+        notifications.setdefault(notification.enrollment_id, []).append(notification)
     meetings = (
         session.query(ParentMeetingSchedule)
         .filter_by(section_id=section.id, term_id=term.id)
@@ -260,6 +322,17 @@ def load_section_notices(session, section, term: Term) -> SectionNotices:
                 override_reason=override.reason if override else None,
                 override_by=setters.get(override.set_by_user_id) if override else None,
                 meeting=learner_meetings.get(enrollment.id) or result.section_meeting,
+                basis_at=max(
+                    (
+                        t for t in (
+                            _naive_utc(summary.computed_at) if summary else None,
+                            attendance_changed.get(enrollment.id),
+                        )
+                        if t is not None
+                    ),
+                    default=None,
+                ),
+                notifications=notifications.get(enrollment.id, []),
             )
         )
     result.rows.sort(key=lambda row: learner_sort_key(row.learner))
@@ -377,3 +450,289 @@ def clear_meeting(session, *, section_id, term_id, user_id, enrollment_id=None) 
     )
     session.delete(row)
     return True
+
+
+# --- Emailing term cards (§78.4) --------------------------------------------
+
+
+@dataclass(frozen=True)
+class CardEmailStatus:
+    """Where one Release learner stands for the term-card email."""
+
+    sendable: bool
+    label: str
+    is_resend: bool = False
+
+
+def card_email_status(row: NoticeRow, now: datetime | None = None) -> CardEmailStatus:
+    """Read by both the page (to show it) and the sender (to obey it), so
+    what the table says is exactly what Send will do."""
+    if row.group is not NoticeGroup.RELEASE:
+        return CardEmailStatus(False, "not in Release")
+    live = row.live_email(TERM_CARD)
+    if live is not None and live.status == "PENDING":
+        if _is_stuck(live, now or _utcnow()):
+            return CardEmailStatus(False, "interrupted — may have gone out")
+        return CardEmailStatus(False, "sending…")
+    if not row.learner.notices_consent:
+        return CardEmailStatus(False, "no consent on file")
+    if not row.learner.guardian_email:
+        return CardEmailStatus(False, "no parent email on file")
+    if live is not None:
+        if row.card_is_outdated():
+            return CardEmailStatus(True, "outdated — grades or attendance changed since", True)
+        when = _naive_utc(live.sent_at)
+        return CardEmailStatus(False, f"sent{f' {when:%b %d}' if when else ''} to {live.recipient}")
+    failed = next(
+        (
+            n for n in row.notifications
+            if n.kind == TERM_CARD and n.channel == "EMAIL" and n.status == "FAILED"
+        ),
+        None,
+    )
+    if failed is not None:
+        return CardEmailStatus(True, f"ready — last try failed: {failed.error or 'unknown error'}")
+    return CardEmailStatus(True, "ready to email")
+
+
+def _is_stuck(notification, now: datetime) -> bool:
+    created = _naive_utc(notification.created_at)
+    return bool(created) and now - created > STUCK_AFTER
+
+
+def term_encoding_open(term: Term, today: date) -> bool:
+    from app.encoding_window import encoding_is_open
+    from app.models.enums import GradeEncodingStatus
+
+    return encoding_is_open(
+        term.grade_encoding_status == GradeEncodingStatus.OPEN, term.submission_deadline, today
+    )
+
+
+@dataclass
+class SendResult:
+    sent: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: list = field(default_factory=list)
+    stopped: str | None = None
+
+
+@dataclass(frozen=True)
+class _Sender:
+    """The adviser as primitives: committing expires the ORM `User`."""
+
+    full_name: str
+    email: str | None
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """Everything one email needs, captured before the first commit —
+    committing expires the ORM objects, and re-reading each learner after
+    it would be a round trip per email."""
+
+    enrollment_id: object
+    to: str
+    password: str
+    ctx: object
+    card: object
+    basis_at: datetime | None
+    supersede_id: object | None
+
+
+def _prepare(session, section, term, rows, *, adviser) -> list:
+    from app.models.academic_structure import GradeLevel
+    from app.models.organization import School
+    from app.notice_messages import NoticeContext, birthdate_password
+    from app.report_card import load_report_context, term_card_data
+
+    enrollments = (
+        session.query(Enrollment).filter(Enrollment.id.in_([r.enrollment_id for r in rows])).all()
+    )
+    by_id = {e.id: e for e in enrollments}
+    context = load_report_context(session, enrollments)
+    summaries = {
+        s.enrollment_id: s
+        for s in session.query(TermGradeSummary)
+        .filter(
+            TermGradeSummary.enrollment_id.in_(list(by_id)),
+            TermGradeSummary.term_id == term.id,
+        )
+        .all()
+    }
+    school = session.query(School).one_or_none()
+    grade_level = session.get(GradeLevel, section.grade_level_id)
+    school_year = session.get(SchoolYear, term.school_year_id)
+
+    prepared = []
+    for row in rows:
+        enrollment = by_id.get(row.enrollment_id)
+        if enrollment is None:
+            continue
+        learner = row.learner
+        live = row.live_email(TERM_CARD)
+        prepared.append(
+            _Prepared(
+                enrollment_id=row.enrollment_id,
+                to=learner.guardian_email,
+                password=birthdate_password(learner.birthdate),
+                ctx=NoticeContext(
+                    learner_first=learner.first_name,
+                    learner_last=learner.last_name,
+                    section=section.name,
+                    grade_level=grade_level.name if grade_level else "",
+                    term_name=term.name,
+                    school_year=school_year.name if school_year else "",
+                    adviser_name=adviser.full_name,
+                ),
+                card=term_card_data(
+                    session, enrollment, learner, school=school, term=term,
+                    grade_level=grade_level, section=section, adviser=adviser,
+                    context=context, summary=summaries.get(enrollment.id),
+                ),
+                basis_at=row.basis_at,
+                supersede_id=live.id if live is not None and live.status == "SENT" else None,
+            )
+        )
+    return prepared
+
+
+def _message_for(settings, item: _Prepared, sender: _Sender, *, to=None, test=False):
+    from app.notice_mailer import build_message
+    from app.notice_messages import attachment_filename, sender_display_name, term_card_email
+    from app.term_card import generate_term_cards
+
+    subject, body = term_card_email(item.ctx)
+    if test:
+        subject = f"[TEST, not sent to the parent] {subject}"
+        body = f"This is a test. The real email goes to {item.to}.\n\n{body}"
+    return build_message(
+        settings,
+        to=to or item.to,
+        sender_name=sender_display_name(sender.full_name),
+        reply_to=sender.email,
+        subject=subject,
+        body=body,
+        attachment=generate_term_cards([item.card], password=item.password),
+        attachment_name=attachment_filename(item.ctx),
+    )
+
+
+def send_term_cards(
+    session, section, term, rows, *, user_id, adviser, settings, progress=None, mailer_cls=None
+) -> SendResult:
+    """Emails the term card to each sendable row's parent, one at a time.
+
+    For each learner: commit a PENDING claim (the unique index refuses a
+    second one, so a concurrent or repeated send skips that learner), build
+    the encrypted PDF, send, then commit SENT or FAILED. **Commits per
+    message**: an interrupted batch resumes where it stopped, and a crash
+    can never leave a parent emailed twice. One PDF in memory at a time.
+
+    Each row is re-checked with `card_email_status` here rather than
+    trusted from the page that drew the button.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.notice_mailer import MailAuthError, Mailer
+
+    mailer_cls = mailer_cls or Mailer
+    result = SendResult()
+    targets = [r for r in rows if card_email_status(r).sendable]
+    result.skipped = len(rows) - len(targets)
+    if not targets:
+        return result
+
+    prepared = _prepare(session, section, term, targets, adviser=adviser)
+    sender = _Sender(full_name=adviser.full_name, email=adviser.email)
+    section_id, term_id = section.id, term.id
+    with mailer_cls(settings) as mailer:
+        for index, item in enumerate(prepared, start=1):
+            if item.supersede_id is not None:
+                old = session.get(ParentNotification, item.supersede_id)
+                if old is not None and old.status == "SENT":
+                    old.status = "SUPERSEDED"
+            claim = ParentNotification(
+                enrollment_id=item.enrollment_id, term_id=term_id, kind=TERM_CARD,
+                channel="EMAIL", status="PENDING", recipient=item.to,
+                basis_at=item.basis_at, sent_by_user_id=user_id,
+            )
+            session.add(claim)
+            try:
+                session.commit()
+            except IntegrityError:
+                # Someone else is sending, or has sent, this learner's card.
+                session.rollback()
+                result.skipped += 1
+                continue
+
+            try:
+                mailer.send(_message_for(settings, item, sender))
+            except MailAuthError as exc:
+                claim.status, claim.error = "FAILED", str(exc)[:500]
+                session.commit()
+                result.failed += 1
+                result.stopped = str(exc)
+                break
+            except Exception as exc:  # noqa: BLE001 - recorded against the learner
+                claim.status, claim.error = "FAILED", f"{type(exc).__name__}: {exc}"[:500]
+                session.commit()
+                result.failed += 1
+                result.errors.append((item.ctx.learner_upper, claim.error))
+            else:
+                claim.status, claim.sent_at = "SENT", _utcnow()
+                session.commit()
+                result.sent += 1
+            if progress:
+                progress(index, len(prepared))
+
+    audit_service.record(
+        session,
+        action=audit_service.PARENT_NOTICES_SENT,
+        object_type="sections",
+        object_id=section_id,
+        user_id=user_id,
+        new={
+            "term_id": term_id, "kind": TERM_CARD, "channel": "EMAIL",
+            "sent": result.sent, "failed": result.failed, "skipped": result.skipped,
+        },
+    )
+    session.commit()
+    return result
+
+
+def send_test_card(session, section, term, row, *, adviser, to, settings, mailer_cls=None):
+    """Sends one learner's card to `to` (the person pressing the button)
+    instead of the parent, marked as a test. Not recorded as a notice:
+    nothing reached a parent. For checking the account and the wording."""
+    from app.notice_mailer import Mailer
+
+    mailer_cls = mailer_cls or Mailer
+    (item,) = _prepare(session, section, term, [row], adviser=adviser)
+    sender = _Sender(full_name=adviser.full_name, email=adviser.email)
+    with mailer_cls(settings) as mailer:
+        mailer.send(_message_for(settings, item, sender, to=to, test=True))
+
+
+def release_stuck_sends(session, rows, *, term_id, user_id) -> int:
+    """Marks interrupted sends (PENDING past `STUCK_AFTER`) FAILED so they
+    can be retried. The page warns first: the email may already have gone."""
+    now = _utcnow()
+    released = 0
+    for row in rows:
+        live = row.live_email(TERM_CARD)
+        if live is not None and live.status == "PENDING" and _is_stuck(live, now):
+            live.status = "FAILED"
+            live.error = "interrupted before it finished; it may have been sent"
+            released += 1
+    if released:
+        audit_service.record(
+            session,
+            action=audit_service.PARENT_NOTICES_SENT,
+            object_type="terms",
+            object_id=term_id,
+            user_id=user_id,
+            new={"released_interrupted_sends": released},
+        )
+    return released

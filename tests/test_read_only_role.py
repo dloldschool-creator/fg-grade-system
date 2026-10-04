@@ -66,6 +66,7 @@ GRANTED = [
     "sf4",
     "term_cards",
     "data_export",
+    "parent_notices",
 ]
 
 # Report pages generate documents and never write school data. Grade
@@ -128,3 +129,21 @@ def test_grade_summary_gates_its_write_paths_on_the_read_only_check():
         "expected Recompute (both single and section-wide) and the "
         "finalization block to each check is_read_only()"
     )
+
+
+def test_parent_notices_gates_every_write_on_the_read_only_check():
+    """Parent Notices sends email and saves overrides and schedules; a
+    School Head reaches it only for the sent record (spec §78.6). Every
+    write path sits behind `may_write`, which `is_read_only()` turns off."""
+    from app.admin_pages import parent_notices
+
+    source = inspect.getsource(parent_notices.render)
+    assert "is_read_only()" in source
+    assert "may_write" in source
+    panel = inspect.getsource(parent_notices._email_panel)
+    assert "if not may_write" in panel
+    # The writing forms are only reached after the early return.
+    tail = source[source.index("if not may_write:"):]
+    for form in ("_section_meeting_form", "_learner_meeting_form", "_override_form"):
+        assert form in tail
+

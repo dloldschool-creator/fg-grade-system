@@ -2118,7 +2118,66 @@ current number.
            `test_parent_notices_render.py` (AppTest, the real `render()`
            as a stand-in admin for every section in Term 1, pressing
            nothing). Not seen in a browser.
-      3. Term-card email.
+      3. ~~Term-card email~~ **Built 2026-10-04, not yet used for real.**
+         - **Sending:** `parent_notice_service.send_term_cards`. For each
+           learner it commits a PENDING row, then builds the PDF, sends,
+           and commits SENT or FAILED. The partial unique index
+           `uq_parent_notifications_one_live_email` (migration
+           `a1d7e3c95f28`, applied) is the double-send guard: a
+           concurrent or repeated send loses at the database. An
+           interrupted batch resumes. A refused login stops the batch;
+           any other error is recorded against that learner and the rest
+           continue.
+         - **Who's sendable:** `card_email_status` decides, and both the
+           page and the sender read it. The learner must be in Release
+           with consent and a parent email, and nothing already PENDING
+           or SENT. A PENDING row older than 10 min reads as "interrupted
+           — may have gone out" and is released only by an explicit
+           button.
+         - **Outdated cards:** each send stores `basis_at`, the latest of
+           the term summary's `computed_at` and the learner's attendance
+           `updated_at`. A later change marks the card outdated. Re-sending
+           is a deliberate tick, and the old row becomes SUPERSEDED.
+         - **Gate:** nothing sends while the term's encoding is open.
+           That rule moved out of the Gradebook into
+           `app/encoding_window.py`, so both read one definition.
+         - **The PDF:** `term_card.generate_term_cards(..., password=)`,
+           ReportLab's own 128-bit encryption. The password is the
+           birthdate as YYYYMMDD; the owner password is random and
+           discarded. Checked with pypdf (scratchpad only, not a
+           dependency): the wrong password is refused, the right one
+           opens it and reads the card. The card is built by
+           `report_card.term_card_data`, moved out of the Term Cards page
+           so the emailed card and the printed card can't differ.
+         - **Wording:** `app/notice_messages.py`, executable copy of
+           `docs/parent-notice-templates.md`.
+         - **The mailer:** `app/notice_mailer.py`, `smtplib` SMTP_SSL with
+           one connection per batch, configured by
+           `NOTICE_EMAIL_ADDRESS` / `NOTICE_EMAIL_APP_PASSWORD` (see
+           `docs/deployment.md`). Unset means the page says it isn't set
+           up.
+         - **The page** has a "Term card email" column, a preview, a "send
+           a test to my own email" button (to the person pressing it,
+           marked TEST, not recorded), a confirm tick before Send, a
+           progress bar, and the sent record. The School Head now reaches
+           the page read-only: every write sits behind `may_write`, and a
+           test asserts it.
+         - Tests: `test_notice_email.py` (pure) and
+           `test_term_card_sending.py`. The latter runs the real sender
+           against live Release learners inside an outer transaction with
+           `join_transaction_mode="create_savepoint"`, so its per-message
+           commits are savepoints, rolled back at the end, with a fake
+           mailer. **That's the technique for any future test of code
+           that commits** (cf. `recompute_enrollment_grades`, which no test
+           can run).
+         - Measured on ARISTOTLE (29 Release): loading takes 11 queries,
+           preparing 15 queries whatever the size, and each PDF 0.07 s.
+           Expect about a second per email with SMTP.
+         - **Not yet done:** no real email has been sent, since the account
+           doesn't exist yet. Nobody has seen the page in a browser.
+           Consent and parent emails are empty for nearly every learner,
+           so in practice nobody is sendable until contacts are filled
+           in.
       4. Concern email, SMS links and letters.
 
       Traps already in CLAUDE.md that this walks straight into:
