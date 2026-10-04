@@ -189,6 +189,11 @@ def _contact_form(session, learner: Learner, current_user) -> None:
     holds +639171234567 — and a form widget's frontend copy survives even
     a deleted session_state key (see `clear_text_fields`). A refused save
     keeps the generation, so the typing is still there to correct.
+
+    The form name (which carries the learner id) goes into every key:
+    `generation_key` does not fold it in, and one of these forms is drawn
+    per learner on the page — bare "name"/"email" collided on the second
+    learner and took the whole page down (2026-10-04).
     """
     form = f"contact_{learner.id}"
     st.caption(
@@ -199,21 +204,21 @@ def _contact_form(session, learner: Learner, current_user) -> None:
         guardian_name = st.text_input(
             "Parent/guardian name",
             value=learner.guardian_name or "",
-            key=generation_key(form, "name"),
+            key=generation_key(form, f"{form}.name"),
         )
         col1, col2 = st.columns(2)
         guardian_email = col1.text_input(
-            "Email", value=learner.guardian_email or "", key=generation_key(form, "email")
+            "Email", value=learner.guardian_email or "", key=generation_key(form, f"{form}.email")
         )
         guardian_mobile = col2.text_input(
             "Mobile (09XXXXXXXXX)",
             value=display_mobile(learner.guardian_mobile),
-            key=generation_key(form, "mobile"),
+            key=generation_key(form, f"{form}.mobile"),
         )
         consent = st.checkbox(
             "Parent/guardian consents to school notices by email/SMS",
             value=learner.notices_consent,
-            key=generation_key(form, "consent"),
+            key=generation_key(form, f"{form}.consent"),
         )
         if learner.notices_consent and learner.notices_consent_date:
             st.caption(f"Consent recorded {learner.notices_consent_date:%b %d, %Y}.")
