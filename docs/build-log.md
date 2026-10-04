@@ -2131,3 +2131,18 @@ current number.
       - Use `learner_order_by` for the roster.
       - The sent-record needs a uniqueness guard so a rerun can't
         double-send. Commit per message, so an interrupted batch resumes.
+- [x] **Learner Masterlist outage, fixed the same day** (2026-10-04, `a8f4a16`).
+      After the reboot to `ec20c50` the page raised
+      `StreamlitDuplicateElementKey` on every load. The parent-contact form
+      is drawn once per learner and keyed its widgets
+      `generation_key(form, "name")`. `generation_key` uses `form` only to
+      find the generation counter and does **not** put it in the key, as
+      its docstring warns (the Gradebook hit the same trap). So every
+      learner's boxes were `name#0`, `email#0` and so on, and the second
+      learner crashed the page. Keys now carry the per-learner form name.
+      **Why the suite missed it:** 1,393 tests passed, but none drew the
+      page with more than one learner. `tests/test_learners_render.py` now
+      runs the real `render()` via AppTest with 50 learners and asserts no
+      two widgets share a key. It reproduces the crash without the fix.
+      The lesson for any per-row form: render the page with real rows
+      before shipping, not just the save function.
