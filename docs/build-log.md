@@ -2331,3 +2331,9 @@ current number.
         filter for the letters panel and builder; and a database test
         checks every loaded row against `classify` so a loader that stops
         filling a field fails a test.
+- [x] **Deploy state** (2026-10-04): live app rebooted onto `36a7b5e`
+      (footer confirmed by the user), so mid-term attendance concerns and
+      their review fixes are running. JOBS's test notice records (one
+      term-card email, one letter, the Term 1 section meeting) were deleted
+      with the user's approval; audit entries kept. JOBS's adviser is back
+      to the real one.
