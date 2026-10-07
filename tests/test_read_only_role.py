@@ -142,12 +142,18 @@ def test_parent_notices_gates_every_write_on_the_read_only_check():
     assert "may_write" in source
     panel = inspect.getsource(parent_notices._email_panel)
     assert "if not may_write" in panel
-    # The writing forms are only reached after the early return.
+    # The override form is only reached after the early return.
     tail = source[source.index("if not may_write:"):]
-    for form in ("_section_meeting_form", "_learner_meeting_form", "_override_form"):
-        assert form in tail
-    # The concern channels (text, letters) are drawn only for a writer.
-    for panel in ("_sms_panel", "_letters_panel"):
-        call = source.index(f"{panel}(session")
-        assert "if may_write and concern:" in source[:call]
+    assert "_override_form" in tail
+    # The meeting forms and the concern channels (text, letters) sit in
+    # the Concern block, drawn only for a writer.
+    lines = source.splitlines()
+    for call in ("_section_meeting_form", "_learner_meeting_form", "_sms_panel", "_letters_panel"):
+        at = next(i for i, line in enumerate(lines) if f"{call}(session" in line)
+        indent = len(lines[at]) - len(lines[at].lstrip())
+        guard = next(
+            line.strip() for line in reversed(lines[:at])
+            if line.strip() and len(line) - len(line.lstrip()) < indent
+        )
+        assert guard.startswith("if may_write"), (call, guard)
 

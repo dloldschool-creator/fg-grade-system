@@ -232,10 +232,9 @@ def _override_form(session, section, term, data, current_user) -> None:
         st.rerun()
 
 
-def _learner_meeting_form(session, section, term, data, current_user) -> None:
-    concern = data.in_group(NoticeGroup.CONCERN)
-    if not concern:
-        return
+def _learner_meeting_form(session, section, term, concern, current_user) -> None:
+    """One learner's own meeting time; `concern` is the non-empty Concern
+    group, which the caller has already checked."""
     with st.expander("Give one learner a different meeting time"):
         by_id = {row.enrollment_id: row for row in concern}
         form = f"notice_learner_meeting_{section.id}_{term.id}"
@@ -519,7 +518,7 @@ def _letters_panel(session, section, term, data, current_user) -> None:
         "and time."
     )
     if not with_meeting:
-        st.warning("Set a parent meeting date and time below first; the letter names it.")
+        st.warning("Set a parent meeting date and time above first; the letter names it.")
         return
     if len(with_meeting) < len(concern):
         st.caption(f"{len(concern) - len(with_meeting)} learner(s) have no meeting and are left out.")
@@ -697,9 +696,16 @@ def render() -> None:
 
         st.divider()
         _email_panel(session, section, term, data, current_user, may_write=may_write)
-        if may_write and concern:
+        if may_write:
             st.divider()
-            st.markdown("#### Contact the parents in Concern")
+            st.header("Contact the parents in Concern")
+            # The meeting comes first: the letter can't be printed without
+            # one, and the email and text include it when it's set. The
+            # section form shows even with nobody in Concern, so a meeting
+            # can be set ahead of time and a stale one can still be removed.
+            _section_meeting_form(session, section, term, data, current_user)
+        if may_write and concern:
+            _learner_meeting_form(session, section, term, concern, current_user)
             # One rule for all three channels (§78.5): attendance concerns can
             # go out at once; a failing grade waits for encoding to close,
             # since it can still change and a text or letter can't be taken
@@ -718,12 +724,11 @@ def render() -> None:
             )
             _sms_panel(session, section, term, data, current_user)
             _letters_panel(session, section, term, data, current_user)
+        elif may_write:
+            st.caption("Nobody is in Concern right now.")
         st.divider()
         _sent_record(data)
         if not may_write:
             return
-        st.divider()
-        _section_meeting_form(session, section, term, data, current_user)
-        _learner_meeting_form(session, section, term, data, current_user)
         st.divider()
         _override_form(session, section, term, data, current_user)
