@@ -8,7 +8,6 @@ so there is no PDF button here.
 """
 
 import calendar as _calendar
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -16,7 +15,7 @@ import streamlit as st
 from app.admin_pages._helpers import get_session, render_flashes
 from app.attendance_service import class_days_in_month, months_with_class_days
 from app.auth import require_role
-from app.display_time import SCHOOL_TZ
+from app.display_time import current_month_index
 from app.excel_template import workbook_to_bytes
 from app.models.enums import EnrollmentStatus
 from app.models.organization import SchoolYear
@@ -65,11 +64,6 @@ def render() -> None:
             )
             return
 
-        today = datetime.now(SCHOOL_TZ).date()
-        try:
-            default_month_index = months.index((today.year, today.month))
-        except ValueError:
-            default_month_index = 0
         with col2:
             # Changing the month regenerates everything below it; Streamlit
             # re-runs the script on the selection.
@@ -77,7 +71,7 @@ def render() -> None:
                 "Report month",
                 options=months,
                 format_func=lambda ym: f"{_calendar.month_name[ym[1]]} {ym[0]}",
-                index=default_month_index,
+                index=current_month_index(months),
             )
 
         class_days = class_days_in_month(session, sy_choice, year, month)

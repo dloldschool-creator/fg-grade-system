@@ -12,6 +12,7 @@ from app.attendance_service import (
     resequence_class_days,
 )
 from app.auth import require_role
+from app.display_time import current_month_index
 from app.models.attendance import AcademicCalendarDate
 from app.models.organization import SchoolYear, Term
 
@@ -225,6 +226,10 @@ def render() -> None:
         month_choice = st.selectbox(
             "Month",
             options=months,
+            index=current_month_index(months),
+            # Stable across a month rollover mid-session; scoped per school
+            # year so switching years starts from that year's default.
+            key=f"calendar_month_{school_year.id}",
             format_func=lambda ym: f"{_calendar.month_name[ym[1]]} {ym[0]}",
         )
         _month_editor(session, school_year, month_choice[0], month_choice[1], current_user)

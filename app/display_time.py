@@ -33,6 +33,16 @@ DISPLAY_FORMAT = "%Y-%m-%d %H:%M"
 LOG_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+def current_month_index(months: list[tuple[int, int]]) -> int:
+    """Index of this month (school time) in a list of (year, month), for a
+    month picker's default; 0 when the list doesn't include it."""
+    today = datetime.now(SCHOOL_TZ).date()
+    try:
+        return months.index((today.year, today.month))
+    except ValueError:
+        return 0
+
+
 def to_school_time(value: datetime | None) -> datetime | None:
     """A stored timestamp as it read on a clock in the staff room."""
     if value is None:
