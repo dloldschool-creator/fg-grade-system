@@ -530,7 +530,11 @@ of each is in `docs/build-log.md`.
   that hadn't happened as present in Insights and the page summary.
   Default Ps go in with `ON CONFLICT DO NOTHING` so two first-saves of
   one month can't collide; any other new code still uses the ORM, so a
-  real clash still surfaces. Found in the live data first: six
+  real clash still surfaces. **Audit:** a first entry of X, T-L or T-C
+  *is* logged as ATTENDANCE_CHANGED (previous "not yet encoded") even
+  though it is a create — the grid showed the day as P, so it is the
+  change from present §50 cares about; a first P is not, and clearing a
+  saved day logs status None. Found in the live data first: six
   section-months had been saved without ever being prepared.
 - **Withdrawing an enrollment is not a movement, and it is the one
   delete of a learner's year** (2026-10-14). The school keeps this system

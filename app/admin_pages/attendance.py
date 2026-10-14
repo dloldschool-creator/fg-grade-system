@@ -1,4 +1,5 @@
 import calendar as _calendar
+import uuid
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -280,15 +281,33 @@ def _save_grid(
                 )
                 changed += 1
             elif record is None:
-                session.add(
-                    AttendanceRecord(
-                        enrollment_id=enrollment.id,
-                        calendar_date_id=day.id,
-                        status=status,
-                        encoded_by_user_id=user_id,
-                    )
+                # A first entry of X, T-L or T-C is audited even though it is
+                # a create: the grid showed the day as a default P, so this
+                # is the change from present that §50 cares about. A first P
+                # (the default being saved) is not, or every month would
+                # bury its real corrections under hundreds of rows.
+                new_record = AttendanceRecord(
+                    id=uuid.uuid4(),
+                    enrollment_id=enrollment.id,
+                    calendar_date_id=day.id,
+                    status=status,
+                    encoded_by_user_id=user_id,
                 )
+                session.add(new_record)
                 changed += 1
+                audit_service.record(
+                    session,
+                    action=audit_service.ATTENDANCE_CHANGED,
+                    object_type="attendance_records",
+                    object_id=new_record.id,
+                    user_id=user_id,
+                    previous={"status": "not yet encoded"},
+                    new={
+                        "status": status,
+                        "learner": f"{learner.last_name}, {learner.first_name}",
+                        "date": day.calendar_date,
+                    },
+                )
             elif record.status != status:
                 previous_status = record.status
                 record.status = status

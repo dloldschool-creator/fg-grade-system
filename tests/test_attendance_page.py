@@ -598,3 +598,44 @@ def test_save_grid_clearing_a_recorded_day_unencodes_it(session, school_year, mo
     assert session.query(AttendanceRecord).filter_by(
         enrollment_id=enrollment.id, calendar_date_id=day.id
     ).count() == 0
+
+
+def test_save_grid_audits_a_first_absence_but_not_a_first_present(session, school_year, monkeypatch):
+    """A default P being saved is not audited; changing a default day to X
+    is, even though both are creates."""
+    from app.models.admin import AuditLog
+
+    def fake_try_commit(session, message):
+        session.flush()
+        return True
+
+    monkeypatch.setattr("app.admin_pages.attendance.try_commit", fake_try_commit)
+
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    year, month = months[-1]
+    days = class_days_in_month(session, school_year.id, year, month)
+    section = _any_advised_section(session, school_year)
+    roster = roster_for_month(session, section.id, school_year.id, year, month)
+    if not roster or not days:
+        pytest.skip("need a roster and class days")
+    dataframe, pending = _build_grid(session, roster, days, default_through=days[-1].calendar_date)
+    enrollment, _, window = roster[0]
+    day = next((d for d in days if window.contains(d.calendar_date)), None)
+    if not pending.get(enrollment.id) or day is None:
+        pytest.skip("first learner has no unsaved default day")
+    edited = dataframe.copy()
+    edited.loc[0, str(day.calendar_date.day)] = "X"
+
+    before = session.query(AuditLog).filter_by(action=audit_service.ATTENDANCE_CHANGED).count()
+    _save_grid(session, section.id, school_year.id, year, month, roster, days, edited,
+               section.adviser_user_id)
+    after = session.query(AuditLog).filter_by(action=audit_service.ATTENDANCE_CHANGED).count()
+    assert after == before + 1  # the X only, none of the default Ps
+
+    record = session.query(AttendanceRecord).filter_by(
+        enrollment_id=enrollment.id, calendar_date_id=day.id
+    ).one()
+    entry = session.query(AuditLog).filter_by(object_id=record.id).one()
+    assert entry.new_value["status"] == "ABSENT"
