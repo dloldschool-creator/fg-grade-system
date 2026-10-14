@@ -73,6 +73,9 @@ ACTION_GROUPS = {
         audit_service.PARENT_MEETING_SCHEDULED,
         audit_service.PARENT_NOTICES_SENT,
         audit_service.LEARNER_MOVEMENT_RECORDED,
+        audit_service.LEARNER_MOVEMENT_DELETED,
+        audit_service.ENROLLMENT_SECTION_CORRECTED,
+        audit_service.ENROLLMENT_WITHDRAWN,
     ],
     "Configuration": [
         audit_service.SUBJECT_OFFERING_CHANGED,

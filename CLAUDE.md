@@ -519,6 +519,36 @@ of each is in `docs/build-log.md`.
   with the `FOR NO KEY UPDATE` a plain UPDATE takes, so don't drop the
   explicit lock as redundant. The caller passes the section it showed,
   so a stale second correction is refused (rule 9).
+- **Withdrawing an enrollment is not a movement, and it is the one
+  delete of a learner's year** (2026-10-14). The school keeps this system
+  in step with DepEd's LIS, and the school head may direct that a learner
+  who stopped attending is not enrolled in LIS at all. A Dropped/NLS
+  movement is the official record of leaving and puts them *on* SF2/SF4/
+  SF9 — the opposite of what LIS shows. `app/enrollment_withdrawal.py`
+  (Section Roster → **Check record** → Withdraw, registrar/admin only)
+  deletes the enrollment and everything under it, keeps the `learners`
+  row, and writes a full copy of every deleted row into one
+  `ENROLLMENT_WITHDRAWN` audit entry with the reason and who authorized
+  it — that entry is the only place the history survives, so never
+  "slim" its `previous`. (The Super Admin audit archive can still move it
+  out of the table into its export file; keep those files.) Finalized
+  attendance months are **reopened and re-finalized automatically** (the
+  school's choice, to save three trips per learner), each as an ordinary
+  REOPENED/FINALIZED audit pair, restoring the original finalizer rather
+  than stamping the registrar over them. Every month the learner
+  **appeared on SF2** — `appears_in_month` over the active window, not
+  "has an attendance row", since prepared months seed rows for learners
+  who already left — is listed as an SF2/SF4 to reprint on Enrollment →
+  **Withdrawn**. Finalized grades, a frozen academic
+  record and award overrides still block, and so does any table pointing
+  at `enrollments` that is not in `DELETED`/`DERIVED` — same
+  block-by-default rule as the section correction, enforced by
+  `tests/test_enrollment_withdrawal.py`. **Check record** is also the
+  in-app version of `scripts/learner_footprint.py` (both print
+  `load_record`), and flags attendance rows marked present after a
+  learner left — the month's seeded PRESENT rows never changed, found on
+  the first real case. Those are stray data, **not** an SF2 error: SF2
+  already ignores days outside the active window.
 - **`AuthUser.id` is a `str`; every `*_user_id` column is a `uuid.UUID`.**
   Postgres coerces between them, so `filter_by(adviser_user_id=current_user.id)`
   works and hides the mismatch — but the same two values compared **in

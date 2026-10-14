@@ -52,6 +52,12 @@ LEARNER_MOVEMENT_DELETED = "LEARNER_MOVEMENT_DELETED"
 # picked wrongly at enrolment). Refused once grades or attendance exist —
 # see app/enrollment_section_correction.py.
 ENROLLMENT_SECTION_CORRECTED = "ENROLLMENT_SECTION_CORRECTED"
+# Removing a learner from a school year as if never enrolled, on the
+# school head's direction, to match LIS (app/enrollment_withdrawal.py).
+# The entry's `previous` is a full copy of every row deleted — the only
+# place that history survives — and `new` lists the SF2/SF4 months to
+# reprint.
+ENROLLMENT_WITHDRAWN = "ENROLLMENT_WITHDRAWN"
 # A learner's name, sex, birthdate and LRN are the identity every report
 # the school issues is printed under, and §54 treats them as protected
 # information. Until 2026-08-21 the Learner Masterlist wrote all four with
@@ -167,6 +173,7 @@ REASON_REQUIRED = {
     SUBJECT_OVERRIDE_REMOVED,
     LEARNER_MOVEMENT_DELETED,
     ENROLLMENT_SECTION_CORRECTED,
+    ENROLLMENT_WITHDRAWN,
 }
 
 

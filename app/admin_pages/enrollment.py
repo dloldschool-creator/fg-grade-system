@@ -1,7 +1,8 @@
+import json
 from datetime import date
 
 import streamlit as st
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app import audit_service
 from app.admin_pages._helpers import (
@@ -17,7 +18,15 @@ from app.admin_pages._helpers import (
     try_commit,
 )
 from app.auth import require_role
+from app.display_time import format_time
 from app.enrollment_section_correction import CorrectionRefused, correct_section
+from app.enrollment_withdrawal import (
+    WithdrawalRefused,
+    authorizer_options,
+    load_record,
+    withdraw_enrollment,
+    withdrawal_history,
+)
 from app.enrollment_subject_overrides import load_overrides_by_enrollment
 from app.grading_service import recompute_enrollment_grades_batch
 from app.learner_access import editable_learner_ids
@@ -25,6 +34,7 @@ from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, OfferingStatus
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
+from app.models.rbac import User
 from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
 from app.nls_reasons import NLS_REASONS
 
@@ -141,6 +151,255 @@ def _enroll_tab(session, adviser_user_id):
                     session.rollback()
                     flash("error", "Couldn't enroll — one or more learners may already be enrolled.")
                 st.rerun()
+
+
+_RECORD_CHECK = "enrollment_record_check"
+
+_GROUP_LABELS = {
+    "deleted": "Deleted on withdrawal (copy kept)",
+    "derived": "Computed — deleted, rebuilt by recompute",
+    "blocks": "Blocks withdrawal",
+}
+
+
+def _months_text(months, finalized=()) -> str:
+    finalized = set(finalized)
+    return ", ".join(
+        m.strftime("%b %Y") + (" (finalized)" if m in finalized else "") for m in months
+    ) or "none"
+
+
+def _record_panel(session, enrollment, checked, current_user, panel_id):
+    """The record check for one learner, and — for a registrar or admin —
+    the withdrawal form under it. Only ever drawn for the one learner whose
+    Check record was pressed (app/enrollment_withdrawal.py)."""
+    try:
+        record = load_record(session, enrollment.id)
+    except WithdrawalRefused as refusal:
+        st.error(str(refusal))
+        return
+    # The version guarded on submit is the one the person last *saw*, not the
+    # one from when Check record was pressed: a Save or Log movement in this
+    # same panel bumps it and reruns, and the panel redraws with the new
+    # state. So read the version the previous render showed, then record
+    # this render's for the next submit — in that order, because a submit
+    # is handled in the same run that redraws the panel, after it. Only a
+    # change made elsewhere between seeing and submitting is refused
+    # (rule 9). `checked` is the dict in session_state, so this persists.
+    shown_version = checked["version"]
+    checked["version"] = record.enrollment_version
+
+    left, right = st.columns(2)
+    left.markdown(
+        f"**{record.name}**  \n"
+        f"LRN {record.masked_lrn} · {record.sex.title()} · born {record.birthdate:%d %b %Y}  \n"
+        f"Record created by {record.learner_created_by or 'the registrar (not tracked)'}"
+    )
+    right.markdown(
+        f"**{record.section}** · {record.grade_level} · {record.school_year}  \n"
+        f"{record.track} — {record.strand}  \n"
+        f"Adviser: {record.adviser or 'none assigned'}  \n"
+        f"Status **{record.status}** · enrolled {record.enrolled_on:%d %b %Y}"
+    )
+
+    for anomaly in record.anomalies:
+        st.warning(anomaly)
+
+    if record.movements:
+        st.table(
+            [
+                {"Movement": kind, "Effective": when.isoformat(), "Reason / details": why}
+                for kind, when, why in record.movements
+            ]
+        )
+    marked = sum(record.attendance.values())
+    st.markdown(
+        f"**Attendance:** {marked} day(s) marked — "
+        + (", ".join(f"{k.title()} {v}" for k, v in sorted(record.attendance.items())) or "none")
+        + (f"; first marked {record.first_marked:%d %b %Y}" if record.first_marked else "")
+        + (f"; last present {record.last_present:%d %b %Y}" if record.last_present else "")
+        + "  \n"
+        f"**Appears on SF2/SF4 for:** {_months_text(record.affected_months, record.finalized_months)}"
+    )
+    if record.grades_by_term:
+        st.table(
+            [
+                {
+                    "Term": term,
+                    "Grade rows": sum(v for k, v in counts.items() if k not in ("offerings", "blank")),
+                    "Blank": counts.get("blank", 0),
+                    "Offerings": counts.get("offerings", 0),
+                    "By status": ", ".join(
+                        f"{k.title()} {v}"
+                        for k, v in sorted(counts.items())
+                        if k not in ("offerings", "blank")
+                    ),
+                }
+                for term, counts in record.grades_by_term.items()
+            ]
+        )
+    if record.tables:
+        st.dataframe(
+            [
+                {
+                    "Linked data": t.label,
+                    "Rows": t.total,
+                    "Breakdown": ", ".join(f"{k.title()} {v}" for k, v in sorted(t.by_status.items())),
+                    "On withdrawal": _GROUP_LABELS[t.group],
+                }
+                for t in sorted(record.tables, key=lambda t: (t.group != "blocks", t.label))
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+    if st.button("Close record", key=f"close_record_{enrollment.id}"):
+        st.session_state.pop(_RECORD_CHECK, None)
+        keep_panel_open(panel_id)
+        st.rerun()
+
+    if not current_user.has_role("SUPER_ADMIN", "REGISTRAR"):
+        return
+
+    st.markdown("**Withdraw enrollment**")
+    st.caption(
+        "Removes this learner from the school year as if never enrolled — for a "
+        "learner the school head has directed not to be enrolled in LIS. Not for a "
+        "learner who left: log a Dropped, NLS or Transferred Out movement for that. "
+        "The learner's own record stays, so they can be enrolled again later."
+    )
+    if record.blockers:
+        st.error(
+            "Can't be withdrawn yet — this learner has " + ", ".join(record.blockers) + ". "
+            "Reopen finalized grades on Grade Summary and clear award overrides on "
+            "Awards first; a frozen academic record needs the system administrator."
+        )
+        return
+
+    authorizers = authorizer_options(session)
+    if not authorizers:
+        st.error("No school head is named — set one on School Info first.")
+        return
+    # Only what a person entered is named here; computed rows are rebuilt
+    # anyway and would bury the numbers that matter.
+    deleted = [t for t in record.tables if t.group == "deleted"]
+    with st.form(f"withdraw_{enrollment.id}"):
+        authorized_by = st.selectbox("Authorized by", options=authorizers)
+        reason = st.text_area("Reason — required", placeholder="e.g. Not enrolled in LIS per school head's directive")
+        confirm = st.text_input(f"Type the learner's last name ({record.last_name}) to confirm")
+        acknowledged = st.checkbox(
+            "I understand this deletes "
+            + ", ".join(f"{t.total} {t.label.lower()}" for t in deleted)
+            + (", " if deleted else "")
+            + "the enrollment and its computed averages. A full copy is kept in the audit log."
+            + (
+                f" Finalized attendance for {_months_text(record.finalized_months)} will be "
+                "reopened and re-finalized automatically."
+                if record.finalized_months
+                else ""
+            )
+            + (
+                f" SF2/SF4 for {_months_text(record.affected_months)} must be reprinted."
+                if record.affected_months
+                else ""
+            )
+        )
+        if st.form_submit_button("Withdraw enrollment", type="primary"):
+            if not acknowledged:
+                flash("error", "Tick the box to confirm you've read what will be deleted.")
+                keep_panel_open(panel_id)
+                st.rerun()
+            try:
+                summary = withdraw_enrollment(
+                    session,
+                    enrollment_id=enrollment.id,
+                    expected_version=shown_version,
+                    user_id=current_user.id,
+                    reason=reason,
+                    authorized_by=authorized_by,
+                    confirm_last_name=confirm,
+                )
+            except WithdrawalRefused as refusal:
+                session.rollback()
+                flash("error", str(refusal))
+                keep_panel_open(panel_id)
+            except SQLAlchemyError:
+                # The deletes flush inside the call, so a lock timeout or an
+                # unforeseen constraint surfaces here rather than at commit.
+                session.rollback()
+                flash(
+                    "error",
+                    "The withdrawal couldn't be completed and nothing was changed — "
+                    "someone may be saving this learner's grades or attendance. "
+                    "Try again in a moment.",
+                )
+                keep_panel_open(panel_id)
+            else:
+                months = summary["sf2_sf4_months_to_reprint"]
+                if try_commit(
+                    session,
+                    f"Withdrew {record.name} from {record.section}."
+                    + (f" Reprint SF2/SF4 for {', '.join(months)} — listed on the Withdrawn tab." if months else ""),
+                ):
+                    st.session_state.pop(_RECORD_CHECK, None)
+            st.rerun()
+
+
+def _withdrawn_tab(session):
+    st.caption(
+        "Every enrollment withdrawn so far, newest first, read from the audit log. "
+        "The months listed are the SF2/SF4 copies that still show the learner and "
+        "should be reprinted. An audit archive (Audit Log page) moves entries older "
+        "than its cutoff into the export file — a withdrawal archived that way "
+        "leaves this list, and the export file then holds its copy."
+    )
+    entries = withdrawal_history(session)
+    if not entries:
+        st.info("No enrollments have been withdrawn.")
+        return
+    user_ids = {e.user_id for e in entries if e.user_id}
+    names = (
+        {u.id: u.full_name for u in session.query(User).filter(User.id.in_(user_ids)).all()}
+        if user_ids
+        else {}
+    )
+    st.dataframe(
+        [
+            {
+                "When": format_time(e.created_at),
+                "Learner": (e.new_value or {}).get("learner"),
+                "LRN": "••••" + ((e.new_value or {}).get("lrn_last4") or "—"),
+                "Section": (e.new_value or {}).get("section"),
+                "Adviser": (e.new_value or {}).get("adviser"),
+                "Authorized by": (e.new_value or {}).get("authorized_by"),
+                "Withdrawn by": names.get(e.user_id, "—"),
+                "Reason": e.reason,
+                "Reprint SF2/SF4": ", ".join((e.new_value or {}).get("sf2_sf4_months_to_reprint", [])),
+                "Re-finalized": ", ".join((e.new_value or {}).get("months_reopened_and_refinalized", [])),
+            }
+            for e in entries
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    by_id = {str(e.id): e for e in entries}
+    picked = st.selectbox(
+        "See what was removed",
+        options=list(by_id),
+        format_func=lambda v: f"{(by_id[v].new_value or {}).get('learner')} — {format_time(by_id[v].created_at)}",
+    )
+    entry = by_id[picked]
+    rows = (entry.previous_value or {}).get("rows", {})
+    st.table([{"Table": table, "Rows copied": len(copied)} for table, copied in rows.items()])
+    st.download_button(
+        "Download the full copy (JSON)",
+        data=json.dumps(
+            {"withdrawal": entry.new_value, "reason": entry.reason, "copy": entry.previous_value},
+            indent=2,
+        ),
+        file_name=f"withdrawn-{(entry.new_value or {}).get('learner', 'learner')}.json",
+        mime="application/json",
+    )
 
 
 def _roster_tab(session, adviser_user_id, current_user):
@@ -272,6 +531,25 @@ def _roster_tab(session, adviser_user_id, current_user):
                     enrollment.term3_adviser_comment = t3 or None
                     enrollment.version += 1
                     try_commit(session, "Saved.")
+                    st.rerun()
+
+            st.subheader("Learner record")
+            checked = st.session_state.get(_RECORD_CHECK)
+            if checked and checked["enrollment_id"] == str(enrollment.id):
+                _record_panel(session, enrollment, checked, current_user, panel_id)
+            else:
+                st.caption(
+                    "Everything linked to this learner's enrollment — section, adviser, "
+                    "attendance, grades, movements — and any problems found in it."
+                )
+                # Behind a button: the check costs ~10 round trips, and this
+                # body runs for every learner on every rerun.
+                if st.button("Check record", key=f"check_record_{enrollment.id}"):
+                    st.session_state[_RECORD_CHECK] = {
+                        "enrollment_id": str(enrollment.id),
+                        "version": enrollment.version,
+                    }
+                    keep_panel_open(panel_id)
                     st.rerun()
 
             st.subheader("Correct section")
@@ -723,10 +1001,13 @@ def render() -> None:
     adviser_user_id = None if current_user.has_role("SUPER_ADMIN", "REGISTRAR") else current_user.id
 
     with get_session() as session:
-        choice = stateful_tabs(
-            "enrollment_tab", ["Enroll", "Section Roster / Movements"]
-        )
+        tabs = ["Enroll", "Section Roster / Movements"]
+        if adviser_user_id is None:
+            tabs.append("Withdrawn")
+        choice = stateful_tabs("enrollment_tab", tabs)
         if choice == "Enroll":
             _enroll_tab(session, adviser_user_id)
         elif choice == "Section Roster / Movements":
             _roster_tab(session, adviser_user_id, current_user)
+        elif choice == "Withdrawn":
+            _withdrawn_tab(session)
