@@ -121,6 +121,18 @@ BY_ROLE = {
                 "happens to those records.",
             ),
             (
+                "The school head says a learner is not to be enrolled in LIS",
+                "You can't remove them yourself — only the registrar can "
+                "**withdraw an enrollment**. Open the learner's panel on "
+                "**Enrollment → Section Roster / Movements** and press **Check "
+                "record** to see what they have (attendance, grades, the SF2 "
+                "months they appear on), then tell the registrar. Don't log a "
+                "*Dropped* or *NLS* movement as a substitute: that keeps the "
+                "learner on SF2 and SF4, which is the opposite of what LIS "
+                "shows. Once withdrawn, you'll be told which SF2 months to "
+                "print again.",
+            ),
+            (
                 "A learner transfers into your section mid-year",
                 "**1. Add the learner.** Search the Learner Masterlist by LRN "
                 "first. If a read-only card shows, they are already in the "
@@ -350,6 +362,44 @@ BY_ROLE = {
                 "**finalized** in either section — reopen the month first. Grades "
                 "are never carried across: remove or reverse them by hand, then "
                 "try again.",
+            ),
+            (
+                "Withdrawing an enrollment (a learner who is not to be in LIS)",
+                "**Use this only when the school head has directed that a "
+                "learner is not enrolled in LIS at all**, so this system should "
+                "match it. It is *not* for a learner who left — that is a "
+                "*Dropped*, *NLS* or *Transferred Out* movement, which keeps them "
+                "on SF2, SF4 and SF9 as DepEd expects. Withdrawing deletes the "
+                "learner's year as if it never happened.\n\n"
+                "**1. Check the record.** Enrollment → Section Roster / Movements "
+                "→ pick the section → open the learner's panel → **Check "
+                "record**. It shows the section and adviser, movements, "
+                "attendance, grades per term, every kind of data attached, and the "
+                "SF2 months the learner appears on. Read the warnings: attendance "
+                "marked present after the learner left is leftover data, not an "
+                "error on the printed SF2.\n\n"
+                "**2. If it says *Can't be withdrawn yet*,** fix what it names "
+                "first: reopen finalized grades on Grade Summary, clear award "
+                "overrides on Awards. A frozen academic record needs the system "
+                "administrator.\n\n"
+                "**3. Withdraw.** Under *Withdraw enrollment* pick who **authorized** "
+                "it (the school head), type a **reason**, type the learner's "
+                "**last name** to confirm, tick the box that lists exactly what "
+                "will be deleted, and press **Withdraw enrollment**. Do one "
+                "learner at a time and read the result before the next.\n\n"
+                "**What happens.** The enrollment, attendance, movements and "
+                "grades are deleted; the computed averages are cleared. A full "
+                "copy of everything deleted is saved in the audit log. The "
+                "learner's own record (name, LRN, birthdate) stays, so they can be "
+                "enrolled again later without a duplicate LRN. Any **finalized "
+                "attendance month** is reopened and finalized again "
+                "automatically, with the original finalizer kept.\n\n"
+                "**4. Reprint.** Open the **Withdrawn** tab. *Reprint SF2/SF4* "
+                "lists the months whose forms still show the learner — print "
+                "those again and replace any copy already submitted. Select an "
+                "entry to see what was removed, or download the full copy.\n\n"
+                "There is no undo button; the saved copy is how a mistake is put "
+                "right, so it can be restored by hand.",
             ),
             (
                 "Fill in the Section column and the import enrolls them too",
