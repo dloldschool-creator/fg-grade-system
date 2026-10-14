@@ -303,7 +303,7 @@ def test_the_contact_form_is_drawn_for_editable_learners():
 
     from app.admin_pages import learners
 
-    assert "_contact_form(session, learner, current_user)" in inspect.getsource(learners.render)
+    assert "_contact_form(session, learner, current_user)" in inspect.getsource(learners._learner_list)
 
 
 # --- The Masterlist form's save path, run rather than read -----------------

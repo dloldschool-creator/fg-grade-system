@@ -123,7 +123,7 @@ def test_only_the_editable_learners_get_an_edit_form():
     """`mine` is the filtered list; the forms hang off it and the cards
     off `others`. Drawing the forms from `learners` would put the whole
     search result back into edit."""
-    render = inspect.getsource(page.render)
+    render = inspect.getsource(page._learner_list)
     assert "for learner in mine:" in render
     assert "_identity_form(session, learner" in render
     assert "for learner in sorted(others, key=learner_sort_key):" in render
@@ -147,7 +147,8 @@ def test_delete_is_registrar_only():
     through typing."""
     render = inspect.getsource(page.render)
     assert 'may_delete = current_user.has_role("SUPER_ADMIN", "REGISTRAR")' in render
-    assert "may_delete=may_delete" in render
+    assert "_learner_list(current_user, adviser_user_id, may_delete)" in render
+    assert "may_delete=may_delete" in inspect.getsource(page._learner_list)
 
     form = inspect.getsource(page._identity_form)
     assert 'if may_delete and columns[1].form_submit_button("Delete")' in form
@@ -270,8 +271,14 @@ def test_the_new_actions_are_visible_in_the_audit_viewer():
 def test_the_access_query_runs_once_per_render_not_once_per_learner():
     """Streamlit re-runs the whole script on every interaction and this
     page draws an expander per learner. `editable_learner_ids` is called
-    from `render` and never from inside a loop or a panel."""
-    tree = _function("render")
+    from `render` and never from inside a loop or a panel — and the same
+    for `_learner_list`, the search fragment, which reruns on its own as
+    the search box is typed in."""
+    for name in ("render", "_learner_list"):
+        _assert_called_once_outside_loops(_function(name))
+
+
+def _assert_called_once_outside_loops(tree):
     calls = [
         node
         for node in ast.walk(tree)
@@ -303,7 +310,7 @@ def test_placements_are_batched_above_the_read_only_cards():
     # The loop body itself, taken from the AST — slicing the source by
     # text runs on into the Add learner form below it, which queries
     # perfectly legitimately.
-    for node in ast.walk(_function("render")):
+    for node in ast.walk(_function("_learner_list")):
         if (
             isinstance(node, ast.For)
             and isinstance(node.iter, ast.Call)
@@ -466,7 +473,7 @@ def test_the_read_only_group_still_says_what_it_is():
     thing telling an adviser why these rows can't be typed into, and the
     only thing naming who can change them. Easy to tidy away; not easy to
     notice missing."""
-    render = inspect.getsource(page.render)
+    render = inspect.getsource(page._learner_list)
     branch = render[render.index("if others:"):render.index("for learner in sorted(others")]
     assert "st.caption(" in branch
     assert "read-only" in branch
@@ -479,6 +486,6 @@ def test_the_read_only_group_draws_no_rule_when_it_is_the_only_group():
     their own. An unconditional divider then puts a horizontal line
     directly under the search box, which reads as a rendering fault
     rather than as a separator between two things."""
-    render = inspect.getsource(page.render)
+    render = inspect.getsource(page._learner_list)
     branch = render[render.index("if others:"):render.index("for learner in sorted(others")]
     assert "if mine:\n                st.divider()" in branch

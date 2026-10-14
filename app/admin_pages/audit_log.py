@@ -20,12 +20,13 @@ from datetime import datetime, time, timezone
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import Text, cast, or_
+from sqlalchemy import Text, and_, cast, func, or_, select
 
 from app import audit_archive_service, audit_service
 from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
 from app.auth import require_role
 from app.display_time import LOG_FORMAT, format_time
+from app.live_search import like_pattern, live_search, search_words
 from app.models.admin import AuditLog
 from app.models.learners import Learner
 from app.models.rbac import User
@@ -191,43 +192,38 @@ def _resolve_object(entry: AuditLog, learners: dict) -> str:
     return f"{entry.object_type} — {name} (deleted)" if name else f"{entry.object_type} (deleted learner)"
 
 
-def _search_filter(term: str, users: dict, learners: dict):
-    """One SQL condition matching `term` anywhere a reader would look for
-    it: the old and new values, the reason, the action, the object type,
-    plus the *names* the table shows for Who and Object.
-
-    Those two are resolved in Python from the `users`/`learners` dicts the
-    page already holds, then matched by id — so a learner's name finds
+def _word_filter(word: str):
+    """One word of a search, matched anywhere a reader would look for it:
+    the old and new values, the reason, the action, the object type, and
+    the names the table shows for Who and Object. Names are matched by
+    subquery against `users`/`learners`, so a learner's name finds
     LEARNER_CHANGED entries whose payload only carries the changed field,
-    without a join. Attendance and grade payloads carry the learner's name
-    as text already.
-
-    No index: it is a sequential scan, measured at ~31 ms over 8,358 rows
-    on 2026-10-14, and it only runs when the box has text. It grows
-    linearly; if the log ever reaches hundreds of thousands of rows, a
-    pg_trgm GIN index on these columns is the additive fix (the archive
-    tool below is the other)."""
-    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
-    needle = term.casefold()
-    conditions = [
+    without loading every learner into Python."""
+    pattern = like_pattern(word)
+    learner_name = func.concat_ws(
+        " ", Learner.last_name, Learner.first_name, Learner.middle_name, Learner.extension_name
+    )
+    return or_(
         cast(AuditLog.previous_value, Text).ilike(pattern, escape="\\"),
         cast(AuditLog.new_value, Text).ilike(pattern, escape="\\"),
         AuditLog.reason.ilike(pattern, escape="\\"),
         AuditLog.action.ilike(pattern, escape="\\"),
         AuditLog.object_type.ilike(pattern, escape="\\"),
-    ]
-    user_ids = [uid for uid, u in users.items() if needle in (u.full_name or "").casefold()]
-    if user_ids:
-        conditions.append(AuditLog.user_id.in_(user_ids))
-    learner_ids = [
-        lid
-        for lid, l in learners.items()
-        if needle in _learner_name(l.last_name, l.first_name, l.middle_name, l.extension_name).casefold()
-    ]
-    if learner_ids:
-        conditions.append(AuditLog.object_id.in_(learner_ids))
-    return or_(*conditions)
+        AuditLog.user_id.in_(select(User.id).where(User.full_name.ilike(pattern, escape="\\"))),
+        AuditLog.object_id.in_(select(Learner.id).where(learner_name.ilike(pattern, escape="\\"))),
+    )
+
+
+def _search_filter(query: str):
+    """Every word must match (in any field, in any order), so typing more
+    only narrows; None for an empty box.
+
+    No index: a sequential scan, ~31 ms over 8,358 rows on 2026-10-14,
+    and only paid while the box has text. It grows linearly; if the log
+    reaches hundreds of thousands of rows, a pg_trgm GIN index on these
+    columns is the additive fix (the archive tool below is the other)."""
+    words = search_words(query)
+    return and_(*(_word_filter(word) for word in words)) if words else None
 
 
 def _store_export(data: bytes, before: datetime, count: int) -> None:
@@ -376,20 +372,14 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
                 st.rerun()
 
 
-def render() -> None:
-    current_user = require_role("SUPER_ADMIN")
-    st.title("Audit Log")
-    st.caption(
-        "A record of every important change: who, what changed, the old and new "
-        "value, when, and the reason where one was required. Entries can never be "
-        "edited, and can only be deleted via the archive tool at the bottom of this "
-        "page, which forces a download first."
-    )
-    render_flashes()
-
+@st.fragment
+def _viewer() -> None:
+    """Filters, search and the table. A fragment so that typing in the
+    search box — which reports after every pause — reruns only this, and
+    not the archive section's three counts below it. Opens its own
+    session: a fragment rerun happens outside `render()`'s."""
     with get_session() as session:
         users = {u.id: u for u in session.query(User).all()}
-        learners = {l.id: l for l in session.query(Learner).all()}
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -407,14 +397,16 @@ def render() -> None:
                 format_func=lambda v: ANY if v == ANY else users[v].full_name,
             )
 
-        search = st.text_input(
+        search = live_search(
             "Search",
-            placeholder="A learner, teacher, value, date (2026-10-15) or reason — press Enter",
-        ).strip()
+            key="audit_log_search",
+            placeholder="Type to filter — a learner, teacher, value, date (2026-10-15) or reason",
+        )
 
         query = session.query(AuditLog)
-        if search:
-            query = query.filter(_search_filter(search, users, learners))
+        condition = _search_filter(search)
+        if condition is not None:
+            query = query.filter(condition)
         if action_choice != ANY:
             query = query.filter(AuditLog.action == action_choice)
         elif group_choice != ANY:
@@ -441,6 +433,15 @@ def render() -> None:
             .offset((page - 1) * PAGE_SIZE)
             .limit(PAGE_SIZE)
             .all()
+        )
+
+        # Only the learners this page of entries names — not the whole
+        # school on every keystroke.
+        learner_ids = {e.object_id for e in entries if e.object_type == "learners"}
+        learners = (
+            {l.id: l for l in session.query(Learner).filter(Learner.id.in_(learner_ids)).all()}
+            if learner_ids
+            else {}
         )
 
         if not entries:
@@ -481,7 +482,7 @@ def render() -> None:
                 with col_prev:
                     if st.button("← Previous", disabled=page <= 1, width="stretch"):
                         st.session_state[_PAGE_KEY] = page - 1
-                        st.rerun()
+                        st.rerun(scope="fragment")
                 with col_label:
                     st.markdown(
                         f"<div style='text-align:center; padding-top: 0.4rem'>"
@@ -491,7 +492,7 @@ def render() -> None:
                 with col_next:
                     if st.button("Next →", disabled=page >= total_pages, width="stretch"):
                         st.session_state[_PAGE_KEY] = page + 1
-                        st.rerun()
+                        st.rerun(scope="fragment")
                 with col_jump:
                     with st.form("audit_log_jump", border=False):
                         jump_col, go_col = st.columns([2, 1])
@@ -505,7 +506,23 @@ def render() -> None:
                         )
                         if go_col.form_submit_button("Go") and target != page:
                             st.session_state[_PAGE_KEY] = int(target)
-                            st.rerun()
+                            st.rerun(scope="fragment")
 
+
+
+def render() -> None:
+    current_user = require_role("SUPER_ADMIN")
+    st.title("Audit Log")
+    st.caption(
+        "A record of every important change: who, what changed, the old and new "
+        "value, when, and the reason where one was required. Entries can never be "
+        "edited, and can only be deleted via the archive tool at the bottom of this "
+        "page, which forces a download first."
+    )
+    render_flashes()
+
+    _viewer()
+
+    with get_session() as session:
         grand_total = session.query(AuditLog).count()
         _render_archive_section(session, current_user, grand_total)

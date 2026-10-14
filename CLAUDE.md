@@ -736,6 +736,18 @@ the components' sum, or the languages are weighted twice.
   you will be testing the old code and believing the new code failed.
 - `st.tabs()` resets to the first tab on every rerun — use
   `_helpers.stateful_tabs()`.
+- **Search-as-you-type is `app/live_search.py`, and it must sit in an
+  `@st.fragment`** (2026-10-14). `st.text_input` only reports on Enter or
+  blur; `live_search` is a small `st.components.v2` component (no
+  package) that reports after a 300 ms pause, so each pause is a rerun.
+  Audit Log and Learner Masterlist wrap the box *and its results* in a
+  fragment that opens its own session, so a keystroke reruns the list,
+  not the whole page. `search_words` splits on spaces and commas and
+  every word must match — names are stored "PINEDA, ANNE", so a phrase
+  match on "pineda anne" finds nothing. Verified in a real browser with
+  a no-login harness page: one rerun per pause, focus kept, full page
+  never rerun. A new search box should reuse both, plus `like_pattern`
+  (a typed `_` or `%` must not act as a wildcard).
 - A `SelectboxColumn` cell whose value isn't in `options` renders *empty*,
   which reads as un-encoded. Sentinels must be valid options.
 - **A module every page imports must not reach `app.models` at load** —

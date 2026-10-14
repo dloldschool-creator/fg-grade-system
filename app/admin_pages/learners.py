@@ -45,6 +45,7 @@ from app.guardian_contact import (
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.import_specs import LEARNER_CONTACT_IMPORT, LEARNER_IMPORT
 from app.learner_access import editable_learner_ids, may_edit
+from app.live_search import like_pattern, live_search, search_words
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
@@ -448,16 +449,23 @@ def _listed_learners(session, search: str, adviser_user_id, editable: set) -> li
     rather than the first fifty names in the school, which is both the
     more useful default and the one that matches what they can act on.
     """
-    if search:
-        like = f"%{search}%"
-        return (
-            session.query(Learner)
-            .filter(
-                (Learner.last_name.ilike(like))
-                | (Learner.first_name.ilike(like))
-                | (Learner.lrn.ilike(like))
+    words = search_words(search)
+    if words:
+        # Every word must match one of the name parts or the LRN, in any
+        # order: "pineda anne" and "anne pineda" both find PINEDA, ANNE,
+        # which the old single-phrase match never did.
+        query = session.query(Learner)
+        for word in words:
+            pattern = like_pattern(word)
+            query = query.filter(
+                Learner.last_name.ilike(pattern, escape="\\")
+                | Learner.first_name.ilike(pattern, escape="\\")
+                | Learner.middle_name.ilike(pattern, escape="\\")
+                | Learner.extension_name.ilike(pattern, escape="\\")
+                | Learner.lrn.ilike(pattern, escape="\\")
             )
-            .order_by(Learner.last_name, Learner.first_name)
+        return (
+            query.order_by(Learner.last_name, Learner.first_name)
             .limit(RESULT_LIMIT)
             .all()
         )
@@ -747,29 +755,22 @@ def _contact_upload_section(session, current_user, adviser_user_id, editable: se
             st.rerun()
 
 
-def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
-    st.title("Learner Masterlist")
-    render_flashes()
-
-    # Registrar/Super Admin work school-wide; an Adviser-only account is
-    # scoped to the learners in the sections they actually advise (§3C,
-    # §54), plus any they created who are not enrolled anywhere yet. The
-    # same rule was already applied on the Enrollment page to *sections*;
-    # this page never applied it to learners, so every adviser could edit
-    # every learner in the school.
-    adviser_user_id = None if current_user.has_role("SUPER_ADMIN", "REGISTRAR") else current_user.id
-    # Deleting a learner is a registrar action. The database already
-    # refuses to delete an enrolled one (every foreign key here is ON
-    # DELETE RESTRICT), so the button only ever bit on learners with no
-    # enrollment — which is exactly the fragile set: just imported, not
-    # yet enrolled, quite possibly somebody else's afternoon of typing.
-    may_delete = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
-
+@st.fragment
+def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
+    """The search box and the learners it finds. A fragment so that typing
+    — the box reports after every pause — reruns only this list, not the
+    add form, the school-year pickers and both upload panels below it.
+    Saving inside an expander still calls `st.rerun()`, which reruns the
+    whole page as before. Opens its own session: a fragment rerun happens
+    outside `render()`'s."""
     with get_session() as session:
         editable = editable_learner_ids(session, adviser_user_id)
 
-        search = st.text_input("Search by name or LRN")
+        search = live_search(
+            "Search by name or LRN",
+            key="learner_masterlist_search",
+            placeholder="Type to filter — e.g. pineda anne, or part of an LRN",
+        )
         learners = _listed_learners(session, search, adviser_user_id, editable)
 
         if adviser_user_id is not None:
@@ -837,6 +838,31 @@ def render() -> None:
             )
             for learner in sorted(others, key=learner_sort_key):
                 _read_only_card(learner, placements.get(learner.id))
+
+
+def render() -> None:
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
+    st.title("Learner Masterlist")
+    render_flashes()
+
+    # Registrar/Super Admin work school-wide; an Adviser-only account is
+    # scoped to the learners in the sections they actually advise (§3C,
+    # §54), plus any they created who are not enrolled anywhere yet. The
+    # same rule was already applied on the Enrollment page to *sections*;
+    # this page never applied it to learners, so every adviser could edit
+    # every learner in the school.
+    adviser_user_id = None if current_user.has_role("SUPER_ADMIN", "REGISTRAR") else current_user.id
+    # Deleting a learner is a registrar action. The database already
+    # refuses to delete an enrolled one (every foreign key here is ON
+    # DELETE RESTRICT), so the button only ever bit on learners with no
+    # enrollment — which is exactly the fragile set: just imported, not
+    # yet enrolled, quite possibly somebody else's afternoon of typing.
+    may_delete = current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+
+    _learner_list(current_user, adviser_user_id, may_delete)
+
+    with get_session() as session:
+        editable = editable_learner_ids(session, adviser_user_id)
 
         st.divider()
         st.subheader("Add learner")

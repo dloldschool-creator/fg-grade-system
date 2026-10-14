@@ -5,7 +5,6 @@ two audit entries, searches for them, and never commits.
 """
 
 import uuid
-from types import SimpleNamespace
 
 import pytest
 
@@ -25,11 +24,8 @@ def session():
         session.close()
 
 
-def _matches(session, term, users=None, learners=None):
-    return {
-        row.id
-        for row in session.query(AuditLog).filter(_search_filter(term, users or {}, learners or {}))
-    }
+def _matches(session, term):
+    return {row.id for row in session.query(AuditLog).filter(_search_filter(term))}
 
 
 def test_search_finds_text_inside_the_payload_and_reason(session):
@@ -66,25 +62,41 @@ def test_search_treats_percent_and_underscore_literally(session):
     assert without.id not in found
 
 
-def test_search_matches_names_the_table_shows_by_id(session):
-    """A learner's name finds entries that only carry the learner's id
-    (LEARNER_CHANGED stores just the changed field), and a user's name
-    finds what they did — both resolved from dicts the page already holds."""
-    learner_id, user_id = uuid.uuid4(), uuid.uuid4()
-    marker = f"Zq{uuid.uuid4().hex[:8]}"
-    learners = {
-        learner_id: SimpleNamespace(
-            last_name=marker, first_name="Ana", middle_name=None, extension_name=None
-        )
-    }
-    entry = audit_service.record(
-        session, action=audit_service.LEARNER_CHANGED, object_type="learners",
-        object_id=learner_id, previous={"sex": "MALE"}, new={"sex": "FEMALE"},
+def test_every_word_must_match_in_any_order(session):
+    """'pineda anne' must find "PINEDA, ANNE" — the old phrase match did
+    not — and each extra word only narrows."""
+    marker = f"zq{uuid.uuid4().hex[:8]}"
+    anne = audit_service.record(
+        session, action=audit_service.ATTENDANCE_CHANGED, object_type="attendance_records",
+        object_id=uuid.uuid4(), new={"learner": f"{marker.upper()}, ANNE"},
+    )
+    mark = audit_service.record(
+        session, action=audit_service.ATTENDANCE_CHANGED, object_type="attendance_records",
+        object_id=uuid.uuid4(), new={"learner": f"{marker.upper()}, MARK"},
     )
     session.flush()
-    assert entry.id in _matches(session, marker.lower(), learners=learners)
+    assert {anne.id, mark.id} <= _matches(session, marker)
+    found = _matches(session, f"{marker} anne")
+    assert anne.id in found and mark.id not in found
+    assert anne.id in _matches(session, f"anne {marker}")
 
-    users = {user_id: SimpleNamespace(full_name=f"{marker} Teacher")}
-    query = session.query(AuditLog).filter(_search_filter(f"{marker} teach", users, {}))
-    # The condition is built; no entry carries this made-up user id.
-    assert str(query.statement.compile()).count("user_id IN") == 1
+
+def test_search_matches_a_learner_by_name_through_the_id(session):
+    """LEARNER_CHANGED stores only the changed field; the learner's name
+    still finds it, by subquery on `learners`."""
+    from app.models.learners import Learner
+
+    learner = session.query(Learner).first()
+    if learner is None:
+        pytest.skip("no learners")
+    entry = audit_service.record(
+        session, action=audit_service.LEARNER_CHANGED, object_type="learners",
+        object_id=learner.id, previous={"sex": "MALE"}, new={"sex": "FEMALE"},
+    )
+    session.flush()
+    assert entry.id in _matches(session, f"{learner.first_name} {learner.last_name}")
+
+
+def test_empty_search_is_no_filter():
+    assert _search_filter("") is None
+    assert _search_filter("  ,  ") is None
