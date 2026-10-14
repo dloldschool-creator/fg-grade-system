@@ -241,7 +241,9 @@ BY_ROLE = {
                 "exceptions. Those **P**s are not saved until you click **Save "
                 "attendance**, and a month can't be finalized while any are unsaved. "
                 "A new learner or a changed calendar just shows up as more unsaved "
-                "**P**s; days that haven't happened yet stay blank.",
+                "**P**s; days that haven't happened yet stay blank. To take back a "
+                "day you've saved, clear the cell and save — it goes back to not "
+                "encoded (a past day then shows its default **P** again).",
             ),
             (
                 "Late and Cutting still count as present",

@@ -7,7 +7,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app import audit_service
 from app.admin_pages._helpers import (
+    clear_text_fields,
     flash,
+    generation_key,
     get_session,
     render_flashes,
     section_picker,
@@ -126,6 +128,18 @@ def unsaved_defaults_message(count: int) -> str:
     )
 
 
+def _cell_code(value) -> str:
+    """A grid cell as an upper-case code, with a cleared cell as "".
+
+    Deleting a cell's content in `st.data_editor` hands back None, and
+    pandas can turn that into NaN — `str(nan)` is "nan", which surfaced as
+    "Ignored unrecognised code(s) … 'NAN'" the first time someone cleared
+    a row of prepared days."""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip().upper()
+
+
 def _blocking_reasons(
     report: dict,
     has_unsaved_edits: bool,
@@ -223,8 +237,32 @@ def _save_grid(
             column = str(day.calendar_date.day)
             if not window.contains(day.calendar_date):
                 continue
-            raw = str(edited.iloc[index][column] or "").strip().upper()
-            if raw in ("", NOT_ELIGIBLE):
+            raw = _cell_code(edited.iloc[index][column])
+            if raw == NOT_ELIGIBLE:
+                continue
+            if raw == "":
+                # Clearing a day that has a record takes it back to "not
+                # encoded" — the only way to undo the old Prepare button's
+                # Present marks on days that hadn't happened. On a past day
+                # the grid then offers its default P again. Audited like any
+                # other change, since it alters what the day said.
+                record = records.get((enrollment.id, day.id))
+                if record is not None:
+                    audit_service.record(
+                        session,
+                        action=audit_service.ATTENDANCE_CHANGED,
+                        object_type="attendance_records",
+                        object_id=record.id,
+                        user_id=user_id,
+                        previous={"status": record.status},
+                        new={
+                            "status": None,
+                            "learner": f"{learner.last_name}, {learner.first_name}",
+                            "date": day.calendar_date,
+                        },
+                    )
+                    session.delete(record)
+                    changed += 1
                 continue
             status = STATUS_BY_CODE.get(raw)
             if status is None:
@@ -406,7 +444,8 @@ def _finalization_panel(
         payload = last_change.new_value or {}
         learner_name = payload.get("learner", "a learner")
         changed_date = payload.get("date", "")
-        code = CODE_BY_STATUS_VALUE.get(payload.get("status"), payload.get("status", ""))
+        status_value = payload.get("status")
+        code = "blank" if status_value is None else CODE_BY_STATUS_VALUE.get(status_value, status_value)
         when = format_time(last_change.created_at, fmt="%b %d, %Y %H:%M")
 
         last_saved_at = status.last_saved_at if status else None
@@ -541,7 +580,10 @@ def render() -> None:
         if editable:
             edited = st.data_editor(
                 dataframe,
-                key=f"grid_{section_choice}_{year}_{month}",
+                # Generation-carrying, so a successful save can drop the
+                # editor's own copy of the edits (a cleared cell would
+                # otherwise keep showing "None" over the reloaded grid).
+                key=generation_key("attendance_grid", f"grid_{section_choice}_{year}_{month}"),
                 disabled=[LEARNER_COLUMN, SEX_COLUMN],
                 column_config={
                     LEARNER_COLUMN: st.column_config.TextColumn(width="medium", pinned=True),
@@ -563,16 +605,20 @@ def render() -> None:
                 hide_index=True,
                 width="stretch",
             )
-            has_unsaved_edits = not edited.equals(dataframe)
+            # A cleared cell comes back as None; compare it as the "" it means.
+            has_unsaved_edits = not edited.apply(lambda c: c.map(_cell_code)).equals(
+                dataframe.apply(lambda c: c.map(_cell_code))
+            )
             if has_unsaved_edits:
                 st.markdown(f"**:red[{UNSAVED_EDITS_MESSAGE}]**")
             if pending_defaults:
                 st.markdown(f"**:red[{unsaved_defaults_message(pending_defaults)}]**")
             if st.button("Save attendance", type="primary"):
-                _save_grid(
+                if _save_grid(
                     session, section_choice, sy_choice, year, month,
                     roster, class_days, edited, current_user.id,
-                )
+                ):
+                    clear_text_fields("attendance_grid")
                 st.rerun()
         else:
             st.dataframe(

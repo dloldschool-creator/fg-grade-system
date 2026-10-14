@@ -19,6 +19,7 @@ from app.admin_pages.attendance import (
     CODE_BY_STATUS_VALUE,
     _blocking_reasons,
     _build_grid,
+    _cell_code,
     _last_attendance_change,
     _naive_utc,
     _save_grid,
@@ -547,3 +548,53 @@ def test_save_grid_writes_default_presents_and_opens_the_month(session, school_y
     assert still_pending == {}
     status = get_month_status(session, section.id, year, month)
     assert status.status != FinalizationState.NOT_STARTED
+
+
+def test_cell_code_treats_a_cleared_cell_as_blank():
+    """st.data_editor hands back None for a cleared cell and pandas can
+    make it NaN; str(nan) was read as the code 'NAN'."""
+    assert _cell_code(None) == ""
+    assert _cell_code(float("nan")) == ""
+    assert _cell_code(" t-l ") == "T-L"
+    assert _cell_code("") == ""
+
+
+def test_save_grid_clearing_a_recorded_day_unencodes_it(session, school_year, monkeypatch):
+    """Clearing a cell that has a record deletes it (audited), so the old
+    Prepare button's Present marks on future days can be removed."""
+
+    def fake_try_commit(session, message):
+        session.flush()
+        return True
+
+    monkeypatch.setattr("app.admin_pages.attendance.try_commit", fake_try_commit)
+
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    year, month = months[-1]
+    days = class_days_in_month(session, school_year.id, year, month)
+    section = _any_advised_section(session, school_year)
+    roster = roster_for_month(session, section.id, school_year.id, year, month)
+    if not roster or not days:
+        pytest.skip("need a roster and class days")
+
+    # Save defaults first so there are records to clear.
+    dataframe, pending = _build_grid(session, roster, days, default_through=days[-1].calendar_date)
+    if not pending:
+        pytest.skip("every day of that month already has a record")
+    _save_grid(session, section.id, school_year.id, year, month, roster, days, dataframe.copy(),
+               section.adviser_user_id)
+
+    enrollment, _, window = roster[0]
+    day = next((d for d in days if window.contains(d.calendar_date)), None)
+    if day is None:
+        pytest.skip("first learner has no eligible day")
+    edited, _ = _build_grid(session, roster, days)
+    edited.loc[0, str(day.calendar_date.day)] = None
+
+    assert _save_grid(session, section.id, school_year.id, year, month, roster, days, edited,
+                      section.adviser_user_id) is True
+    assert session.query(AttendanceRecord).filter_by(
+        enrollment_id=enrollment.id, calendar_date_id=day.id
+    ).count() == 0
