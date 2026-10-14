@@ -495,7 +495,30 @@ of each is in `docs/build-log.md`.
   ON DELETE RESTRICT already blocked deleting an *enrolled* learner, so
   the button only ever bit the just-imported, not-yet-enrolled set.
   `tests/test_learner_access.py` covers it, including against the live
-  sections.
+  sections. The Enrollment page's old single-learner tab had the same
+  hole and was removed on 2026-10-14; the Enroll tab uses the same rule.
+- **A wrong-section enrollment is corrected, never re-enrolled or
+  "moved" with a movement.** `enrollments` is unique on (learner, school
+  year), and a Shifted movement only changes a status and puts a typing
+  mistake on SF2/SF4. `app/enrollment_section_correction.py` (Section
+  Roster → **Correct section**) is the only writer of
+  `enrollments.section_id` after creation. Every table with an FK to
+  `enrollments` falls into one of three groups, and **blocking is the
+  default**, so a new table blocks the day it exists:
+  *follows the learner* — `learner_movements` and `attendance_records`,
+  which has **no section column**. The first version blocked on
+  attendance, and `seed_month_records` writes PRESENT rows for everyone
+  the moment a month is prepared, so it refused almost every real case.
+  The real attendance check is a **FINALIZED month on either section**.
+  *Derived* — summaries, final grades, combined results, non-override
+  awards: deleted, and the next recompute rebuilds them.
+  *Blocks* — everything else, grades above all. **Grades are never
+  carried across** (decided 2026-10-14). The registrar decides by hand.
+  The enrollment is locked `FOR UPDATE` before counting: an FK-checked
+  INSERT takes `FOR KEY SHARE`, which conflicts with that lock but not
+  with the `FOR NO KEY UPDATE` a plain UPDATE takes, so don't drop the
+  explicit lock as redundant. The caller passes the section it showed,
+  so a stale second correction is refused (rule 9).
 - **`AuthUser.id` is a `str`; every `*_user_id` column is a `uuid.UUID`.**
   Postgres coerces between them, so `filter_by(adviser_user_id=current_user.id)`
   works and hides the mismatch — but the same two values compared **in

@@ -2337,3 +2337,49 @@ current number.
       term-card email, one letter, the Term 1 section meeting) were deleted
       with the user's approval; audit entries kept. JOBS's adviser is back
       to the real one.
+- [x] **Enrollment: one Enroll tab, and a way to correct a wrong section**
+      (2026-10-14).
+      - **The single-learner "Enroll Learner" tab is gone.** It listed the
+        first 30 learners in the whole school, enrolled ones included, and
+        for an adviser was not scoped at all — the same hole the Learner
+        Masterlist closed on 2026-08-21. Bulk Enroll (renamed **Enroll**)
+        already hid enrolled learners and a multiselect handles one learner
+        fine, so it is the only path now. An adviser sees only the learners
+        `learner_access.editable_learner_ids` gives them, the same rule as
+        the Masterlist; anyone else is the registrar's to enroll, which the
+        adviser transfer-in help already said.
+      - **Nothing could fix a wrong-section enrollment before this.**
+        `enrollments` is unique on (learner, school year), nothing updated
+        `section_id`, and Bulk Enroll's own hint ("log a movement instead")
+        was wrong: a Shifted movement changes only the status and would put
+        a typing mistake on SF2/SF4. New `app/enrollment_section_correction.py`
+        plus a **Correct section** form on each learner's Section Roster
+        panel; audited as `ENROLLMENT_SECTION_CORRECTED` with a required
+        reason. An adviser can only correct between two sections they
+        advise; checked in the service, not just the picker.
+      - **Every table with an FK to `enrollments` is in one of three
+        groups.** *Follows the learner*: movements and attendance —
+        `attendance_records` has no section column, and blocking on it
+        refused almost every real case, because `seed_month_records` writes
+        PRESENT rows for everyone the moment a month is prepared (caught in
+        review before shipping). The real attendance hazard, a FINALIZED
+        month on either section, is checked instead — live data already has
+        one (June 2026). *Derived, deleted and rebuilt*: summaries, final
+        grades, combined results, computed (non-override) awards — Recompute
+        all writes them for learners with no grades. *Blocks*: everything
+        else, by default, so a future table blocks the day it exists.
+      - **Grades are never carried across** — the user's call: refuse and
+        let the registrar decide by hand, rather than map grades onto the
+        new section's offerings.
+      - **Concurrency.** The enrollment is locked `FOR UPDATE` before
+        counting. A grade/attendance INSERT takes `FOR KEY SHARE` on the
+        enrollment through its FK check, which conflicts with `FOR UPDATE`
+        but not with the `FOR NO KEY UPDATE` a plain section UPDATE takes —
+        hence the explicit lock. The page also sends the section it was
+        showing, so a second correction on a stale view is refused (rule 9).
+        Not exercised by a two-session test; the reasoning is in the module
+        docstring.
+      - The blocker check is one UNION ALL query and runs only under the
+        submit button (AST-tested), so the roster loop pays nothing for it.
+      - Help: adviser and registrar "enrolled in the wrong section" entries;
+        the registrar transfer-in step now says **Enroll selected**.

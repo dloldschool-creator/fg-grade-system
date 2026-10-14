@@ -48,6 +48,10 @@ LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
 # to make outside the UI (a duplicate or mis-logged entry), so that
 # correction still leaves an audited trail rather than a silent DELETE.
 LEARNER_MOVEMENT_DELETED = "LEARNER_MOVEMENT_DELETED"
+# The only way to change which section an enrollment sits in (a section
+# picked wrongly at enrolment). Refused once grades or attendance exist —
+# see app/enrollment_section_correction.py.
+ENROLLMENT_SECTION_CORRECTED = "ENROLLMENT_SECTION_CORRECTED"
 # A learner's name, sex, birthdate and LRN are the identity every report
 # the school issues is printed under, and §54 treats them as protected
 # information. Until 2026-08-21 the Learner Masterlist wrote all four with
@@ -162,6 +166,7 @@ REASON_REQUIRED = {
     SUBJECT_OVERRIDE_CREATED,
     SUBJECT_OVERRIDE_REMOVED,
     LEARNER_MOVEMENT_DELETED,
+    ENROLLMENT_SECTION_CORRECTED,
 }
 
 

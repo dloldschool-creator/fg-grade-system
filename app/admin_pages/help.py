@@ -106,6 +106,21 @@ BY_ROLE = {
         "Advisers — Your section's teachers, attendance, cards and awards",
         [
             (
+                "A learner was enrolled in the wrong section",
+                "Open **Enrollment → Section Roster / Movements**, pick the section "
+                "they were wrongly put in (one of yours), open the learner's panel and use "
+                "**Correct section**. Choose the right section (it must also be one you advise), type a reason, "
+                "and press **Move to this section**. It is recorded in the audit "
+                "log.\n\n"
+                "Don't log a movement for this — *Shifted Out/In* and *Transferred* "
+                "are real events and would count on SF2 and SF4.\n\n"
+                "Attendance moves with the learner. It is refused once the learner "
+                "has **grades or subject substitutions**, or when a month of their "
+                "attendance is **finalized** in either section. The message says "
+                "what is in the way — ask the registrar, who has to decide what "
+                "happens to those records.",
+            ),
+            (
                 "A learner transfers into your section mid-year",
                 "**1. Add the learner.** Search the Learner Masterlist by LRN "
                 "first. If a read-only card shows, they are already in the "
@@ -293,7 +308,8 @@ BY_ROLE = {
                 "add them again, the LRN must be unique. If nothing shows, add "
                 "them with the form or the Excel upload.\n\n"
                 "**2. Enroll them** on the Enrollment page: pick the school "
-                "year and section, then **Enroll**.\n\n"
+                "year and section, pick the learner(s), then press **Enroll "
+                "selected**.\n\n"
                 "**3. Log a *Transferred In* movement** (Enrollment → Section "
                 "Roster → the learner's panel → Log movement). Set the "
                 "**Effective date** to their first day here, not the day you "
@@ -317,6 +333,23 @@ BY_ROLE = {
                 "Which of the old school's grades counts as our Term 1 (if it "
                 "ran semesters or quarters) is for the registrar or principal "
                 "to decide — the system won't guess.",
+            ),
+            (
+                "A learner was enrolled in the wrong section",
+                "Open **Enrollment → Section Roster / Movements**, pick the section "
+                "they were wrongly put in, open the learner's panel and use "
+                "**Correct section**. Choose the right section, type a reason, "
+                "and press **Move to this section**. It is recorded in the audit "
+                "log.\n\n"
+                "Don't log a movement for this — *Shifted Out/In* and *Transferred* "
+                "are real events and would count on SF2 and SF4.\n\n"
+                "Attendance moves with the learner, and recomputed averages or "
+                "award results are cleared so the next recompute rebuilds them. It "
+                "is refused once the learner has **grades, subject substitutions "
+                "or an award override**, or when a month of their attendance is "
+                "**finalized** in either section — reopen the month first. Grades "
+                "are never carried across: remove or reverse them by hand, then "
+                "try again.",
             ),
             (
                 "Fill in the Section column and the import enrolls them too",

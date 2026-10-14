@@ -17,16 +17,16 @@ from app.admin_pages._helpers import (
     try_commit,
 )
 from app.auth import require_role
+from app.enrollment_section_correction import CorrectionRefused, correct_section
 from app.enrollment_subject_overrides import load_overrides_by_enrollment
 from app.grading_service import recompute_enrollment_grades_batch
+from app.learner_access import editable_learner_ids
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, OfferingStatus
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
 from app.nls_reasons import NLS_REASONS
-
-RESULT_LIMIT = 30
 
 
 def _section_query(session, school_year_id, adviser_user_id):
@@ -36,89 +36,29 @@ def _section_query(session, school_year_id, adviser_user_id):
     return query.order_by(Section.grade_level_id, Section.display_order).all()
 
 
-def _enroll_learner_tab(session, adviser_user_id):
-    school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
-    if not school_years:
-        st.warning("Create a school year first (School Years & Terms page).")
-        return
-    sy_by_id = {sy.id: sy for sy in school_years}
-    sy_choice = st.selectbox(
-        "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name,
-        key="enroll_sy",
-    )
-
-    sections = _section_query(session, sy_choice, adviser_user_id)
-    if not sections:
-        st.warning(
-            "You're not the adviser of any section for this school year yet."
-            if adviser_user_id
-            else "No sections exist for this school year yet — create one on the Sections page."
-        )
-        return
-    section_by_id = {s.id: s for s in sections}
-
-    search = st.text_input("Search learner by name or LRN", key="enroll_search")
-    query = session.query(Learner).order_by(Learner.last_name, Learner.first_name)
-    if search:
-        like = f"%{search}%"
-        query = query.filter(
-            (Learner.last_name.ilike(like))
-            | (Learner.first_name.ilike(like))
-            | (Learner.lrn.ilike(like))
-        )
-    learners = query.limit(RESULT_LIMIT).all()
-    if not learners:
-        st.info("No matching learners. Add one on the Learner Masterlist page first.")
-        return
-    learner_by_id = {learner.id: learner for learner in learners}
-
-    with st.form("enroll_learner_form"):
-        learner_choice = st.selectbox(
-            "Learner",
-            options=[learner.id for learner in learners],
-            format_func=lambda v: f"{learner_by_id[v].last_name}, {learner_by_id[v].first_name} "
-            f"(LRN: {learner_by_id[v].lrn or 'none'})",
-        )
-        section_choice = st.selectbox(
-            "Section",
-            options=[s.id for s in sections],
-            format_func=lambda v: f"{section_by_id[v].name}",
-        )
-        if st.form_submit_button("Enroll"):
-            section = section_by_id[section_choice]
-            session.add(
-                Enrollment(
-                    learner_id=learner_choice,
-                    school_year_id=sy_choice,
-                    grade_level_id=section.grade_level_id,
-                    section_id=section_choice,
-                    enrollment_status=EnrollmentStatus.ENROLLED,
-                )
-            )
-            try_commit(
-                session,
-                f"Enrolled {learner_by_id[learner_choice].last_name}, "
-                f"{learner_by_id[learner_choice].first_name} in {section.name}.",
-            )
-            st.rerun()
-
-
-def _bulk_enroll_tab(session, adviser_user_id):
+def _enroll_tab(session, adviser_user_id):
     st.caption(
-        "Puts several learners into one section at once. Use it when the "
-        "learners are already in the system — for example after an Excel "
-        "upload on the Learner Masterlist."
+        "Puts one or more learners into a section. They must already be in "
+        "the system — add them on the Learner Masterlist first, one by one "
+        "or from an Excel upload."
     )
     st.markdown(
         "1. Pick the school year and the section to enroll into.\n"
-        "2. Tick every learner who belongs in that section. You can type a "
-        "name in the box to find someone quickly.\n"
+        "2. Pick every learner who belongs in that section. Type a name or "
+        "LRN in the box to find someone quickly.\n"
         "3. Press **Enroll selected**.\n\n"
         "Only learners **not yet enrolled** for that school year are "
-        "listed, so nobody can be enrolled twice. To move a learner who is "
-        "already in another section, use the Section Roster tab and log a "
-        "movement instead."
+        "listed, so nobody can be enrolled twice. If a learner went into "
+        "the wrong section, open them on the Section Roster tab and use "
+        "**Correct section** — a movement is for a real change, not a "
+        "mistake."
     )
+    if adviser_user_id is not None:
+        st.caption(
+            "You see learners from your own sections and learners you added "
+            "yourself. A learner who isn't listed is under another adviser or "
+            "the registrar — ask the registrar to enroll them."
+        )
     st.divider()
 
     school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -153,9 +93,21 @@ def _bulk_enroll_tab(session, adviser_user_id):
     learner_query = session.query(Learner).order_by(Learner.last_name, Learner.first_name)
     if already_enrolled_ids:
         learner_query = learner_query.filter(~Learner.id.in_(already_enrolled_ids))
+    # An adviser enrols only learners they own (app/learner_access.py) — the
+    # same rule as the Learner Masterlist, so the two pages can't disagree.
+    if adviser_user_id is not None:
+        owned = editable_learner_ids(session, adviser_user_id)
+        if not owned:
+            st.info("No learners of yours are waiting to be enrolled.")
+            return
+        learner_query = learner_query.filter(Learner.id.in_(owned))
     available_learners = learner_query.all()
     if not available_learners:
-        st.info("Every learner is already enrolled for this school year.")
+        st.info(
+            "Every learner is already enrolled for this school year."
+            if adviser_user_id is None
+            else "None of your learners are waiting to be enrolled for this school year."
+        )
         return
     learner_by_id = {learner.id: learner for learner in available_learners}
 
@@ -223,7 +175,7 @@ def _roster_tab(session, adviser_user_id, current_user):
         .all()
     )
     if not enrollments:
-        st.info("No learners enrolled in this section yet — use the Enroll Learner tab.")
+        st.info("No learners enrolled in this section yet — use the Enroll tab.")
         return
 
     # Both lookups batched above the loop: an expander's body runs whether
@@ -321,6 +273,50 @@ def _roster_tab(session, adviser_user_id, current_user):
                     enrollment.version += 1
                     try_commit(session, "Saved.")
                     st.rerun()
+
+            st.subheader("Correct section")
+            st.caption(
+                "For a learner enrolled in the wrong section by mistake. Not for a "
+                "real change — log a movement for that. Attendance moves with the "
+                "learner; refused once they have grades or subject substitutions, "
+                "or a month of their attendance is finalized."
+            )
+            other_sections = [s for s in sections if s.id != enrollment.section_id]
+            if not other_sections:
+                st.caption("There is no other section you can move them to.")
+            else:
+                with st.form(f"correct_section_{enrollment.id}"):
+                    target_id = st.selectbox(
+                        "Correct section",
+                        options=[s.id for s in other_sections],
+                        format_func=lambda v: section_by_id[v].name,
+                        key=f"correct_section_to_{enrollment.id}",
+                    )
+                    correction_reason = st.text_input(
+                        "Reason — required", key=f"correct_section_reason_{enrollment.id}"
+                    )
+                    if st.form_submit_button("Move to this section"):
+                        try:
+                            new_section = correct_section(
+                                session,
+                                enrollment=enrollment,
+                                expected_section_id=section_choice,
+                                new_section_id=target_id,
+                                user_id=current_user.id,
+                                reason=correction_reason,
+                                allowed_section_ids=(
+                                    None if adviser_user_id is None else {s.id for s in sections}
+                                ),
+                            )
+                        except CorrectionRefused as refusal:
+                            session.rollback()
+                            flash("error", str(refusal))
+                        else:
+                            try_commit(
+                                session,
+                                f"Moved {learner.last_name}, {learner.first_name} to {new_section.name}.",
+                            )
+                        st.rerun()
 
             st.subheader("Movement / status history")
             movements = movements_by_enrollment.get(enrollment.id, [])
@@ -728,11 +724,9 @@ def render() -> None:
 
     with get_session() as session:
         choice = stateful_tabs(
-            "enrollment_tab", ["Enroll Learner", "Bulk Enroll", "Section Roster / Movements"]
+            "enrollment_tab", ["Enroll", "Section Roster / Movements"]
         )
-        if choice == "Enroll Learner":
-            _enroll_learner_tab(session, adviser_user_id)
-        elif choice == "Bulk Enroll":
-            _bulk_enroll_tab(session, adviser_user_id)
+        if choice == "Enroll":
+            _enroll_tab(session, adviser_user_id)
         elif choice == "Section Roster / Movements":
             _roster_tab(session, adviser_user_id, current_user)
