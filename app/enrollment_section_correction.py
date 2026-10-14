@@ -14,8 +14,8 @@ groups**, and the groups are what this module is about:
    `learner_movements` (a Transferred In stays true) and
    `attendance_records`. Attendance is keyed by (enrollment, calendar
    date) and carries no section, so the rows simply appear on the new
-   section's sheet. That matters because `seed_month_records` writes a
-   PRESENT row for every learner the moment an adviser prepares a month —
+   section's sheet. That matters because saving a month's attendance grid writes a
+   PRESENT row for every learner (the old Prepare button did the same) —
    blocking on attendance would refuse nearly every real correction. The
    one real attendance hazard is a **finalized** month on either side, and
    that is checked separately.

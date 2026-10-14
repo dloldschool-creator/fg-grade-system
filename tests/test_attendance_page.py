@@ -18,7 +18,7 @@ from app.admin_pages.attendance import (
     CODE_BY_STATUS,
     CODE_BY_STATUS_VALUE,
     _blocking_reasons,
-    _grid_dataframe,
+    _build_grid,
     _last_attendance_change,
     _naive_utc,
     _save_grid,
@@ -144,6 +144,7 @@ def test_blocking_reasons_is_empty_when_nothing_is_wrong():
         current_state=FinalizationState.OPEN,
         class_days=[_FakeClassDay(date(2026, 8, 28))],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert reasons == []
 
@@ -155,6 +156,7 @@ def test_blocking_reasons_flags_unresolved_validation_problems():
         current_state=FinalizationState.OPEN,
         class_days=[],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert any("Resolve everything in red" in r for r in reasons)
 
@@ -166,19 +168,35 @@ def test_blocking_reasons_flags_unsaved_grid_edits():
         current_state=FinalizationState.OPEN,
         class_days=[],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert any("unsaved edits" in r for r in reasons)
 
 
-def test_blocking_reasons_flags_a_never_prepared_month():
+def test_blocking_reasons_flags_unsaved_default_presents():
+    reasons = _blocking_reasons(
+        {"problems": []},
+        has_unsaved_edits=False,
+        current_state=FinalizationState.OPEN,
+        class_days=[],
+        today=date(2026, 9, 15),
+        pending_defaults=12,
+    )
+    assert any("12 day(s)" in r and "aren't saved" in r for r in reasons)
+
+
+def test_blocking_reasons_ignores_a_not_started_month():
+    """A month filled in by hand before the Prepare button went away is
+    still NOT_STARTED; it must be finalizable without a no-op Save."""
     reasons = _blocking_reasons(
         {"problems": []},
         has_unsaved_edits=False,
         current_state=FinalizationState.NOT_STARTED,
         class_days=[],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
-    assert any("hasn't been prepared" in r for r in reasons)
+    assert reasons == []
 
 
 def test_blocking_reasons_flags_a_month_still_in_progress():
@@ -189,6 +207,7 @@ def test_blocking_reasons_flags_a_month_still_in_progress():
         current_state=FinalizationState.OPEN,
         class_days=[_FakeClassDay(date(2026, 9, 15))],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert any("still in progress" in r for r in reasons)
 
@@ -200,6 +219,7 @@ def test_blocking_reasons_allows_a_month_whose_last_class_day_has_passed():
         current_state=FinalizationState.OPEN,
         class_days=[_FakeClassDay(date(2026, 8, 28))],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert reasons == []
 
@@ -214,6 +234,7 @@ def test_blocking_reasons_with_no_class_days_does_not_flag_ongoing():
         current_state=FinalizationState.OPEN,
         class_days=[],
         today=date(2026, 9, 15),
+        pending_defaults=0,
     )
     assert not any("still in progress" in r for r in reasons)
 
@@ -225,6 +246,7 @@ def test_blocking_reasons_stacks_every_applicable_reason():
         current_state=FinalizationState.NOT_STARTED,
         class_days=[_FakeClassDay(date(2026, 9, 15))],
         today=date(2026, 9, 15),
+        pending_defaults=3,
     )
     assert len(reasons) == 4
 
@@ -383,7 +405,7 @@ def test_save_grid_stamps_last_saved_on_a_real_change(session, school_year, monk
         pytest.skip("no learner with a free, in-window day in this month")
     day, enrollment = target
 
-    dataframe = _grid_dataframe(session, roster, days)
+    dataframe, _ = _build_grid(session, roster, days)
     edited = dataframe.copy()
     row_index = next(i for i, (e, _, _) in enumerate(roster) if e.id == enrollment.id)
     edited.loc[row_index, str(day.calendar_date.day)] = "X"
@@ -441,7 +463,7 @@ def test_save_grid_does_not_stamp_on_a_no_op_save(session, school_year, monkeypa
 
     # The grid handed back exactly what's already on record — nothing for
     # _save_grid to detect as a change.
-    dataframe = _grid_dataframe(session, roster, days)
+    dataframe, _ = _build_grid(session, roster, days)
     saved = _save_grid(
         session, section.id, school_year.id, year, month, roster, days, dataframe.copy(),
         section.adviser_user_id,
@@ -451,3 +473,77 @@ def test_save_grid_does_not_stamp_on_a_no_op_save(session, school_year, monkeypa
     after = get_month_status(session, section.id, year, month)
     after_saved_at = after.last_saved_at if after else None
     assert after_saved_at == before_saved_at
+
+
+# --- default-present grid --------------------------------------------------
+
+
+def test_grid_defaults_present_up_to_the_cutoff_and_counts_them(session, school_year):
+    """Only days with no record, on or before the cutoff, show P; a day
+    after it stays blank. Nothing is written by building the grid."""
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    year, month = months[-1]
+    days = class_days_in_month(session, school_year.id, year, month)
+    section = _any_advised_section(session, school_year)
+    roster = roster_for_month(session, section.id, school_year.id, year, month)
+    if not roster or len(days) < 2:
+        pytest.skip("need a roster and two class days")
+
+    before = session.query(AttendanceRecord).count()
+    plain, none_pending = _build_grid(session, roster, days)
+    assert none_pending == {}
+
+    cutoff = days[0].calendar_date
+    shown, pending = _build_grid(session, roster, days, default_through=cutoff)
+    assert session.query(AttendanceRecord).count() == before  # view never writes
+
+    changed = int((shown != plain).to_numpy().sum())
+    assert sum(pending.values()) == changed
+    assert (shown.drop(columns=[str(days[0].calendar_date.day)]) == plain.drop(
+        columns=[str(days[0].calendar_date.day)])).to_numpy().all()
+
+
+def test_save_grid_writes_default_presents_and_opens_the_month(session, school_year, monkeypatch):
+    """Saving an untouched grid of defaults must write every default P —
+    that is the whole replacement for the Prepare button — and move a
+    NOT_STARTED month to OPEN. try_commit is a flush; the fixture rolls
+    back, so nothing reaches the live database."""
+
+    def fake_try_commit(session, message):
+        session.flush()
+        return True
+
+    monkeypatch.setattr("app.admin_pages.attendance.try_commit", fake_try_commit)
+
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    year, month = months[-1]
+    days = class_days_in_month(session, school_year.id, year, month)
+    section = _any_advised_section(session, school_year)
+    roster = roster_for_month(session, section.id, school_year.id, year, month)
+    if not roster or not days:
+        pytest.skip("need a roster and class days")
+
+    dataframe, pending = _build_grid(session, roster, days, default_through=days[-1].calendar_date)
+    if not pending:
+        pytest.skip("every day of that month already has a record")
+    ids = [e.id for e, _, _ in roster]
+    day_ids = [d.id for d in days]
+    count = lambda: session.query(AttendanceRecord).filter(
+        AttendanceRecord.enrollment_id.in_(ids), AttendanceRecord.calendar_date_id.in_(day_ids)
+    ).count()
+    before = count()
+
+    saved = _save_grid(
+        session, section.id, school_year.id, year, month, roster, days, dataframe.copy(),
+        section.adviser_user_id,
+    )
+    assert saved is True
+    assert count() == before + sum(pending.values())
+    _, still_pending = _build_grid(session, roster, days, default_through=days[-1].calendar_date)
+    assert still_pending == {}
+    status = get_month_status(session, section.id, year, month)
+    assert status.status != FinalizationState.NOT_STARTED

@@ -86,7 +86,6 @@ WRITING_CALLS = {
     "try_delete",
     "finalize_month",
     "reopen_month",
-    "seed_month_records",
 }
 
 

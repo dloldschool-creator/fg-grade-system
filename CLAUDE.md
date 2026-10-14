@@ -507,8 +507,8 @@ of each is in `docs/build-log.md`.
   default**, so a new table blocks the day it exists:
   *follows the learner* — `learner_movements` and `attendance_records`,
   which has **no section column**. The first version blocked on
-  attendance, and `seed_month_records` writes PRESENT rows for everyone
-  the moment a month is prepared, so it refused almost every real case.
+  attendance, and saving a month's grid writes PRESENT rows for everyone
+  (the old Prepare button did the same), so it refused almost every real case.
   The real attendance check is a **FINALIZED month on either section**.
   *Derived* — summaries, final grades, combined results, non-override
   awards: deleted, and the next recompute rebuilds them.
@@ -519,6 +519,19 @@ of each is in `docs/build-log.md`.
   with the `FOR NO KEY UPDATE` a plain UPDATE takes, so don't drop the
   explicit lock as redundant. The caller passes the section it showed,
   so a stale second correction is refused (rule 9).
+- **Attendance has no Prepare step any more** (2026-10-14). The grid
+  shows **P** for every eligible day up to today with no record, and
+  Save writes them; nothing is written on view (the `get_or_create`
+  trap above). Blank still means "not encoded" in the database, so §33
+  holds — the defaults are a display, counted by `_build_grid` and passed
+  to `validate_month(pending_by_enrollment=...)` so the panel doesn't
+  list every learner as unencoded beside a grid showing P. Future days
+  stay blank: the old button wrote the whole month, which counted days
+  that hadn't happened as present in Insights and the page summary.
+  Default Ps go in with `ON CONFLICT DO NOTHING` so two first-saves of
+  one month can't collide; any other new code still uses the ORM, so a
+  real clash still surfaces. Found in the live data first: six
+  section-months had been saved without ever being prepared.
 - **Withdrawing an enrollment is not a movement, and it is the one
   delete of a learner's year** (2026-10-14). The school keeps this system
   in step with DepEd's LIS, and the school head may direct that a learner
@@ -537,8 +550,8 @@ of each is in `docs/build-log.md`.
   REOPENED/FINALIZED audit pair, restoring the original finalizer rather
   than stamping the registrar over them. Every month the learner
   **appeared on SF2** — `appears_in_month` over the active window, not
-  "has an attendance row", since prepared months seed rows for learners
-  who already left — is listed as an SF2/SF4 to reprint on Enrollment →
+  "has an attendance row", since a save before a backdated exit leaves
+  default PRESENT rows past the exit date — is listed as an SF2/SF4 to reprint on Enrollment →
   **Withdrawn**. Finalized grades, a frozen academic
   record and award overrides still block, and so does any table pointing
   at `enrollments` that is not in `DELETED`/`DERIVED` — same
@@ -789,7 +802,7 @@ the components' sum, or the languages are weighted twice.
   `analytics_service.attendance_risk()` already did (see the Insights
   section above) — movements via one `enrollment_id.in_(...)` query,
   windows built in Python with `compute_active_window`. No signature or
-  behavior change, so SF2, `export_service`, `seed_month_records` and
+  behavior change, so SF2, `export_service` and
   `validate_month` all benefit for free.
 - **`summarize_month` was the same shape, one query per learner, called
   in a loop from six places** (found 2026-09-04 auditing "save

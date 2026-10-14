@@ -32,8 +32,9 @@ UNIVERSAL = [
     ),
     (
         "A blank is not a zero",
-        "Anywhere a grade or an attendance day is blank, it means **nobody has "
-        "encoded it yet** — not that the learner scored nothing. Never type 0 to "
+        "Anywhere a grade is blank, or an attendance day hasn't been saved, it "
+        "means **nobody has encoded it yet** — not that the learner scored "
+        "nothing. Never type 0 to "
         "mean 'not yet'. A 0 is a real grade and it will pull down averages, "
         "print on a report card, and cost a learner an award.",
     ),
@@ -217,7 +218,8 @@ BY_ROLE = {
                 "parent.\n"
                 "- **Concern**: anything more. The parent is asked to come in.\n"
                 "- **Not ready**: a grade is still blank or an attendance day "
-                "isn't encoded. Finish those and the learner is grouped.\n\n"
+                "isn't saved (a **P** on the Attendance grid counts only once "
+                "you click Save). Finish those and the learner is grouped.\n\n"
                 "Attendance doesn't wait: once the days encoded so far reach 3 "
                 "absences, 3 lates or 1 cutting, the learner is in Concern and "
                 "the parent can be contacted right away, even mid-term.\n\n"
@@ -234,11 +236,12 @@ BY_ROLE = {
                 "Parent contacts and consent go on the **Learner Masterlist**.",
             ),
             (
-                "Prepare the month's sheet before encoding attendance",
-                "Press **Prepare / refresh this month's sheet** first. It marks "
-                "everyone present for every class day, so you only change the "
-                "exceptions. Press it again whenever a new learner joins or the "
-                "calendar changes, or their days will be missing.",
+                "Attendance starts as Present — click Save to record it",
+                "Every class day up to today shows **P**, so you only change the "
+                "exceptions. Those **P**s are not saved until you click **Save "
+                "attendance**, and a month can't be finalized while any are unsaved. "
+                "A new learner or a changed calendar just shows up as more unsaved "
+                "**P**s; days that haven't happened yet stay blank.",
             ),
             (
                 "Late and Cutting still count as present",

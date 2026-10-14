@@ -21,7 +21,7 @@ from app.attendance_engine import (
     summarize_attendance,
 )
 from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
-from app.models.enums import AttendanceStatus, FinalizationState
+from app.models.enums import FinalizationState
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.roster_order import learner_sort_key
@@ -304,55 +304,6 @@ def full_year_roster(
 # --------------------------------------------------------------------------
 
 
-def seed_month_records(
-    session: Session, section_id, school_year_id, year: int, month: int, user_id
-) -> int:
-    """Materialises an explicit PRESENT row for every eligible
-    learner/class-day pair in the month that doesn't have one yet, and
-    returns how many were created.
-
-    Why materialise rather than treat "no row" as present (which is what
-    the paper form's blank cell means): §33 requires identifying *missing*
-    daily attendance before finalizing, which is impossible if absent-of-
-    row and present are the same thing. Creating the rows up front makes
-    "not encoded" a real, detectable state — and re-running this after a
-    late enrollee joins or a new class day is added backfills only the
-    genuinely missing pairs.
-    """
-    class_days = class_days_in_month(session, school_year_id, year, month)
-    if not class_days:
-        return 0
-    roster = roster_for_month(session, section_id, school_year_id, year, month)
-
-    existing = {
-        (row.enrollment_id, row.calendar_date_id)
-        for row in session.query(AttendanceRecord)
-        .filter(
-            AttendanceRecord.calendar_date_id.in_([d.id for d in class_days]),
-            AttendanceRecord.enrollment_id.in_([e.id for e, _, _ in roster]),
-        )
-        .all()
-    } if roster else set()
-
-    created = 0
-    for enrollment, _, window in roster:
-        for day in class_days:
-            if not window.contains(day.calendar_date):
-                continue
-            if (enrollment.id, day.id) in existing:
-                continue
-            session.add(
-                AttendanceRecord(
-                    enrollment_id=enrollment.id,
-                    calendar_date_id=day.id,
-                    status=AttendanceStatus.PRESENT,
-                    encoded_by_user_id=user_id,
-                )
-            )
-            created += 1
-    return created
-
-
 def records_for_month(
     session: Session, enrollment_ids: list, class_day_ids: list
 ) -> dict[tuple, AttendanceRecord]:
@@ -488,17 +439,32 @@ def get_or_create_month_status(
 
 
 def validate_month(
-    session: Session, section_id, school_year_id, year: int, month: int
+    session: Session, section_id, school_year_id, year: int, month: int,
+    through: date | None = None,
+    pending_by_enrollment: dict | None = None,
 ) -> dict:
     """The §33 pre-finalization report. Returns blocking `problems`
     (missing attendance, impossible movement dates), non-blocking
     `warnings` (five-consecutive-absence runs), and the `totals` the spec
-    wants displayed (male/female enrollment, movement summary)."""
+    wants displayed (male/female enrollment, movement summary).
+
+    `through` drops days after it (they can't be missing yet).
+    `pending_by_enrollment` is `{enrollment_id: n}` of days the Attendance
+    grid is showing as a default **P** but hasn't saved: still unencoded,
+    and still blocking (the page gates Finalize on them itself), but not
+    listed here per learner — the grid shows them as P, so "N days with no
+    attendance encoded" beside it would contradict the screen and bury any
+    real problem under one line per learner."""
     problems: list[str] = []
     warnings: list[str] = []
 
     class_days = class_days_in_month(session, school_year_id, year, month)
-    if not class_days:
+    all_class_days = class_days
+    if through is not None:
+        # Days that haven't happened can't be missing yet; mid-month the
+        # report should not complain about next week.
+        class_days = [d for d in class_days if d.calendar_date <= through]
+    if not all_class_days:
         problems.append(
             f"No class days on the academic calendar for {year}-{month:02d} — "
             "generate or adjust the calendar first."
@@ -523,9 +489,10 @@ def validate_month(
 
         summary = summaries[enrollment.id]
         name = f"{learner.last_name}, {learner.first_name}"
-        if summary.unencoded_days:
+        unencoded = summary.unencoded_days - (pending_by_enrollment or {}).get(enrollment.id, 0)
+        if unencoded > 0:
             problems.append(
-                f"{name}: {summary.unencoded_days} class day(s) with no attendance encoded."
+                f"{name}: {unencoded} class day(s) with no attendance encoded."
             )
         for run_start, run_end in summary.consecutive_absence_runs:
             warnings.append(
@@ -550,7 +517,7 @@ def validate_month(
     return {
         "problems": problems,
         "warnings": warnings,
-        "class_day_count": len(class_days),
+        "class_day_count": len(all_class_days),
         "sex_totals": sex_totals,
         "movement_totals": movement_totals,
         "roster_size": len(roster),

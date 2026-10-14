@@ -47,9 +47,10 @@ Every month the learner **appeared on SF2** is listed in the withdrawal
 entry as an **SF2/SF4 to reprint**, because a copy already printed or
 submitted still carries them. "Appeared" is
 `attendance_engine.appears_in_month` over the learner's active window,
-not "has an attendance row": preparing a month seeds a row for everyone
-on the roster, and a learner who left in August can hold September rows
-that no SF2 ever printed.
+not "has an attendance row": saving a month writes a default PRESENT row
+for everyone on that day's roster (the old Prepare button wrote the whole
+month), so an exit movement backdated after a save leaves rows past the
+exit date that no SF2 ever printed.
 
 **Concurrency.** Same as the section correction: the enrollment row is
 locked `FOR UPDATE` before anything is counted, which conflicts with the
@@ -318,7 +319,7 @@ def load_record(session, enrollment_id) -> LearnerRecord:
         grades.setdefault(term_name, {})["offerings"] = n
 
     # The same window SF2 uses (§32): a month counts only if the learner
-    # was printed on it, not merely if a seeded attendance row exists.
+    # was printed on it, not merely if a default PRESENT row exists.
     window = compute_active_window([Movement(m.movement_type, m.effective_date) for m in movements])
     affected = [
         month

@@ -1,8 +1,9 @@
 import calendar as _calendar
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app import audit_service
 from app.admin_pages._helpers import (
@@ -22,7 +23,6 @@ from app.attendance_service import (
     records_for_month,
     reopen_month,
     roster_for_month,
-    seed_month_records,
     summarize_month_batch,
     validate_month,
 )
@@ -109,16 +109,6 @@ def _last_attendance_change(session, roster, class_days) -> AuditLog | None:
     )
 
 
-# Shown boldly right by the "Prepare / refresh this month's sheet" button
-# (where an adviser is actually looking) and also folded into
-# `_blocking_reasons` so it still gates the Finalize button — one string so
-# the two places can't drift apart. `_finalization_panel` skips re-printing
-# it as a caption since the bold version above has already said it.
-NOT_PREPARED_MESSAGE = (
-    "This month's sheet hasn't been prepared yet — click \"Prepare / refresh "
-    "this month's sheet\" above first."
-)
-
 # Shown boldly right by the "Save attendance" button (where an adviser is
 # actually looking right after editing) and also folded into
 # `_blocking_reasons` so it still gates the Finalize button — one string so
@@ -129,8 +119,20 @@ UNSAVED_EDITS_MESSAGE = (
 )
 
 
+def unsaved_defaults_message(count: int) -> str:
+    return (
+        f"{count} day(s) are showing **P** (present) but aren't saved yet — "
+        "click **Save attendance** to record them."
+    )
+
+
 def _blocking_reasons(
-    report: dict, has_unsaved_edits: bool, current_state: FinalizationState, class_days, today
+    report: dict,
+    has_unsaved_edits: bool,
+    current_state: FinalizationState,
+    class_days,
+    today,
+    pending_defaults: int,
 ) -> list[str]:
     """The Finalize button's gate, split out from `_finalization_panel` so
     it's testable without a Streamlit runtime. An empty list means
@@ -141,8 +143,11 @@ def _blocking_reasons(
         reasons.append("Resolve everything in red above before finalizing.")
     if has_unsaved_edits:
         reasons.append(UNSAVED_EDITS_MESSAGE)
-    if current_state == FinalizationState.NOT_STARTED:
-        reasons.append(NOT_PREPARED_MESSAGE)
+    if pending_defaults:
+        reasons.append(unsaved_defaults_message(pending_defaults))
+    # `current_state` is deliberately not a gate: the first Save moves a
+    # month out of NOT_STARTED, and a month filled in by hand before that
+    # existed must be finalizable without a no-op Save.
     last_class_day = class_days[-1].calendar_date if class_days else None
     if last_class_day is not None and last_class_day >= today:
         reasons.append(
@@ -152,11 +157,23 @@ def _blocking_reasons(
     return reasons
 
 
-def _grid_dataframe(session, roster, class_days) -> pd.DataFrame:
+def _build_grid(
+    session, roster, class_days, default_through: date | None = None
+) -> tuple[pd.DataFrame, dict]:
+    """The grid plus `{enrollment_id: n}` of cells showing a *default* P.
+
+    With `default_through` set, an eligible day on or before it that has no
+    record yet shows **P** instead of blank. Save then writes it, which is
+    what the old "Prepare / refresh this month's sheet" button did, minus
+    the button. Days after it stay blank (they haven't happened). A default
+    is only shown; nothing is written until Save, so merely viewing a
+    month never inserts rows.
+    """
     records = records_for_month(
         session, [e.id for e, _, _ in roster], [d.id for d in class_days]
     )
     rows = []
+    pending: dict = {}
     for enrollment, learner, window in roster:
         row = {
             LEARNER_COLUMN: f"{learner.last_name}, {learner.first_name}",
@@ -168,9 +185,15 @@ def _grid_dataframe(session, roster, class_days) -> pd.DataFrame:
                 row[column] = NOT_ELIGIBLE
                 continue
             record = records.get((enrollment.id, day.id))
-            row[column] = CODE_BY_STATUS[record.status] if record else ""
+            if record is not None:
+                row[column] = CODE_BY_STATUS[record.status]
+            elif default_through is not None and day.calendar_date <= default_through:
+                row[column] = CODE_BY_STATUS[AttendanceStatus.PRESENT]
+                pending[enrollment.id] = pending.get(enrollment.id, 0) + 1
+            else:
+                row[column] = ""
         rows.append(row)
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), pending
 
 
 def _save_grid(
@@ -186,6 +209,15 @@ def _save_grid(
     )
     changed = 0
     invalid: list[str] = []
+    # A record-less cell saved as P — almost always a grid default — goes in
+    # with ON CONFLICT DO NOTHING. Every first Save of a month now inserts
+    # all of those, so two people saving the same month at once would
+    # otherwise collide on (enrollment, day) and lose the whole save,
+    # edits included. Doing nothing on conflict is right: whatever the
+    # other user just wrote for that day was a real decision, and P was
+    # only a default. Any other new code still goes through the ORM, so a
+    # genuine clash (two people typing X and T-L) still surfaces.
+    new_presents: list[dict] = []
     for index, (enrollment, learner, window) in enumerate(roster):
         for day in class_days:
             column = str(day.calendar_date.day)
@@ -199,7 +231,17 @@ def _save_grid(
                 invalid.append(f"{learner.last_name} on {day.calendar_date:%b %d}: '{raw}'")
                 continue
             record = records.get((enrollment.id, day.id))
-            if record is None:
+            if record is None and status == AttendanceStatus.PRESENT:
+                new_presents.append(
+                    {
+                        "enrollment_id": enrollment.id,
+                        "calendar_date_id": day.id,
+                        "status": status,
+                        "encoded_by_user_id": user_id,
+                    }
+                )
+                changed += 1
+            elif record is None:
                 session.add(
                     AttendanceRecord(
                         enrollment_id=enrollment.id,
@@ -237,10 +279,21 @@ def _save_grid(
             "error",
             "Ignored unrecognised code(s) — use P, X, T-L or T-C: " + "; ".join(invalid[:5]),
         )
+    if new_presents:
+        # executemany form, so the Python-side `id`/`version` defaults are
+        # applied per row.
+        session.execute(
+            pg_insert(AttendanceRecord).on_conflict_do_nothing(
+                index_elements=["enrollment_id", "calendar_date_id"]
+            ),
+            new_presents,
+        )
     if changed:
         row = get_or_create_month_status(session, section_id, school_year_id, year, month)
         row.last_saved_by_user_id = user_id
         row.last_saved_at = datetime.now(timezone.utc)
+        if row.status == FinalizationState.NOT_STARTED:
+            row.status = FinalizationState.OPEN
         bump_version(row)
         return try_commit(session, f"Saved {changed} attendance change(s).")
     session.rollback()
@@ -248,11 +301,14 @@ def _save_grid(
     return False
 
 
-def _summary_table(session, roster, class_days) -> None:
+def _summary_table(session, roster, class_days, pending_by_enrollment: dict) -> None:
     rows = []
     summaries = summarize_month_batch(session, roster, class_days)
     for enrollment, learner, window in roster:
         summary = summaries[enrollment.id]
+        # A default P on the grid has no record yet, so the engine counts it
+        # as unencoded; split it out so this table agrees with the grid.
+        unsaved = pending_by_enrollment.get(enrollment.id, 0)
         rows.append(
             {
                 "Learner": f"{learner.last_name}, {learner.first_name}",
@@ -261,7 +317,8 @@ def _summary_table(session, roster, class_days) -> None:
                 "Absent": summary.days_absent,
                 "Late": summary.late_count,
                 "Cutting": summary.cutting_count,
-                "Not encoded": summary.unencoded_days,
+                "Not encoded": summary.unencoded_days - unsaved,
+                "P not saved": unsaved,
                 "5+ absences": "⚠️" if summary.has_consecutive_absence_warning else "",
             }
         )
@@ -269,7 +326,8 @@ def _summary_table(session, roster, class_days) -> None:
 
 
 def _finalization_panel(
-    session, current_user, section_id, school_year_id, year, month, roster, class_days, has_unsaved_edits
+    session, current_user, section_id, school_year_id, year, month, roster, class_days, has_unsaved_edits,
+    pending_by_enrollment: dict,
 ) -> None:
     status = get_month_status(session, section_id, year, month)
     current_state = status.status if status else FinalizationState.NOT_STARTED
@@ -304,7 +362,12 @@ def _finalization_panel(
             st.caption("Only an admin can reopen a finalized month.")
         return
 
-    report = validate_month(session, section_id, school_year_id, year, month)
+    today = datetime.now(SCHOOL_TZ).date()
+    report = validate_month(
+        session, section_id, school_year_id, year, month,
+        through=today, pending_by_enrollment=pending_by_enrollment,
+    )
+    pending_defaults = sum(pending_by_enrollment.values())
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Learners on this sheet", report["roster_size"])
@@ -326,13 +389,14 @@ def _finalization_panel(
     if len(report["problems"]) > 20:
         st.error(f"…and {len(report['problems']) - 20} more.")
 
-    today = datetime.now(SCHOOL_TZ).date()
-    blocking_reasons = _blocking_reasons(report, has_unsaved_edits, current_state, class_days, today)
+    blocking_reasons = _blocking_reasons(
+        report, has_unsaved_edits, current_state, class_days, today, pending_defaults
+    )
 
     can_finalize = not blocking_reasons
     for reason in blocking_reasons:
-        if reason in (NOT_PREPARED_MESSAGE, UNSAVED_EDITS_MESSAGE):
-            continue  # already shown boldly above (Prepare / refresh button, Save attendance button)
+        if reason == UNSAVED_EDITS_MESSAGE or reason == unsaved_defaults_message(pending_defaults):
+            continue  # already shown boldly by the Save attendance button
         st.caption(reason)
 
     last_change = _last_attendance_change(session, roster, class_days)
@@ -460,34 +524,19 @@ def render() -> None:
         current_state = status.status if status else FinalizationState.NOT_STARTED
         editable = current_state in EDITABLE_STATES
 
-        st.divider()
-        if st.button("Prepare / refresh this month's sheet", disabled=not editable):
-            created = seed_month_records(
-                session, section_choice, sy_choice, year, month, current_user.id
-            )
-            row = get_or_create_month_status(session, section_choice, sy_choice, year, month)
-            if row.status == FinalizationState.NOT_STARTED:
-                row.status = FinalizationState.OPEN
-                bump_version(row)
-            if try_commit(
-                session,
-                f"Added {created} attendance row(s) defaulting to Present.",
-            ):
-                st.rerun()
-        if current_state == FinalizationState.NOT_STARTED:
-            st.markdown(f"**:red[{NOT_PREPARED_MESSAGE}]**")
         st.caption(
-            "The \"Prepare / refresh this month's sheet\" button marks everyone "
-            "**Present** on every class day that has no entry yet, so you only need "
-            "to change the learners who were absent or late.\n\n"
-            "Refresh it again whenever a new learner joins the section, or the "
-            "school calendar changes."
+            "Every class day up to today starts as **P** (present), so you only change "
+            "the learners who were absent or late — then click **Save attendance**. "
+            "Days that haven't happened yet stay blank."
         )
 
         st.divider()
         st.subheader(f"{_calendar.month_name[month]} {year} — {section.name}")
 
-        dataframe = _grid_dataframe(session, roster, class_days)
+        dataframe, pending_by_enrollment = _build_grid(
+            session, roster, class_days, default_through=today if editable else None
+        )
+        pending_defaults = sum(pending_by_enrollment.values())
         has_unsaved_edits = False
         if editable:
             edited = st.data_editor(
@@ -517,6 +566,8 @@ def render() -> None:
             has_unsaved_edits = not edited.equals(dataframe)
             if has_unsaved_edits:
                 st.markdown(f"**:red[{UNSAVED_EDITS_MESSAGE}]**")
+            if pending_defaults:
+                st.markdown(f"**:red[{unsaved_defaults_message(pending_defaults)}]**")
             if st.button("Save attendance", type="primary"):
                 _save_grid(
                     session, section_choice, sy_choice, year, month,
@@ -534,11 +585,13 @@ def render() -> None:
 
         st.divider()
         st.subheader("Monthly summary")
-        _summary_table(session, roster, class_days)
+        _summary_table(
+            session, roster, [d for d in class_days if d.calendar_date <= today], pending_by_enrollment
+        )
 
         st.divider()
         st.subheader("Finalization")
         _finalization_panel(
             session, current_user, section_choice, sy_choice, year, month,
-            roster, class_days, has_unsaved_edits,
+            roster, class_days, has_unsaved_edits, pending_by_enrollment,
         )
