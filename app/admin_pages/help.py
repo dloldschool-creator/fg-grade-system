@@ -257,6 +257,38 @@ BY_ROLE = {
                 "the status alone doesn't.",
             ),
             (
+                "A learner transfers in mid-year",
+                "**1. Add the learner.** Search the Learner Masterlist by LRN "
+                "first. If a card already shows, they are in the system — don't "
+                "add them again, the LRN must be unique. If nothing shows, add "
+                "them with the form or the Excel upload.\n\n"
+                "**2. Enroll them** on the Enrollment page: pick the school "
+                "year and section, then **Enroll**.\n\n"
+                "**3. Log a *Transferred In* movement** (Enrollment → Section "
+                "Roster → the learner's panel → Log movement). Set the "
+                "**Effective date** to their first day here, not the day you "
+                "encode it — attendance and SF2 depend on it. **Previous "
+                "school** is required. Don't just edit the status: the "
+                "movement is what stops days before the effective date being "
+                "counted, puts them on that month's SF2 with the remark "
+                "*Transferred In as of <date> from <school>*, and adds them to "
+                "their section's Gradebook rosters.\n\n"
+                "If they already passed an elective the section is taking, use "
+                "**Subject substitutions** on the same panel to put them in a "
+                "different offering for that term.\n\n"
+                "**4. Grades from the previous school.** A term whose deadline "
+                "has passed is read-only in the Gradebook, so teachers can't "
+                "add them. Import them on **Data Import** (Registrar or Super "
+                "Admin) — the import doesn't check the deadline and the grades "
+                "arrive as DRAFT. The alternative is a Super Admin moving the "
+                "deadline, but that reopens the term for *everyone*. A grade "
+                "you don't have stays blank, never 0; the learner reads "
+                "INCOMPLETE and can't be finalized until it's filled in.\n\n"
+                "Which of the old school's grades counts as our Term 1 (if it "
+                "ran semesters or quarters) is for the registrar or principal "
+                "to decide — the system won't guess.",
+            ),
+            (
                 "Fill in the Section column and the import enrolls them too",
                 "On the learner template the **Section** column is optional. "
                 "Fill it in and each learner is created *and* placed in that "
