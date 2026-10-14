@@ -748,6 +748,16 @@ the components' sum, or the languages are weighted twice.
   a no-login harness page: one rerun per pause, focus kept, full page
   never rerun. A new search box should reuse both, plus `like_pattern`
   (a typed `_` or `%` must not act as a wildcard).
+- **The Quick Guide's text is `app/help_content.py`, not the page**
+  (2026-10-14). Entries are `(topic, title, body)`; the page groups by
+  topic and has the same live search across every role. Search matches
+  the role's `ROLE_LABELS` entry, never its heading — the adviser's reads
+  "...attendance, cards and awards", which made every adviser entry match
+  "attendance". Each word must start a word, so "in" can't match inside
+  "encoding". `help_content` imports nothing, so it is safe from
+  anywhere; a new entry needs a topic used at least twice in its list
+  (`tests/test_help.py` enforces both), and a list that is one topic
+  draws no topic label.
 - A `SelectboxColumn` cell whose value isn't in `options` renders *empty*,
   which reads as un-encoded. Sentinels must be valid options.
 - **A module every page imports must not reach `app.models` at load** —
