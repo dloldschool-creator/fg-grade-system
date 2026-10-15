@@ -20,10 +20,12 @@ from app.attendance_engine import (
     philippine_regular_holidays,
     summarize_attendance,
 )
+from app.display_time import format_time
 from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
 from app.models.enums import FinalizationState
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
+from app.models.rbac import User
 from app.roster_order import learner_sort_key
 
 # §28's SY 2026-2027 workbook configuration, kept as reference targets the
@@ -536,8 +538,47 @@ def finalize_month(session: Session, status: AttendanceMonthStatus, user_id) -> 
 def reopen_month(
     session: Session, status: AttendanceMonthStatus, user_id, reason: str
 ) -> None:
+    # Lock and re-read first: the row the caller holds may be stale, and two
+    # simultaneous Reopens would otherwise both see FINALIZED and the second
+    # would overwrite the first's reason, user and timestamp. (`version` is a
+    # plain column here, not a SQLAlchemy version_id_col, so it can't catch it.)
+    session.refresh(status, with_for_update=True)
+    if status.status != FinalizationState.FINALIZED:
+        raise ValueError("This month is not finalized — someone may have reopened it already.")
     status.status = FinalizationState.OPEN
     status.reopened_by_user_id = user_id
     status.reopened_at = datetime.now(timezone.utc)
     status.reopen_reason = reason
     bump_version(status)
+
+
+def reprint_notice_for(session: Session, status: AttendanceMonthStatus | None) -> str | None:
+    """`reprint_notice` with the reopener's name looked up — the one call
+    Attendance and SF2 both make. Costs a query only for a reopened month."""
+    if status is None or status.reopened_at is None:
+        return None
+    name = None
+    if status.reopened_by_user_id:
+        user = session.get(User, status.reopened_by_user_id)
+        name = user.full_name if user else None
+    return reprint_notice(status, name)
+
+
+def reprint_notice(status: AttendanceMonthStatus | None, reopened_by_name: str | None) -> str | None:
+    """The "SF2 may need reprinting" flag (§33), or None.
+
+    Any month that was ever reopened carries it, whoever reopened it and
+    whether or not it has been finalized again: an SF2/SF4 printed before
+    `reopened_at` may not match what is in the database now, and nothing
+    records whether a new copy was printed. So the flag says when and why,
+    and leaves the judgement to whoever holds the paper copy.
+    """
+    if status is None or status.reopened_at is None:
+        return None
+    who = reopened_by_name or "someone"
+    when = format_time(status.reopened_at, fmt="%b %d, %Y %H:%M")
+    reason = f" — “{status.reopen_reason}”" if status.reopen_reason else ""
+    return (
+        f"Reopened {when} by {who}{reason}. An SF2 or SF4 printed for this month "
+        "before then may be out of date — reprint it once the month is finalized again."
+    )

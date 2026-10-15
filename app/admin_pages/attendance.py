@@ -25,6 +25,7 @@ from app.attendance_service import (
     months_with_class_days,
     records_for_month,
     reopen_month,
+    reprint_notice_for,
     roster_for_month,
     summarize_month_batch,
     validate_month,
@@ -36,6 +37,7 @@ from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
 from app.models.rbac import User
+from app.section_access import may_reopen_attendance_month
 
 # §30's printed codes. The DB stores the internal enum; these are only the
 # encoding UI's shorthand, and the SF2 renderer (Phase 9) does its own
@@ -383,26 +385,36 @@ def _summary_table(session, roster, class_days, pending_by_enrollment: dict) -> 
 
 
 def _finalization_panel(
-    session, current_user, section_id, school_year_id, year, month, roster, class_days, has_unsaved_edits,
+    session, current_user, section, school_year_id, year, month, roster, class_days, has_unsaved_edits,
     pending_by_enrollment: dict,
 ) -> None:
+    section_id = section.id
     status = get_month_status(session, section_id, year, month)
     current_state = status.status if status else FinalizationState.NOT_STARTED
 
     st.write(f"**Month status:** {current_state.value}")
 
+    notice = reprint_notice_for(session, status)
+    if notice:
+        st.warning(notice, icon="🖨️")
+
     if status is not None and status.status == FinalizationState.FINALIZED:
         st.success(
             f"Finalized {format_time(status.finalized_at)} — attendance is read-only."
         )
-        if current_user.has_role("SUPER_ADMIN"):
+        if may_reopen_attendance_month(current_user, section):
             with st.form(f"reopen_att_{status.id}"):
                 reason = st.text_area("Reopen reason (required)")
                 if st.form_submit_button("Reopen"):
                     if not reason.strip():
                         st.error("A reason is required.")
                     else:
-                        reopen_month(session, status, current_user.id, reason.strip())
+                        try:
+                            reopen_month(session, status, current_user.id, reason.strip())
+                        except ValueError as exc:
+                            session.rollback()
+                            flash("error", str(exc))
+                            st.rerun()
                         audit_service.record(
                             session,
                             action=audit_service.ATTENDANCE_MONTH_REOPENED,
@@ -416,7 +428,10 @@ def _finalization_panel(
                         try_commit(session, "Reopened — attendance is editable again.")
                         st.rerun()
         else:
-            st.caption("Only an admin can reopen a finalized month.")
+            st.caption(
+                "Only this section's adviser, a registrar or an admin can reopen a "
+                "finalized month."
+            )
         return
 
     today = datetime.now(SCHOOL_TZ).date()
@@ -657,6 +672,6 @@ def render() -> None:
         st.divider()
         st.subheader("Finalization")
         _finalization_panel(
-            session, current_user, section_choice, sy_choice, year, month,
+            session, current_user, section, sy_choice, year, month,
             roster, class_days, has_unsaved_edits, pending_by_enrollment,
         )

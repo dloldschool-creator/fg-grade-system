@@ -133,7 +133,8 @@ Can:
 - manage learners in assigned section;
 - review grades submitted by subject teachers;
 - encode adviser comments;
-- manage attendance;
+- manage attendance, including reopening a finalized attendance month of
+  their own section with a recorded reason (§33; added 2026-10-15);
 - manage learner movements;
 - validate section records;
 - view incomplete grades;
@@ -1381,13 +1382,21 @@ Before finalization:
 
 Once finalized, attendance becomes read-only.
 
-An administrator may reopen it only by providing:
+A finalized month may be reopened by an administrator, a registrar, or the
+adviser of that section (amended 2026-10-15 — previously administrator
+only), and only by providing:
 
 - reason;
 - authorization;
 - date/time.
 
 Log all changes.
+
+A month that has been reopened carries a visible notice — on the Attendance
+page, the SF2 page and the Dashboard — that an SF2 or SF4 printed before the
+reopen may be out of date and should be reprinted once the month is finalized
+again. The notice stays after re-finalization, since the system does not
+record whether a new copy was printed.
 
 ---
 

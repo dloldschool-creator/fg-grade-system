@@ -18,12 +18,14 @@ from sqlalchemy import func
 from app.admin_pages._helpers import get_session, render_flashes
 from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
 from app.auth import require_role
+from app.display_time import format_time
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.attendance import AttendanceMonthStatus
 from app.models.enums import CompletionStatus, FinalizationState, Sex
 from app.models.grades import AnnualGradeSummary, TermGrade
 from app.models.learners import Enrollment, Learner
 from app.models.organization import SchoolYear, Term
+from app.models.rbac import User
 
 # The statuses that mean a learner is still on the roll — same set the
 # gradebook and SF2 use, so headcounts agree across the app. Kept as an
@@ -220,6 +222,10 @@ def _encoding_progress(session, sy_id) -> list[dict]:
     ]
 
 
+# Shown as the column header and read back to count reopened months, so one name.
+REOPENED_COLUMN = "Reopened (reprint SF2?)"
+
+
 def _attendance_status(session, sy_id) -> list[dict]:
     """Which section-months are still open (§33). Blank means nobody has
     started that month, which is different from started-and-incomplete."""
@@ -236,15 +242,29 @@ def _attendance_status(session, sy_id) -> list[dict]:
     if not statuses:
         return []
 
+    # One query for every reopener's name, not one per row.
+    reopener_ids = {s.reopened_by_user_id for s in statuses if s.reopened_by_user_id}
+    reopeners = (
+        {u.id: u.full_name for u in session.query(User).filter(User.id.in_(reopener_ids))}
+        if reopener_ids
+        else {}
+    )
+
     # year_month is a date pinned to the 1st, not separate year/month
     # columns.
     rows = []
     for status in sorted(statuses, key=lambda s: (s.year_month, sections[s.section_id].name)):
+        reopened = ""
+        if status.reopened_at is not None:
+            who = reopeners.get(status.reopened_by_user_id, "someone")
+            reopened = f"{format_time(status.reopened_at, fmt='%b %d')} by {who}"
         rows.append(
             {
                 "Section": sections[status.section_id].name,
                 "Month": f"{_calendar.month_name[status.year_month.month]} {status.year_month.year}",
                 "Status": status.status.value if status.status else DASH,
+                # §33: a reopened month's printed SF2/SF4 may be stale.
+                REOPENED_COLUMN: reopened,
             }
         )
     return rows
@@ -315,6 +335,14 @@ def render() -> None:
             outstanding = [r for r in attendance if r["Status"] != FinalizationState.FINALIZED.value]
             if outstanding:
                 st.caption(f"{len(outstanding)} section-month(s) not yet finalized.")
+            reopened = [r for r in attendance if r[REOPENED_COLUMN]]
+            if reopened:
+                st.warning(
+                    f"{len(reopened)} section-month(s) were reopened after being "
+                    "finalized. An SF2 or SF4 printed for them before the reopen may be "
+                    "out of date — check with the adviser and reprint once finalized again.",
+                    icon="🖨️",
+                )
             st.dataframe(pd.DataFrame(attendance), hide_index=True, width="stretch")
         else:
             st.caption("No attendance months have been started yet.")

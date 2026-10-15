@@ -2383,3 +2383,39 @@ current number.
         submit button (AST-tested), so the roster loop pays nothing for it.
       - Help: adviser and registrar "enrolled in the wrong section" entries;
         the registrar transfer-in step now says **Enroll selected**.
+- [x] **Advisers and registrars can reopen a finalized attendance month**
+      (2026-10-15, user). §33 said administrator only; amended with
+      approval to admin, registrar, or the section's own adviser.
+      - One rule, `section_access.may_reopen_attendance_month` — the
+        adviser half through `is_advised_by` (str-vs-UUID). The Attendance
+        page used to hardcode `has_role("SUPER_ADMIN")`; a test now asserts
+        it calls the shared rule instead.
+      - Reason still required, still `ATTENDANCE_MONTH_REOPENED`.
+        `reopen_month` now refuses a month that isn't FINALIZED, so a
+        second Reopen from a stale page can't overwrite the first reason.
+      - **The cost of letting the finalizer unlock their own month is
+        paper drift**: an SF2/SF4 handed in before the reopen no longer
+        matches. Nothing records whether an SF2 was printed, so
+        `attendance_service.reprint_notice()` flags *every* month with
+        `reopened_at` set — Attendance, SF2 and a Dashboard column plus
+        warning — and keeps flagging after re-finalization. An
+        acknowledge/clear step would need a new column (migration);
+        deliberately not done.
+      - Withdrawal's automatic reopen sets `reopened_at` too, so those
+        months get the flag as well — correct, since Enrollment →
+        Withdrawn already lists them as SF2s to reprint.
+      - Help: adviser "Finalizing a month locks it", adviser "wrong
+        section", and the Dashboard entry. `tests/test_attendance_reopen.py`.
+      - §3C (Class Adviser permissions) amended the same day to list the
+        reopen, with approval, so it no longer contradicts §33.
+      - **Review fixes, same day.** `reopen_month` now locks and re-reads
+        the row (`refresh(..., with_for_update=True)`) before checking
+        FINALIZED — `version` is a plain column, so the stale-page check
+        alone let two simultaneous Reopens both pass. Withdrawal's locked
+        month query also filters on FINALIZED, since an adviser can now
+        reopen a month between `load_record` and the lock; without it the
+        new guard raised an uncaught ValueError there. Attendance and SF2
+        share `reprint_notice_for`. Registrar Quick Guide entry added.
+        **Not done:** a way to clear the reprint flag (needs an
+        acknowledgement column — a migration); and the reopener's name is
+        one extra query per rerun on a reopened month, left as is.

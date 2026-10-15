@@ -500,6 +500,10 @@ def withdraw_enrollment(
         .filter(
             AttendanceMonthStatus.section_id == enrollment.section_id,
             AttendanceMonthStatus.year_month.in_(record.finalized_months),
+            # load_record read these as FINALIZED without a lock; an adviser
+            # may have reopened one since. A month that is already open needs
+            # no reopen (and no re-finalize, which would undo theirs).
+            AttendanceMonthStatus.status == FinalizationState.FINALIZED,
         )
         .with_for_update()
         .all()

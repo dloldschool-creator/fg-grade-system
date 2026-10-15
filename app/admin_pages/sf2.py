@@ -8,6 +8,7 @@ from app.attendance_service import (
     class_days_in_month,
     get_month_status,
     months_with_class_days,
+    reprint_notice_for,
     roster_for_month,
     summarize_month_batch,
 )
@@ -131,6 +132,9 @@ def render() -> None:
                 "will generate, but figures can still change — finalize on the "
                 "Attendance page before submitting it."
             )
+        notice = reprint_notice_for(session, status)
+        if notice:
+            st.warning(notice, icon="🖨️")
 
         st.divider()
         st.subheader("Preview")

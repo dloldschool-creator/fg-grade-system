@@ -26,3 +26,18 @@ def is_advised_by(section, user_id) -> bool:
     if section is None or section.adviser_user_id is None or user_id is None:
         return False
     return str(section.adviser_user_id) == str(user_id)
+
+
+def may_reopen_attendance_month(user, section) -> bool:
+    """§33: a Super Admin or Registrar may reopen any section's finalized
+    month; an adviser only their own section's. A reason is still required
+    and the reopen is still audited — that is the page's job, not this one's.
+
+    The adviser half goes through `is_advised_by`, never `==`, for the
+    str-vs-UUID reason at the top of this module.
+    """
+    if user is None:
+        return False
+    if user.has_role("SUPER_ADMIN", "REGISTRAR"):
+        return True
+    return user.has_role("ADVISER") and is_advised_by(section, user.id)

@@ -133,8 +133,9 @@ BY_ROLE = {
                 "Attendance moves with the learner. It is refused once the learner "
                 "has **grades or subject substitutions**, or when a month of their "
                 "attendance is **finalized** in either section. The message says "
-                "what is in the way — ask the registrar, who has to decide what "
-                "happens to those records.",
+                "what is in the way. A finalized month you can reopen yourself on "
+                "the Attendance page (with a reason); for anything else, ask the "
+                "registrar, who has to decide what happens to those records.",
             ),
             (
                 "Enrollment & movements",
@@ -284,8 +285,10 @@ BY_ROLE = {
             (
                 "Attendance",
                 "Finalizing a month locks it",
-                "Fix everything shown in red first. After finalizing, only an "
-                "admin can reopen it, and they must give a reason.",
+                "Fix everything shown in red first. After finalizing, you can "
+                "still reopen it yourself on the Attendance page, with a reason. "
+                "If you already handed in that month's SF2, print a new one "
+                "once you finalize again — the page will remind you.",
             ),
             (
                 "Grades & averages",
@@ -444,6 +447,17 @@ BY_ROLE = {
                 "right, so it can be restored by hand.",
             ),
             (
+                "Enrollment & movements",
+                "A finalized attendance month can be reopened",
+                "You, an admin, or the section's adviser can reopen a finalized "
+                "month on the **Attendance** page, with a reason. Reopened months "
+                "are flagged on the **Dashboard** (*Reopened* column), on the SF2 "
+                "page and on Attendance: an SF2 or SF4 printed before the reopen "
+                "may be out of date, so collect a fresh copy once the month is "
+                "finalized again. The flag stays on afterward — the system can't "
+                "tell whether the new copy was printed.",
+            ),
+            (
                 "Learners & imports",
                 "Fill in the Section column and the import enrolls them too",
                 "On the learner template the **Section** column is optional. "
@@ -512,7 +526,10 @@ BY_ROLE = {
                 "It shows enrolment per section, how many learners have a "
                 "complete record, how far grade encoding has got in each term, "
                 "and which section-months of attendance are still unfinalized — "
-                "which is usually the question worth asking near a deadline.",
+                "which is usually the question worth asking near a deadline. A "
+                "month that was **reopened** after finalizing is flagged there "
+                "too: an SF2 or SF4 printed before the reopen may be out of date, "
+                "so ask the adviser for a fresh copy once it is finalized again.",
             ),
             (
                 "Reports & oversight",
