@@ -2472,3 +2472,10 @@ current number.
       ran green twice. Rejected: a local Postgres for tests — none is
       installed here, and it is the real fix for tests touching live data,
       but a separate piece of setup.
+      - **Verified live 2026-10-15:** the one-click SF2 downloads (Excel and
+        PDF, a finalized month, deployed at `dd2e3b8` on Streamlit 1.52+).
+        **Not yet exercised in a browser:** the reopen button for advisers
+        and registrars, and the "I've reprinted the SF2/SF4" confirmation.
+        Both are covered by tests against the real database, but not their
+        click handlers. The first real reopen is the check — if the notice
+        or button misbehaves, start with `_helpers.render_reprint_notice`.
