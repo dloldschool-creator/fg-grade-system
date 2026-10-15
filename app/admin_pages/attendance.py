@@ -20,6 +20,7 @@ from app.admin_pages._helpers import (
 from app.attendance_service import (
     bump_version,
     class_days_in_month,
+    display_state,
     finalize_month,
     get_month_status,
     get_or_create_month_status,
@@ -64,6 +65,9 @@ NOT_ELIGIBLE = "·"
 LEARNER_COLUMN = "Learner"
 SEX_COLUMN = "Sex"
 
+# FOR_REVIEW is retired (spec §33) but must stay here: months already marked
+# keep that value in the database, and dropping it would lock them read-only
+# with no Reopen path (reopen_month only accepts FINALIZED).
 EDITABLE_STATES = {FinalizationState.NOT_STARTED, FinalizationState.OPEN, FinalizationState.FOR_REVIEW}
 
 
@@ -392,7 +396,7 @@ def _finalization_panel(
     status = get_month_status(session, section_id, year, month)
     current_state = status.status if status else FinalizationState.NOT_STARTED
 
-    st.write(f"**Month status:** {current_state.value}")
+    st.write(f"**Month status:** {display_state(current_state)}")
 
     render_reprint_notice(session, current_user, section, status)
 
@@ -504,34 +508,30 @@ def _finalization_panel(
                 f"Last override: {when} by {who} — {learner_name}, {changed_date} → {code}."
             )
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Mark for review", disabled=current_state == FinalizationState.FOR_REVIEW):
-            row = get_or_create_month_status(session, section_id, school_year_id, year, month)
-            row.status = FinalizationState.FOR_REVIEW
-            bump_version(row)
-            try_commit(session, "Marked for review.")
-            st.rerun()
-    with col_b:
-        if st.button("Finalize month", disabled=not can_finalize, type="primary"):
-            row = get_or_create_month_status(session, section_id, school_year_id, year, month)
+    if st.button("Finalize month", disabled=not can_finalize, type="primary"):
+        row = get_or_create_month_status(session, section_id, school_year_id, year, month)
+        try:
             finalize_month(session, row, current_user.id)
-            audit_service.record(
-                session,
-                action=audit_service.ATTENDANCE_MONTH_FINALIZED,
-                object_type="attendance_month_status",
-                object_id=row.id,
-                user_id=current_user.id,
-                new={
-                    "status": row.status,
-                    "year": year,
-                    "month": month,
-                    "roster_size": report["roster_size"],
-                    "class_days": report["class_day_count"],
-                },
-            )
-            try_commit(session, "Month finalized — attendance is now read-only.")
+        except ValueError as exc:
+            session.rollback()
+            flash("error", str(exc))
             st.rerun()
+        audit_service.record(
+            session,
+            action=audit_service.ATTENDANCE_MONTH_FINALIZED,
+            object_type="attendance_month_status",
+            object_id=row.id,
+            user_id=current_user.id,
+            new={
+                "status": row.status,
+                "year": year,
+                "month": month,
+                "roster_size": report["roster_size"],
+                "class_days": report["class_day_count"],
+            },
+        )
+        try_commit(session, "Month finalized — attendance is now read-only.")
+        st.rerun()
 
 
 def render() -> None:

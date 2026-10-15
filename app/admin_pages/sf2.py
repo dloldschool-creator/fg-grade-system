@@ -12,6 +12,7 @@ from app.admin_pages._helpers import (
 )
 from app.attendance_service import (
     class_days_in_month,
+    display_state,
     get_month_status,
     months_with_class_days,
     roster_for_month,
@@ -165,11 +166,11 @@ def render() -> None:
         col1.metric("Male / Female", f"{len(males)} / {len(females)}")
         col2.metric("Class days", len(class_days))
         col3.metric("Pages", pages)
-        col4.metric("Attendance", state.value)
+        col4.metric("Attendance", display_state(state))
 
         if state != FinalizationState.FINALIZED:
             st.warning(
-                f"This month's attendance is **{state.value}**, not FINALIZED. The form "
+                f"This month's attendance is **{display_state(state)}**, not FINALIZED. The form "
                 "will generate, but figures can still change — finalize on the "
                 "Attendance page before submitting it."
             )

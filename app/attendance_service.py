@@ -7,6 +7,7 @@ rows.
 import calendar as _calendar
 from datetime import date, datetime, timezone
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from app.attendance_engine import (
@@ -425,8 +426,7 @@ def get_month_status(
 def get_or_create_month_status(
     session: Session, section_id, school_year_id, year: int, month: int
 ) -> AttendanceMonthStatus:
-    """Use only on paths that go on to commit (prepare sheet, mark for
-    review, finalize) — see `get_month_status` for the view path."""
+    """Use only on paths that go on to commit (save grid, finalize) — see `get_month_status` for the view path."""
     year_month = date(year, month, 1)
     status = get_month_status(session, section_id, year, month)
     if status is None:
@@ -528,7 +528,23 @@ def validate_month(
     }
 
 
+def display_state(state: FinalizationState) -> str:
+    """The month state as shown to people. FOR_REVIEW was retired on
+    2026-10-15 (spec §33) but the enum value stays in the database, so any
+    month already marked reads as OPEN, which is how it behaves."""
+    if state == FinalizationState.FOR_REVIEW:
+        return FinalizationState.OPEN.value
+    return state.value
+
+
 def finalize_month(session: Session, status: AttendanceMonthStatus, user_id) -> None:
+    # Lock and re-read, as reopen_month does: two simultaneous Finalizes would
+    # otherwise both succeed and the later one overwrite who finalized and when.
+    # A brand-new row (not yet flushed) has nothing to lock or re-read.
+    if status.id is not None and not inspect(status).pending:
+        session.refresh(status, with_for_update=True)
+    if status.status == FinalizationState.FINALIZED:
+        raise ValueError("This month is already finalized.")
     status.status = FinalizationState.FINALIZED
     status.finalized_by_user_id = user_id
     status.finalized_at = datetime.now(timezone.utc)

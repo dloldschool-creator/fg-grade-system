@@ -84,7 +84,7 @@ class AttendanceMonthStatus(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
     reprint_acknowledged_at: Mapped[datetime | None]
     # Stamped by _save_grid whenever a save actually changes something —
     # not just "the month was touched" (updated_at already covers that,
-    # ambiguously, across Prepare/Mark for review/Finalize/Reopen too).
+    # ambiguously, across Finalize/Reopen too).
     # The finalization panel compares this against the audit log's most
     # recent ATTENDANCE_CHANGED entry to warn about an override that
     # landed after the last save, from any adviser or tab.

@@ -17,7 +17,7 @@ from sqlalchemy import func
 
 from app.admin_pages._helpers import get_session, render_flashes
 from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
-from app.attendance_service import reprint_pending
+from app.attendance_service import display_state, reprint_pending
 from app.auth import require_role
 from app.display_time import format_time
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
@@ -267,7 +267,7 @@ def _attendance_status(session, sy_id) -> list[dict]:
             {
                 "Section": sections[status.section_id].name,
                 "Month": f"{_calendar.month_name[status.year_month.month]} {status.year_month.year}",
-                "Status": status.status.value if status.status else DASH,
+                "Status": display_state(status.status) if status.status else DASH,
                 # §33: a reopened month's printed SF2/SF4 may be stale.
                 REPRINT_COLUMN: awaiting,
             }

@@ -2479,3 +2479,14 @@ current number.
         Both are covered by tests against the real database, but not their
         click handlers. The first real reopen is the check — if the notice
         or button misbehaves, start with `_helpers.render_reprint_notice`.
+
+### 2026-10-15 — Attendance "Mark for review" dropped
+
+Advisers weren't using it, nothing read the `FOR_REVIEW` state (it sat in
+`EDITABLE_STATES` beside OPEN), and anyone with access can already review
+an open month. Same reasoning as VERIFIED on grades (2026-09-26). Button
+removed from `app/admin_pages/attendance.py`; spec §33 amended with
+approval. The `FOR_REVIEW` enum value stays in the database (dropping a
+Postgres enum value needs a migration for no gain) and is still treated as
+an editable, open month, so any month already marked keeps working. Page
+module change: goes live on the next Reboot.

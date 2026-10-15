@@ -1367,8 +1367,12 @@ Each month should have a state:
 
 - NOT STARTED
 - OPEN
-- FOR REVIEW
 - FINALIZED
+
+(Amended 2026-10-15: the FOR REVIEW state and its "Mark for review" button
+were dropped. Advisers did not use it, nothing read it, and anyone with
+access can already review an open month. The `FOR_REVIEW` enum value
+remains in the database and is treated as OPEN.)
 
 Before finalization:
 
