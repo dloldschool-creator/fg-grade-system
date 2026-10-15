@@ -17,6 +17,7 @@ from sqlalchemy import func
 
 from app.admin_pages._helpers import get_session, render_flashes
 from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
+from app.attendance_service import reprint_pending
 from app.auth import require_role
 from app.display_time import format_time
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
@@ -222,8 +223,9 @@ def _encoding_progress(session, sy_id) -> list[dict]:
     ]
 
 
-# Shown as the column header and read back to count reopened months, so one name.
-REOPENED_COLUMN = "Reopened (reprint SF2?)"
+# Shown as the column header and read back to count months awaiting a
+# reprint, so one name.
+REPRINT_COLUMN = "Reprint SF2/SF4?"
 
 
 def _attendance_status(session, sy_id) -> list[dict]:
@@ -242,8 +244,11 @@ def _attendance_status(session, sy_id) -> list[dict]:
     if not statuses:
         return []
 
-    # One query for every reopener's name, not one per row.
-    reopener_ids = {s.reopened_by_user_id for s in statuses if s.reopened_by_user_id}
+    # One query for the names of whoever reopened a month still awaiting a
+    # reprint — the only rows that show a name — not one per row.
+    reopener_ids = {
+        s.reopened_by_user_id for s in statuses if reprint_pending(s) and s.reopened_by_user_id
+    }
     reopeners = (
         {u.id: u.full_name for u in session.query(User).filter(User.id.in_(reopener_ids))}
         if reopener_ids
@@ -254,17 +259,17 @@ def _attendance_status(session, sy_id) -> list[dict]:
     # columns.
     rows = []
     for status in sorted(statuses, key=lambda s: (s.year_month, sections[s.section_id].name)):
-        reopened = ""
-        if status.reopened_at is not None:
+        awaiting = ""
+        if reprint_pending(status):
             who = reopeners.get(status.reopened_by_user_id, "someone")
-            reopened = f"{format_time(status.reopened_at, fmt='%b %d')} by {who}"
+            awaiting = f"{format_time(status.reopened_at, fmt='%b %d')} by {who}"
         rows.append(
             {
                 "Section": sections[status.section_id].name,
                 "Month": f"{_calendar.month_name[status.year_month.month]} {status.year_month.year}",
                 "Status": status.status.value if status.status else DASH,
                 # §33: a reopened month's printed SF2/SF4 may be stale.
-                REOPENED_COLUMN: reopened,
+                REPRINT_COLUMN: awaiting,
             }
         )
     return rows
@@ -335,12 +340,13 @@ def render() -> None:
             outstanding = [r for r in attendance if r["Status"] != FinalizationState.FINALIZED.value]
             if outstanding:
                 st.caption(f"{len(outstanding)} section-month(s) not yet finalized.")
-            reopened = [r for r in attendance if r[REOPENED_COLUMN]]
-            if reopened:
+            awaiting = [r for r in attendance if r[REPRINT_COLUMN]]
+            if awaiting:
                 st.warning(
-                    f"{len(reopened)} section-month(s) were reopened after being "
-                    "finalized. An SF2 or SF4 printed for them before the reopen may be "
-                    "out of date — check with the adviser and reprint once finalized again.",
+                    f"{len(awaiting)} section-month(s) were reopened after being "
+                    "finalized and are still waiting on a reprint. An SF2 or SF4 printed "
+                    "before the reopen may be out of date — the adviser or registrar "
+                    "confirms the new copy on the Attendance or SF2 page.",
                     icon="🖨️",
                 )
             st.dataframe(pd.DataFrame(attendance), hide_index=True, width="stretch")

@@ -288,7 +288,8 @@ BY_ROLE = {
                 "Fix everything shown in red first. After finalizing, you can "
                 "still reopen it yourself on the Attendance page, with a reason. "
                 "If you already handed in that month's SF2, print a new one "
-                "once you finalize again — the page will remind you.",
+                "once you finalize again. The page reminds you until you press "
+                "**I've reprinted the SF2/SF4**.",
             ),
             (
                 "Grades & averages",
@@ -439,10 +440,12 @@ BY_ROLE = {
                 "enrolled again later without a duplicate LRN. Any **finalized "
                 "attendance month** is reopened and finalized again "
                 "automatically, with the original finalizer kept.\n\n"
-                "**4. Reprint.** Open the **Withdrawn** tab. *Reprint SF2/SF4* "
-                "lists the months whose forms still show the learner — print "
-                "those again and replace any copy already submitted. Select an "
-                "entry to see what was removed, or download the full copy.\n\n"
+                "**4. Reprint.** Open the **Withdrawn** tab. *Reprint not yet "
+                "confirmed* lists the months whose forms still show the learner — "
+                "print those again, replace any copy already submitted, then press "
+                "**I've reprinted the SF2/SF4** on the SF2 page and the month "
+                "drops off the list. Select an entry to see what was removed, or "
+                "download the full copy.\n\n"
                 "There is no undo button; the saved copy is how a mistake is put "
                 "right, so it can be restored by hand.",
             ),
@@ -451,11 +454,12 @@ BY_ROLE = {
                 "A finalized attendance month can be reopened",
                 "You, an admin, or the section's adviser can reopen a finalized "
                 "month on the **Attendance** page, with a reason. Reopened months "
-                "are flagged on the **Dashboard** (*Reopened* column), on the SF2 "
+                "are flagged on the **Dashboard** (*Reprint SF2/SF4?* column), on the SF2 "
                 "page and on Attendance: an SF2 or SF4 printed before the reopen "
                 "may be out of date, so collect a fresh copy once the month is "
-                "finalized again. The flag stays on afterward — the system can't "
-                "tell whether the new copy was printed.",
+                "finalized again, then press **I've reprinted the SF2/SF4** on "
+                "either page. That clears the flag; the system can't tell on its "
+                "own that you did, so it waits for you.",
             ),
             (
                 "Learners & imports",
@@ -529,7 +533,9 @@ BY_ROLE = {
                 "which is usually the question worth asking near a deadline. A "
                 "month that was **reopened** after finalizing is flagged there "
                 "too: an SF2 or SF4 printed before the reopen may be out of date, "
-                "so ask the adviser for a fresh copy once it is finalized again.",
+                "so ask the adviser for a fresh copy once it is finalized again. "
+                "The flag leaves the list when the adviser or registrar confirms "
+                "the reprint.",
             ),
             (
                 "Reports & oversight",

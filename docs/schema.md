@@ -768,6 +768,7 @@ term split (§29).
 | finalized_by_user_id, finalized_at | UUID FK → users NULL, TIMESTAMPTZ NULL | |
 | reopened_by_user_id, reopened_at | UUID FK → users NULL, TIMESTAMPTZ NULL | |
 | reopen_reason | TEXT NULL | |
+| reprint_acknowledged_by_user_id, reprint_acknowledged_at | UUID FK → users NULL, TIMESTAMP NULL | §33: SF2/SF4 reprint confirmed after a reopen. The reprint flag is pending while `reopened_at` is later than this (or this is NULL) |
 | version | INTEGER NOT NULL DEFAULT 1 | |
 | created_at, updated_at | TIMESTAMPTZ | |
 

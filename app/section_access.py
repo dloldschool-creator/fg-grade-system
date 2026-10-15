@@ -41,3 +41,11 @@ def may_reopen_attendance_month(user, section) -> bool:
     if user.has_role("SUPER_ADMIN", "REGISTRAR"):
         return True
     return user.has_role("ADVISER") and is_advised_by(section, user.id)
+
+
+def may_acknowledge_reprint(user, section) -> bool:
+    """Who may confirm a reopened month's SF2/SF4 was printed again (§33):
+    the same people who may reopen it — an admin, a registrar, or the
+    section's own adviser. A School Head only views, so is excluded the same
+    way. Kept as its own name so the two rules can diverge deliberately."""
+    return may_reopen_attendance_month(user, section)

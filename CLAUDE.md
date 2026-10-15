@@ -539,13 +539,15 @@ of each is in `docs/build-log.md`.
 - **Advisers and registrars can reopen a finalized attendance month**
   (2026-10-15, §33 amended) — the adviser only for a section they advise,
   via `section_access.may_reopen_attendance_month`, never a hand-rolled
-  role check. A reason is still required and audited. Because nothing
-  records whether an SF2/SF4 was printed, **any** month with
-  `reopened_at` set carries `attendance_service.reprint_notice()` on
-  Attendance, SF2 and the Dashboard, and keeps it after re-finalizing —
-  don't "clear" it on finalize, there is no evidence the reprint happened.
-  Clearing it properly would need an acknowledgement column (a migration).
-  `reopen_month` refuses a month that isn't FINALIZED, so a stale second
+  role check. A reason is still required and audited. A reopened month
+  carries `attendance_service.reprint_notice()` on Attendance, SF2 and the
+  Dashboard until someone confirms the reprint
+  (`acknowledge_reprint`, FINALIZED months only, audited as
+  `ATTENDANCE_REPRINT_ACKNOWLEDGED`). **Pending = `reopened_at` later than
+  `reprint_acknowledged_at`** (`reprint_pending`), never a boolean to
+  reset: a second reopen, or withdrawal's automatic one, revives it by
+  itself. Don't clear it on finalize — finalizing is not evidence a
+  reprint happened. `reopen_month` refuses a month that isn't FINALIZED, so a stale second
   Reopen can't overwrite the first one's reason.
 - **Withdrawing an enrollment is not a movement, and it is the one
   delete of a learner's year** (2026-10-14). The school keeps this system

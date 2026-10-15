@@ -10,7 +10,11 @@ python-dotenv>=1.0,<2.0
 # assumed — st.form_submit_button had it by 1.48, st.dataframe and
 # st.data_editor from 1.49, and st.altair_chart only from **1.51**, which
 # is what sets the floor. Do not lower it without re-checking the charts.
-streamlit>=1.51,<2.0
+# Raised to 1.52 on 2026-10-15: SF2 passes a *callable* to
+# st.download_button(data=...) so the form is built only on click, and
+# that arrived in 1.52.0 (release notes, 2025-12-03). On 1.51 the button
+# would hand the browser the function rather than the file.
+streamlit>=1.52,<2.0
 # Streamlit pulls pandas in anyway, but the Attendance page's month grid
 # imports it directly (st.data_editor round-trips a DataFrame), so it's a
 # direct dependency here rather than an implicit transitive one.

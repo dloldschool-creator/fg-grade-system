@@ -72,7 +72,7 @@ GRANTED = [
 # Report pages generate documents and never write school data. Grade
 # Summary does have write paths, so it must gate them explicitly — it is
 # checked separately below.
-PURELY_READ_ONLY = ["dashboard", "insights", "sf9", "sf2", "sf4", "term_cards"]
+PURELY_READ_ONLY = ["dashboard", "insights", "sf9", "sf4", "term_cards"]
 
 # Calls that change official data. `record_export` is excluded on purpose:
 # it appends an export-job audit row, which is a record *of* the read, not
@@ -86,6 +86,7 @@ WRITING_CALLS = {
     "try_delete",
     "finalize_month",
     "reopen_month",
+    "acknowledge_reprint",
 }
 
 
@@ -156,3 +157,16 @@ def test_parent_notices_gates_every_write_on_the_read_only_check():
         )
         assert guard.startswith("if may_write"), (call, guard)
 
+
+
+def test_sf2_writes_only_through_the_gated_reprint_confirmation():
+    """SF2 used to be purely read-only. It now offers "I've reprinted the
+    SF2/SF4" through a shared helper, so the page itself still calls no
+    writer (the AST check can't see inside the helper) and the helper must
+    refuse a read-only account."""
+    from app.admin_pages import _helpers
+
+    assert not (_called_names(PAGES / "sf2.py") & WRITING_CALLS)
+    source = inspect.getsource(_helpers.render_reprint_notice)
+    assert "is_read_only()" in source
+    assert source.index("is_read_only()") < source.index("acknowledge_reprint(")

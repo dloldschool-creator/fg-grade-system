@@ -20,7 +20,7 @@ from app.attendance_engine import (
     philippine_regular_holidays,
     summarize_attendance,
 )
-from app.display_time import format_time
+from app.display_time import format_time, to_school_time
 from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
 from app.models.enums import FinalizationState
 from app.models.learners import Enrollment, Learner, LearnerMovement
@@ -552,33 +552,87 @@ def reopen_month(
     bump_version(status)
 
 
-def reprint_notice_for(session: Session, status: AttendanceMonthStatus | None) -> str | None:
-    """`reprint_notice` with the reopener's name looked up — the one call
-    Attendance and SF2 both make. Costs a query only for a reopened month."""
+def reprint_pending(status: AttendanceMonthStatus | None) -> bool:
+    """Does this month still owe a reprint of its SF2/SF4 (§33)?
+
+    True once it has been reopened, until someone acknowledges a reprint
+    *after* that reopen. Comparing the two timestamps, rather than clearing
+    a flag, is what makes a second reopen bring it back with nothing to
+    reset — and withdrawal's automatic reopen counts like any other.
+    """
     if status is None or status.reopened_at is None:
+        return False
+    if status.reprint_acknowledged_at is None:
+        return True
+    return to_school_time(status.reprint_acknowledged_at) < to_school_time(status.reopened_at)
+
+
+def acknowledge_reprint(
+    session: Session, status: AttendanceMonthStatus, user_id
+) -> dict:
+    """Record that the SF2/SF4 was printed again. Only on a FINALIZED month:
+    while it is open the figures can still change, so a reprint now would
+    be out of date again. Locks and re-reads like `reopen_month`, so a
+    reopen that lands first is seen rather than overwritten.
+
+    Returns the acknowledgement it replaced (read after the lock), for the
+    audit entry's `previous` — a second reopen is acknowledged over the
+    first one's, and rule 8 wants the old value kept."""
+    session.refresh(status, with_for_update=True)
+    if status.status != FinalizationState.FINALIZED:
+        raise ValueError("Finalize the month first — its figures can still change.")
+    if not reprint_pending(status):
+        raise ValueError("Nothing to acknowledge — this month is not waiting on a reprint.")
+    previous = {
+        "reprint_acknowledged_by_user_id": status.reprint_acknowledged_by_user_id,
+        "reprint_acknowledged_at": status.reprint_acknowledged_at,
+    }
+    status.reprint_acknowledged_by_user_id = user_id
+    status.reprint_acknowledged_at = datetime.now(timezone.utc)
+    bump_version(status)
+    return previous
+
+
+def reprint_notice_for(
+    session: Session, status: AttendanceMonthStatus | None, can_confirm: bool = False
+) -> str | None:
+    """`reprint_notice` with the reopener's name looked up — the one call
+    Attendance and SF2 both make. Costs a query only while a reprint is
+    still pending."""
+    if not reprint_pending(status):
         return None
     name = None
     if status.reopened_by_user_id:
         user = session.get(User, status.reopened_by_user_id)
         name = user.full_name if user else None
-    return reprint_notice(status, name)
+    return reprint_notice(status, name, can_confirm)
 
 
-def reprint_notice(status: AttendanceMonthStatus | None, reopened_by_name: str | None) -> str | None:
-    """The "SF2 may need reprinting" flag (§33), or None.
+def reprint_notice(
+    status: AttendanceMonthStatus | None,
+    reopened_by_name: str | None,
+    can_confirm: bool = False,
+) -> str | None:
+    """The "SF2 may need reprinting" flag (§33), or None once acknowledged.
 
-    Any month that was ever reopened carries it, whoever reopened it and
-    whether or not it has been finalized again: an SF2/SF4 printed before
-    `reopened_at` may not match what is in the database now, and nothing
-    records whether a new copy was printed. So the flag says when and why,
-    and leaves the judgement to whoever holds the paper copy.
+    Says when and why the month was reopened and leaves the judgement to
+    whoever holds the paper copy. What to do next depends on the state and
+    on the viewer: an open month cannot be acknowledged yet, and only
+    someone who `can_confirm` has a button to press, so everyone else is
+    told who does rather than pointed at nothing.
     """
-    if status is None or status.reopened_at is None:
+    if not reprint_pending(status):
         return None
     who = reopened_by_name or "someone"
     when = format_time(status.reopened_at, fmt="%b %d, %Y %H:%M")
     reason = f" — “{status.reopen_reason}”" if status.reopen_reason else ""
+    if status.status == FinalizationState.FINALIZED and can_confirm:
+        action = "Reprint it, then confirm below."
+    elif status.status == FinalizationState.FINALIZED:
+        action = "The section's adviser or the registrar confirms once it is reprinted."
+    else:
+        action = "Reprint it once the month is finalized again."
     return (
         f"Reopened {when} by {who}{reason}. An SF2 or SF4 printed for this month "
-        "before then may be out of date — reprint it once the month is finalized again."
+        f"before then may be out of date. {action}"
     )

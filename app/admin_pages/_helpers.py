@@ -482,3 +482,58 @@ def try_delete(session, instance, label: str) -> bool:
         session.rollback()
         flash("error", f"Can't delete {label} — it's still referenced elsewhere.")
         return False
+
+
+def render_reprint_notice(session, current_user, section, status) -> None:
+    """The "reprint the SF2/SF4" notice for a reopened month (§33), with a
+    confirm button for whoever may give it. Shared by Attendance and SF2.
+
+    Imports sit inside the function: this module is imported by every page,
+    and `app.attendance_service` reaches `app.models` (see
+    tests/test_import_order.py).
+    """
+    import streamlit as st
+
+    from app import audit_service
+    from app.attendance_service import acknowledge_reprint, reprint_notice_for
+    from app.models.enums import FinalizationState
+    from app.section_access import may_acknowledge_reprint
+
+    # A School Head account is read-only (§3E) and this is a write, so the
+    # check is explicit here as well as implied by the permission rule.
+    can_confirm = (
+        status is not None
+        and status.status == FinalizationState.FINALIZED
+        and not current_user.is_read_only()
+        and may_acknowledge_reprint(current_user, section)
+    )
+    notice = reprint_notice_for(session, status, can_confirm)
+    if not notice:
+        return
+    st.warning(notice, icon="🖨️")
+    if not can_confirm:
+        return
+    if st.button("I've reprinted the SF2/SF4", key=f"ack_reprint_{status.id}"):
+        try:
+            previous = acknowledge_reprint(session, status, current_user.id)
+        except ValueError as exc:
+            session.rollback()
+            flash("error", str(exc))
+            st.rerun()
+        audit_service.record(
+            session,
+            action=audit_service.ATTENDANCE_REPRINT_ACKNOWLEDGED,
+            object_type="attendance_month_status",
+            object_id=status.id,
+            user_id=current_user.id,
+            previous=previous,
+            new={
+                "year": status.year_month.year,
+                "month": status.year_month.month,
+                "reopened_at": status.reopened_at,
+                "reprint_acknowledged_by_user_id": status.reprint_acknowledged_by_user_id,
+                "reprint_acknowledged_at": status.reprint_acknowledged_at,
+            },
+        )
+        try_commit(session, "Recorded — the reprint reminder is cleared for this month.")
+        st.rerun()

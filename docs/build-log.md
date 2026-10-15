@@ -2416,6 +2416,41 @@ current number.
         reopen a month between `load_record` and the lock; without it the
         new guard raised an uncaught ValueError there. Attendance and SF2
         share `reprint_notice_for`. Registrar Quick Guide entry added.
-        **Not done:** a way to clear the reprint flag (needs an
-        acknowledgement column — a migration); and the reopener's name is
-        one extra query per rerun on a reopened month, left as is.
+        Left as is: the reopener's name is one extra query per rerun while
+        a reprint is pending.
+      - **Reprint acknowledgement** (2026-10-15, user). Migration
+        `b4e2c7a91d36` adds `reprint_acknowledged_at` and
+        `reprint_acknowledged_by_user_id` (nullable, additive — migrate
+        first, then push code). The flag is pending while `reopened_at` is
+        later than the acknowledgement, so no reset logic exists and a
+        second reopen revives it. `acknowledge_reprint` refuses anything but
+        a FINALIZED month, locks the row, and is audited as
+        `ATTENDANCE_REPRINT_ACKNOWLEDGED`; adviser/registrar/admin may give
+        it, the School Head may not. One shared `render_reprint_notice` in
+        `_helpers` (imports inside the function — import-order rule) draws
+        the notice and button on Attendance and SF2; the Dashboard column
+        now lists only months still waiting. Existing reopened months are
+        NULL/NULL, so they stay flagged until someone confirms.
+      - **Review fixes to the acknowledgement, same day.** SF2 left the
+        purely-read-only test list (it now writes through the shared
+        helper, which refuses `is_read_only()` accounts; `acknowledge_reprint`
+        added to the writer list). The audit entry now carries `previous`
+        (what the acknowledgement replaced). The notice only says "confirm
+        below" to someone who has the button. Enrollment → Withdrawn gained
+        a live "Reprint not yet confirmed" column (one batched query) beside
+        the frozen "affected" list. SF2's downloads now pass a *callable*
+        `data` (`_deferred_builders`), built only when the button is clicked
+        — one click, and no render on any other rerun. An interim "Prepare
+        SF2 for download" button did the same at the cost of an extra click
+        and was replaced the same day. The callables run on Streamlit's own
+        thread after the page's session has closed, so they open their own
+        and close over ids only. Needs Streamlit 1.52 (floor raised). Dashboard
+        only looks up names for months still awaiting a reprint.
+      - **Second review pass.** Enrollment → Withdrawn now also lists an
+        affected month that was *not* finalized at withdrawal as
+        "(not finalized yet)": it was never reopened so it has no flag, yet
+        an SF2 may have been printed from it. Its query is narrowed to the
+        affected months. A failing SF2 download is logged with the section
+        and month (Streamlit reports the failure to the browser and logs the
+        traceback, but not which form), and the page says the file is built
+        on click.

@@ -1,14 +1,19 @@
 import calendar as _calendar
+import logging
 
 import pandas as pd
 import streamlit as st
 
-from app.admin_pages._helpers import get_session, render_flashes, section_picker
+from app.admin_pages._helpers import (
+    get_session,
+    render_flashes,
+    render_reprint_notice,
+    section_picker,
+)
 from app.attendance_service import (
     class_days_in_month,
     get_month_status,
     months_with_class_days,
-    reprint_notice_for,
     roster_for_month,
     summarize_month_batch,
 )
@@ -24,6 +29,9 @@ from app.sf2_report import (
     printed_code,
     workbook_to_bytes,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _preview_frame(session, roster, class_days) -> pd.DataFrame:
@@ -60,6 +68,39 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
         row["PRES"] = summary.days_present
         frame_rows.append(row)
     return pd.DataFrame(frame_rows)
+
+
+def _deferred_builders(section_id, school_year_id, year: int, month: int):
+    """Two no-argument callables for `st.download_button(data=...)`.
+
+    Streamlit runs them on a separate thread *after* the script run, when the
+    page's own session is already closed — so each opens its own, and the
+    closures hold only ids and numbers, never the session or ORM objects.
+    """
+
+    def _workbook():
+        from app.database import SessionLocal
+
+        session = SessionLocal()
+        try:
+            return build_sf2_workbook(session, section_id, school_year_id, year, month)
+        except Exception:
+            # Streamlit logs the traceback and tells the browser the file
+            # failed, but not *which* form; name it so the log can be read.
+            _LOGGER.exception(
+                "SF2 download failed for section %s, %04d-%02d", section_id, year, month
+            )
+            raise
+        finally:
+            session.close()
+
+    def build_xlsx() -> bytes:
+        return workbook_to_bytes(_workbook())
+
+    def build_pdf() -> bytes:
+        return workbook_to_pdf(_workbook())
+
+    return build_xlsx, build_pdf
 
 
 def render() -> None:
@@ -132,9 +173,7 @@ def render() -> None:
                 "will generate, but figures can still change — finalize on the "
                 "Attendance page before submitting it."
             )
-        notice = reprint_notice_for(session, status)
-        if notice:
-            st.warning(notice, icon="🖨️")
+        render_reprint_notice(session, current_user, section, status)
 
         st.divider()
         st.subheader("Preview")
@@ -148,22 +187,29 @@ def render() -> None:
         st.divider()
         st.subheader("Download")
 
-        workbook = build_sf2_workbook(session, section_choice, sy_choice, year, month)
-        xlsx_bytes = workbook_to_bytes(workbook)
         stem = f"SF2_{section.name.replace(' ', '')}_{year}-{month:02d}"
+        # Deferred: a callable `data` is built only when its button is
+        # clicked. Passing bytes would build the workbook and the PDF on
+        # every rerun of this page — each widget, the reprint confirmation
+        # included — for a download nobody asked for.
+        build_xlsx, build_pdf = _deferred_builders(section_choice, sy_choice, year, month)
+        st.caption(
+            "The file is built when you click, so it can take a few seconds. If it "
+            "fails, try once more; if it keeps failing, tell the ICT coordinator."
+        )
 
         col_a, col_b = st.columns(2)
         with col_a:
             st.download_button(
                 "Download Excel (.xlsx)",
-                data=xlsx_bytes,
+                data=build_xlsx,
                 file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         with col_b:
             st.download_button(
                 "Download PDF",
-                data=workbook_to_pdf(workbook),
+                data=build_pdf,
                 file_name=f"{stem}.pdf",
                 mime="application/pdf",
             )

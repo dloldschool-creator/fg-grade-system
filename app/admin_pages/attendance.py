@@ -13,6 +13,7 @@ from app.admin_pages._helpers import (
     generation_key,
     get_session,
     render_flashes,
+    render_reprint_notice,
     section_picker,
     try_commit,
 )
@@ -25,7 +26,6 @@ from app.attendance_service import (
     months_with_class_days,
     records_for_month,
     reopen_month,
-    reprint_notice_for,
     roster_for_month,
     summarize_month_batch,
     validate_month,
@@ -394,9 +394,7 @@ def _finalization_panel(
 
     st.write(f"**Month status:** {current_state.value}")
 
-    notice = reprint_notice_for(session, status)
-    if notice:
-        st.warning(notice, icon="🖨️")
+    render_reprint_notice(session, current_user, section, status)
 
     if status is not None and status.status == FinalizationState.FINALIZED:
         st.success(

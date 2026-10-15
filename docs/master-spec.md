@@ -1395,8 +1395,10 @@ Log all changes.
 A month that has been reopened carries a visible notice — on the Attendance
 page, the SF2 page and the Dashboard — that an SF2 or SF4 printed before the
 reopen may be out of date and should be reprinted once the month is finalized
-again. The notice stays after re-finalization, since the system does not
-record whether a new copy was printed.
+again. The notice stays until someone confirms the reprint: an administrator,
+a registrar or the section's adviser, on a finalized month, from the
+Attendance or SF2 page. The confirmation is audit-logged
+(ATTENDANCE_REPRINT_ACKNOWLEDGED) and a later reopen raises the notice again.
 
 ---
 

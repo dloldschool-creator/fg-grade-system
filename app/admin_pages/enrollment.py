@@ -345,11 +345,78 @@ def _record_panel(session, enrollment, checked, current_user, panel_id):
             st.rerun()
 
 
+def _months_awaiting_reprint(session, entries) -> dict:
+    """entry id -> what is still owed on the SF2/SF4 months a withdrawal
+    affected (§33). One query for every entry, not one each.
+
+    Two kinds of month are listed. A month the withdrawal reopened and
+    re-finalized is owed a reprint until someone confirms it
+    (`reprint_pending`). A month that was *not* finalized at withdrawal was
+    never reopened, so it has no flag — but an SF2 may well have been
+    printed from it (the SF2 page allows that, with a warning), so it is
+    shown as "(not finalized yet)" until it is finalized, when the first
+    official print will already exclude the learner. A month with no
+    status row was never started and owes nothing.
+    """
+    import uuid
+    from datetime import date
+
+    from app.attendance_service import reprint_pending
+    from app.models.attendance import AttendanceMonthStatus
+    from app.models.enums import FinalizationState
+
+    def first_of(month_text):
+        try:
+            year, month = month_text.split("-")
+            return date(int(year), int(month), 1)
+        except ValueError:
+            return None
+
+    wanted = {}
+    for e in entries:
+        data = e.new_value or {}
+        try:
+            section_id = uuid.UUID(str(data.get("section_id")))
+        except ValueError:
+            continue
+        months = [m for m in (data.get("sf2_sf4_months_to_reprint") or []) if first_of(m)]
+        wanted[e.id] = (section_id, months)
+    sections = {s for s, _ in wanted.values()}
+    months_in_play = {first_of(m) for _, months in wanted.values() for m in months}
+    if not sections or not months_in_play:
+        return {entry_id: [] for entry_id in wanted}
+    statuses = {
+        (s.section_id, s.year_month.strftime("%Y-%m")): s
+        for s in session.query(AttendanceMonthStatus).filter(
+            AttendanceMonthStatus.section_id.in_(sections),
+            AttendanceMonthStatus.year_month.in_(months_in_play),
+        )
+    }
+
+    def owed(section_id, month):
+        status = statuses.get((section_id, month))
+        if status is None:
+            return None
+        if reprint_pending(status):
+            return month
+        if status.status != FinalizationState.FINALIZED:
+            return f"{month} (not finalized yet)"
+        return None
+
+    return {
+        entry_id: [o for o in (owed(section_id, m) for m in months) if o]
+        for entry_id, (section_id, months) in wanted.items()
+    }
+
+
 def _withdrawn_tab(session):
     st.caption(
         "Every enrollment withdrawn so far, newest first, read from the audit log. "
-        "The months listed are the SF2/SF4 copies that still show the learner and "
-        "should be reprinted. An audit archive (Audit Log page) moves entries older "
+        "*SF2/SF4 months affected* is what the withdrawal recorded: the copies that "
+        "showed the learner. *Reprint not yet confirmed* is the live state: months "
+        "the withdrawal reopened leave it when the adviser or registrar confirms the "
+        "reprint on the Attendance or SF2 page, and a month marked *not finalized "
+        "yet* leaves it once finalized. An audit archive (Audit Log page) moves entries older "
         "than its cutoff into the export file — a withdrawal archived that way "
         "leaves this list, and the export file then holds its copy."
     )
@@ -363,6 +430,7 @@ def _withdrawn_tab(session):
         if user_ids
         else {}
     )
+    still_to_confirm = _months_awaiting_reprint(session, entries)
     st.dataframe(
         [
             {
@@ -374,7 +442,12 @@ def _withdrawn_tab(session):
                 "Authorized by": (e.new_value or {}).get("authorized_by"),
                 "Withdrawn by": names.get(e.user_id, "—"),
                 "Reason": e.reason,
-                "Reprint SF2/SF4": ", ".join((e.new_value or {}).get("sf2_sf4_months_to_reprint", [])),
+                "SF2/SF4 months affected": ", ".join(
+                    (e.new_value or {}).get("sf2_sf4_months_to_reprint", [])
+                ),
+                # The live state, from the month's own flag — the column above is
+                # what the withdrawal recorded and never changes.
+                "Reprint not yet confirmed": ", ".join(still_to_confirm.get(e.id, [])),
                 "Re-finalized": ", ".join((e.new_value or {}).get("months_reopened_and_refinalized", [])),
             }
             for e in entries

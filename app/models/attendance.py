@@ -75,6 +75,13 @@ class AttendanceMonthStatus(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
     )
     reopened_at: Mapped[datetime | None]
     reopen_reason: Mapped[str | None] = mapped_column(String)
+    # §33: someone confirmed the SF2/SF4 was reprinted after a reopen. The
+    # "reprint" flag is pending while reopened_at is later than this, so a
+    # second reopen revives it with nothing to reset.
+    reprint_acknowledged_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    reprint_acknowledged_at: Mapped[datetime | None]
     # Stamped by _save_grid whenever a save actually changes something —
     # not just "the month was touched" (updated_at already covers that,
     # ambiguously, across Prepare/Mark for review/Finalize/Reopen too).
