@@ -1202,6 +1202,48 @@ subject teacher view: each describes a learner across every subject,
 which is not a subject teacher's to see, and neither the Attendance nor
 the Awards page admits them either.
 
+## Running the tests
+
+Measured 2026-10-15: the suite used to be one 15-minute serial run against
+the **live Supabase database**, and it once failed on a DNS blip
+(`failed to resolve host ...pooler.supabase.com`) with 2 failures and 6
+errors that looked like bugs. So there are tiers, and a runner that picks
+one:
+
+```bash
+python scripts/run_tests.py fast      # offline, ~30 s, needs no network
+python scripts/run_tests.py changed   # tests your uncommitted edits can affect
+python scripts/run_tests.py full      # everything incl. slow sweeps (--runslow)
+pytest -n 4                           # the default tier in parallel (needs pytest-xdist)
+```
+
+- **`fast`** is `pytest -m "not db"`. `tests/conftest.py` marks a file `db`
+  if it mentions `SessionLocal`, `get_session`, `app.database` or `AppTest`;
+  `tests/test_offline_tier.py` runs the offline tier against a dead port, so
+  an unmarked test that really needs the network fails there, by name.
+- **`changed`** walks the import graph of `app/` and `scripts/` from the
+  files git says you touched and runs the test files that mention anything
+  affected, plus the tree-scanning guards. It is a *selection*, not a proof
+  (static imports only). Requirements, migrations, templates, Streamlit and
+  pytest config send it to `full`. Docs-only edits run nothing.
+- **`full` is the gate before a push that reaches the running app.** It
+  runs 4 parallel workers when pytest-xdist is installed: 1,604 tests in
+  about 4 minutes, against 15 serially. A `slow` test is skipped unless `--runslow`; today that is the two
+  every-section Parent Notices sweeps (400 s of the old 940 s). Quick
+  sampled versions (first/middle/last section) run in the default tier.
+- **Connection setup is retried** (4 attempts, 1/2/4 s) in `conftest.py`,
+  but only the *opening* of a connection, never a query, and only for
+  transient errors (DNS, timeout, refused, reset) — never auth failures.
+  If the database is unreachable when `db` tests were selected, the run
+  stops once, in about 40 s, with one message, rather than failing dozens.
+- **Parallel is safe here because every test rolls back** and none shares a
+  row; `-n 4` ran green twice (default tier, then with `--runslow`). If a test ever starts committing, it can
+  collide with a worker (a unique key blocks until the other transaction
+  ends) — fix the test, don't drop the parallelism.
+- Tests run against **live data**. They write, flush, assert and roll back;
+  `recompute_enrollment_grades` commits, so it cannot be driven from a test.
+  Don't add one that commits.
+
 ## Where things stand
 
 **The app is live** at https://fgnmhs-shs.streamlit.app, deployed

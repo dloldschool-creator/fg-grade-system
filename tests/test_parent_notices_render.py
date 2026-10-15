@@ -55,6 +55,7 @@ def _grouped_or_empty(app) -> bool:
     )
 
 
+@pytest.mark.slow
 def test_every_section_renders_in_the_first_term(app):
     """Term 1 is the one with real grades and attendance, so it exercises
     every group and every table on real rows."""
@@ -62,6 +63,38 @@ def test_every_section_renders_in_the_first_term(app):
         _box(app, "Section").select(option)
         _run(app)
         assert _grouped_or_empty(app), option
+
+
+def _sample(options):
+    """First, middle and last: the ends and the middle catch what differs
+    between sections (empty, small, large) without rendering all ~90."""
+    options = list(options)
+    return sorted({0, len(options) // 2, len(options) - 1}) if options else []
+
+
+def test_a_sample_of_sections_renders_in_the_first_term(app):
+    """The quick version of the every-section sweep below, which is marked
+    slow and runs under --runslow / scripts/run_tests.py full."""
+    options = list(_box(app, "Section").options)
+    for index in _sample(options):
+        _box(app, "Section").select(options[index])
+        _run(app)
+        assert _grouped_or_empty(app), options[index]
+
+
+def test_with_email_configured_a_sample_of_sections_renders_and_sends_nothing():
+    import os
+
+    at = _run(AppTest.from_string(CONFIGURED_SCRIPT, default_timeout=120))
+    try:
+        options = list(_box(at, "Section").options)
+        for index in _sample(options):
+            _box(at, "Section").select(options[index])
+            _run(at)
+            assert not any("isn't set up" in i.value for i in at.info)
+    finally:
+        os.environ.pop("NOTICE_EMAIL_ADDRESS", None)
+        os.environ.pop("NOTICE_EMAIL_APP_PASSWORD", None)
 
 
 def test_the_later_terms_render(app):
@@ -90,6 +123,7 @@ CONFIGURED_SCRIPT = (
 )
 
 
+@pytest.mark.slow
 def test_with_email_configured_the_panel_renders_for_every_section_and_sends_nothing():
     """Rendering never contacts the mail server; only the Send button
     would, and nothing here presses it."""

@@ -2454,3 +2454,21 @@ current number.
         and month (Streamlit reports the failure to the browser and logs the
         traceback, but not which form), and the page says the file is built
         on click.
+- [x] **Test tiers, retry and parallel runs** (2026-10-15, user asked whether
+      the full suite is always needed). Measured first: the suite was one
+      938 s serial run against the live database, of which two
+      every-section Parent Notices sweeps were 400 s, and a DNS blip
+      (`failed to resolve host`) once produced 2 failures and 6 errors that
+      read as bugs. Now: `tests/conftest.py` marks `db` and `slow` tests;
+      `scripts/run_tests.py` has `fast` (offline, 894 tests in ~30 s,
+      verified against a dead port by `tests/test_offline_tier.py`),
+      `changed` (import-graph selection from git's changed files; sends
+      requirements/migrations/templates/config to `full`; docs-only runs
+      nothing) and `full`; connection setup is retried on transient
+      errors; an unreachable database stops the run once in ~40 s. Quick
+      sampled versions of the two sweeps run by default, the exhaustive ones
+      under `--runslow`. `pytest -n 4` (pytest-xdist, added to
+      requirements) took the full gate from 15 min 38 s to 4 min 7 s and
+      ran green twice. Rejected: a local Postgres for tests — none is
+      installed here, and it is the real fix for tests touching live data,
+      but a separate piece of setup.
