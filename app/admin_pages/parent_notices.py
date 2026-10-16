@@ -40,6 +40,7 @@ from app.models.organization import SchoolYear, Term
 from app.notice_messages import concern_email, sms_link, term_card_email
 from app.notice_rules import GROUP_LABELS, NoticeGroup, may_override
 from app.section_access import is_advised_by
+from app.text_rules import REASON_MAX, reason_problem
 
 DEFAULT_MEETING_TIME = time(9, 0)
 
@@ -198,7 +199,7 @@ def _override_form(session, section, term, data, current_user) -> None:
             horizontal=True,
             key=f"{form}_decision",
         )
-        reason = text_field("Reason", key=f"{form}.reason")
+        reason = text_field("Reason", key=f"{form}.reason", max_chars=REASON_MAX)
         col1, col2 = st.columns(2)
         save = col1.form_submit_button("Save override")
         clear = col2.form_submit_button("Clear override")
@@ -211,8 +212,9 @@ def _override_form(session, section, term, data, current_user) -> None:
                 "clear the override instead if there is one."
             )
             return
-        if not reason.strip():
-            st.error("Please give a reason.")
+        problem = reason_problem(reason)
+        if problem:
+            st.error(problem)
             return
         notices.set_override(
             session, enrollment_id=row.enrollment_id, term_id=term.id,

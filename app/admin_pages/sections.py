@@ -15,6 +15,7 @@ from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
 from app.models.organization import SchoolYear
 from app.models.rbac import Role, User, UserRole
+from app.text_rules import SHORT_MAX
 
 
 # Bumped after a successful Add, which gives the adviser picker a key
@@ -159,7 +160,7 @@ def render() -> None:
                 )
 
                 with st.form(f"edit_section_{section.id}"):
-                    name = st.text_input("Name", value=section.name, key=f"sec_name_{section.id}")
+                    name = st.text_input("Name", value=section.name, key=f"sec_name_{section.id}", max_chars=SHORT_MAX)
                     gl_choice = st.selectbox(
                         "Grade level",
                         options=[gl.id for gl in grade_levels],
@@ -176,7 +177,7 @@ def render() -> None:
                         format_func=lambda v: strand_by_id[v].name,
                         key=f"sec_strand_{section.id}",
                     )
-                    room = st.text_input("Room", value=section.room or "", key=f"sec_room_{section.id}")
+                    room = st.text_input("Room", value=section.room or "", key=f"sec_room_{section.id}", max_chars=SHORT_MAX)
                     capacity = st.number_input(
                         "Capacity",
                         min_value=0,

@@ -12,6 +12,7 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.models.enums import GradeEncodingStatus, SchoolYearStatus
 from app.models.organization import School, SchoolYear, Term
+from app.text_rules import ADDRESS_MAX
 
 
 def render() -> None:
@@ -48,7 +49,8 @@ def render() -> None:
                         value=sy.recognition_date,
                     )
                     recognition_venue = st.text_input(
-                        "Recognition venue", value=sy.recognition_venue or ""
+                        "Recognition venue", value=sy.recognition_venue or "",
+                        max_chars=ADDRESS_MAX,
                     )
                     if st.form_submit_button("Save school year"):
                         sy.start_date = start_date

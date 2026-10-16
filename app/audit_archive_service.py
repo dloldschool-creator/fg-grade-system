@@ -34,6 +34,7 @@ from app import audit_service
 from app.models.admin import AuditLog
 from app.models.organization import School
 from app.models.rbac import User
+from app.text_rules import validate_reason
 
 # Roughly one term (Term 1 closes 2026-09-15 per CLAUDE.md) — a fresh
 # archive can never eat into the term just finished, only older history.
@@ -115,6 +116,7 @@ def delete_before(
     export is assumed to describe exactly the set passed here, and a
     mismatch means that export is stale.
     """
+    reason = validate_reason(reason)
     if before > max_cutoff():
         raise ValueError(f"Can't archive entries newer than {MIN_AGE_DAYS} days old.")
     live_count = count_before(session, before)

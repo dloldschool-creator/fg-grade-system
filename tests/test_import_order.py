@@ -123,7 +123,15 @@ def test_the_universally_imported_modules_are_the_ones_expected():
     """Guards the derivation itself. If this list changes, a new module
     has become load-bearing for import order and the test below now
     governs it — which is the point, but it should be a visible event."""
-    assert _universal_modules() == {"app.admin_pages._helpers", "app.auth"}
+    # text_rules joined on 2026-10-16 via _helpers.text_field's default length
+    # limit. It is safe by construction — it imports nothing from app, which
+    # tests/test_text_rules.py asserts — so being listed here is the point:
+    # the closure test below now governs it too.
+    assert _universal_modules() == {
+        "app.admin_pages._helpers",
+        "app.auth",
+        "app.text_rules",
+    }
 
 
 def test_no_universal_module_reaches_app_models_at_load():

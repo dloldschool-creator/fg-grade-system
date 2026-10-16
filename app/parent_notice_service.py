@@ -55,6 +55,7 @@ from app.notice_rules import (
     effective_group,
 )
 from app.roster_order import learner_sort_key
+from app.text_rules import validate_reason
 
 
 TERM_CARD = "TERM_CARD"
@@ -402,9 +403,7 @@ def set_override(session, *, enrollment_id, term_id, decision: NoticeGroup, reas
     """Creates or replaces the learner's override for the term. The reason
     is required (§78.3) — refused here as well as by the table's CHECK, so
     the page can say so instead of hitting a constraint."""
-    reason = (reason or "").strip()
-    if not reason:
-        raise ValueError("A reason is required.")
+    reason = validate_reason(reason)
     if decision not in (NoticeGroup.RELEASE, NoticeGroup.CONCERN):
         raise ValueError("An override can only be Release or Concern.")
     row = (

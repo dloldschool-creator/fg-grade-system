@@ -53,6 +53,7 @@ from app.models.organization import SchoolYear
 from app.models.rbac import User
 from app.naming import normalize_name
 from app.roster_order import learner_order_by, learner_sort_key
+from app.text_rules import ADDRESS_MAX, NOTE_MAX, SHORT_MAX
 
 RESULT_LIMIT = 50
 
@@ -75,14 +76,16 @@ def _identity_values(learner: Learner) -> dict:
 def _identity_form(session, learner: Learner, current_user, *, may_delete: bool) -> None:
     with st.form(f"edit_learner_{learner.id}"):
         col1, col2, col3 = st.columns(3)
-        last_name = col1.text_input("Last name", value=learner.last_name, key=f"ln_{learner.id}")
-        first_name = col2.text_input("First name", value=learner.first_name, key=f"fn_{learner.id}")
+        last_name = col1.text_input("Last name", value=learner.last_name, key=f"ln_{learner.id}", max_chars=SHORT_MAX)
+        first_name = col2.text_input("First name", value=learner.first_name, key=f"fn_{learner.id}", max_chars=SHORT_MAX)
         middle_name = col3.text_input(
-            "Middle name", value=learner.middle_name or "", key=f"mn_{learner.id}"
+            "Middle name", value=learner.middle_name or "", key=f"mn_{learner.id}",
+            max_chars=SHORT_MAX,
         )
         col1, col2, col3 = st.columns(3)
         extension_name = col1.text_input(
-            "Extension (Jr., III, ...)", value=learner.extension_name or "", key=f"ext_{learner.id}"
+            "Extension (Jr., III, ...)", value=learner.extension_name or "", key=f"ext_{learner.id}",
+            max_chars=SHORT_MAX,
         )
         sex = col2.selectbox(
             "Sex",
@@ -92,7 +95,8 @@ def _identity_form(session, learner: Learner, current_user, *, may_delete: bool)
         )
         birthdate = col3.date_input("Birthdate", value=learner.birthdate, key=f"bd_{learner.id}")
         lrn = st.text_input(
-            "LRN (12 digits, blank if not yet assigned)", value=learner.lrn or "", key=f"lrn_{learner.id}"
+            "LRN (12 digits, blank if not yet assigned)", value=learner.lrn or "", key=f"lrn_{learner.id}",
+            max_chars=20,
         )
 
         # Delete is drawn only where it can be used: a disabled button
@@ -206,15 +210,18 @@ def _contact_form(session, learner: Learner, current_user) -> None:
             "Parent/guardian name",
             value=learner.guardian_name or "",
             key=generation_key(form, f"{form}.name"),
+            max_chars=SHORT_MAX,
         )
         col1, col2 = st.columns(2)
         guardian_email = col1.text_input(
-            "Email", value=learner.guardian_email or "", key=generation_key(form, f"{form}.email")
+            "Email", value=learner.guardian_email or "", key=generation_key(form, f"{form}.email"),
+            max_chars=SHORT_MAX,
         )
         guardian_mobile = col2.text_input(
             "Mobile (09XXXXXXXXX)",
             value=display_mobile(learner.guardian_mobile),
             key=generation_key(form, f"{form}.mobile"),
+            max_chars=20,
         )
         consent = st.checkbox(
             "Parent/guardian consents to school notices by email/SMS",
@@ -282,11 +289,13 @@ def _admission_record_form(session, learner: Learner, current_user, record=None)
         previous_school_name = st.text_input(
             "Previous school name", value=record.previous_school_name or "" if record else "",
             key=f"prev_name_{learner.id}",
+            max_chars=ADDRESS_MAX,
         )
         previous_school_address = st.text_input(
             "Previous school address",
             value=record.previous_school_address or "" if record else "",
             key=f"prev_addr_{learner.id}",
+            max_chars=ADDRESS_MAX,
         )
         col1, col2, col3 = st.columns(3)
         pept_passer = col1.checkbox(
@@ -314,15 +323,18 @@ def _admission_record_form(session, learner: Learner, current_user, record=None)
             key=f"als_d_{learner.id}",
         )
         clc_name = st.text_input(
-            "CLC name", value=record.clc_name or "" if record else "", key=f"clc_n_{learner.id}"
+            "CLC name", value=record.clc_name or "" if record else "", key=f"clc_n_{learner.id}",
+            max_chars=ADDRESS_MAX,
         )
         clc_address = st.text_input(
-            "CLC address", value=record.clc_address or "" if record else "", key=f"clc_a_{learner.id}"
+            "CLC address", value=record.clc_address or "" if record else "", key=f"clc_a_{learner.id}",
+            max_chars=ADDRESS_MAX,
         )
         other_notes = st.text_area(
             "Other eligibility notes",
             value=record.other_eligibility_notes or "" if record else "",
             key=f"other_{learner.id}",
+            max_chars=NOTE_MAX,
         )
 
         if st.form_submit_button("Save admission record"):

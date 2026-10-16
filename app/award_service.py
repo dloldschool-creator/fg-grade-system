@@ -50,6 +50,7 @@ from app.models.enums import AwardResult, AwardScope, CompletionStatus
 from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment
 from app.models.organization import SchoolYear, Term
+from app.text_rules import validate_reason
 
 
 def _evaluate(
@@ -362,6 +363,7 @@ def set_award_override(
 
     The audit entry is written here rather than in the page so that no
     caller can override an award without leaving one behind."""
+    override_reason = validate_reason(override_reason)
     previous = {"award_result": learner_award.award_result, "award_name": learner_award.award_name}
     learner_award.award_result = award_result
     learner_award.award_name = award_name

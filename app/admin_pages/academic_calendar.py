@@ -15,6 +15,7 @@ from app.auth import require_role
 from app.display_time import current_month_index
 from app.models.attendance import AcademicCalendarDate
 from app.models.organization import SchoolYear, Term
+from app.text_rules import REASON_MAX, clean_text, reason_problem
 
 WEEKDAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 
@@ -132,16 +133,19 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                     key=f"cfd_{day.id}",
                 )
                 note = st.text_input(
-                    "Reason / note", value=day.note or "", key=f"cn_{day.id}"
+                    "Reason / note", value=day.note or "", key=f"cn_{day.id}", max_chars=REASON_MAX
                 )
                 if st.form_submit_button("Save"):
                     changed_class_day = is_class_day != day.is_default_class_day
-                    if changed_class_day and not note.strip():
-                        st.error("A reason is required to change a date's class-day status.")
+                    if changed_class_day and reason_problem(note):
+                        st.error(
+                            "A reason is required to change a date's class-day status. "
+                            + reason_problem(note)
+                        )
                     else:
                         day.is_default_class_day = is_class_day
                         day.is_final_class_day = is_final
-                        day.note = note.strip() or None
+                        day.note = clean_text(note) or None
                         if changed_class_day:
                             day.is_override = True
                             day.overridden_by_user_id = current_user.id
@@ -157,7 +161,7 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                                 user_id=current_user.id,
                                 previous={"is_class_day": not is_class_day},
                                 new={"is_class_day": is_class_day, "date": day.calendar_date},
-                                reason=note.strip(),
+                                reason=clean_text(note),
                             )
                             # Any flip renumbers the whole year — the
                             # sequence is a running count, so a gap here

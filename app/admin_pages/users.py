@@ -17,6 +17,7 @@ from app.display_time import format_time
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
 from app.models.rbac import Role, User, UserRole
 from app.naming import normalize_name
+from app.text_rules import SHORT_MAX
 from app.user_import import (
     USER_COLUMNS,
     USER_FILE,
@@ -335,6 +336,7 @@ def render() -> None:
                 new_name = col_name.text_input(
                     "Full name", value=user.full_name, key=f"user_name_{user.id}",
                     on_change=keep_panel_open, args=(user.id,),
+                    max_chars=SHORT_MAX,
                 )
                 col_save_name.write("")  # vertical alignment with the input above
                 if col_save_name.button("Save name", key=f"save_name_{user.id}"):

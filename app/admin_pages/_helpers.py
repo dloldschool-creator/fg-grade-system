@@ -8,6 +8,7 @@ import streamlit as st
 from sqlalchemy.exc import IntegrityError
 
 from app.database import SessionLocal
+from app.text_rules import NOTE_MAX, SHORT_MAX
 
 _FLASH_KEY = "_flash_messages"
 _TEXT_GENERATION = "_text_field_generation_"
@@ -264,8 +265,13 @@ def text_field(label: str, *, key: str, area: bool = False, container=None, **kw
 
     `container` takes a column (`col1`) for forms laid out side by side,
     since `col1.text_input(...)` cannot go through this function.
+
+    **Every box gets a length limit** (`app/text_rules.py`: SHORT_MAX, or
+    NOTE_MAX for a text area) unless the caller passes its own `max_chars`
+    — the database is a free tier, so no free-text field is unbounded.
     """
     form = key.split(".", 1)[0]
+    kwargs.setdefault("max_chars", NOTE_MAX if area else SHORT_MAX)
     target = container if container is not None else st
     widget = target.text_area if area else target.text_input
     return widget(label, key=generation_key(form, key), **kwargs)

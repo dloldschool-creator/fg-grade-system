@@ -39,6 +39,7 @@ from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
 from app.models.rbac import User
 from app.section_access import may_reopen_attendance_month
+from app.text_rules import REASON_MAX, clean_text, reason_problem
 
 # §30's printed codes. The DB stores the internal enum; these are only the
 # encoding UI's shorthand, and the SF2 renderer (Phase 9) does its own
@@ -406,13 +407,15 @@ def _finalization_panel(
         )
         if may_reopen_attendance_month(current_user, section):
             with st.form(f"reopen_att_{status.id}"):
-                reason = st.text_area("Reopen reason (required)")
+                reason = st.text_area("Reopen reason (required)", max_chars=REASON_MAX)
                 if st.form_submit_button("Reopen"):
-                    if not reason.strip():
-                        st.error("A reason is required.")
+                    problem = reason_problem(reason)
+                    if problem:
+                        st.error(problem)
                     else:
+                        reason = clean_text(reason)
                         try:
-                            reopen_month(session, status, current_user.id, reason.strip())
+                            reopen_month(session, status, current_user.id, reason)
                         except ValueError as exc:
                             session.rollback()
                             flash("error", str(exc))
@@ -425,7 +428,7 @@ def _finalization_panel(
                             user_id=current_user.id,
                             previous={"status": FinalizationState.FINALIZED},
                             new={"status": status.status, "year": year, "month": month},
-                            reason=reason.strip(),
+                            reason=reason,
                         )
                         try_commit(session, "Reopened — attendance is editable again.")
                         st.rerun()

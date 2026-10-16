@@ -194,7 +194,7 @@ def _enrolled_learner(session, section):
 
 
 def _move(session, enrollment, target, **kwargs):
-    kwargs.setdefault("reason", "typo")
+    kwargs.setdefault("reason", "Typo in the section entry")
     kwargs.setdefault("expected_section_id", enrollment.section_id)
     return correct_section(
         session, enrollment=enrollment, new_section_id=target.id, user_id=None, **kwargs
@@ -247,7 +247,7 @@ def test_a_clean_enrollment_moves_and_is_audited(session):
         .filter_by(action="ENROLLMENT_SECTION_CORRECTED", object_id=enrollment.id)
         .one()
     )
-    assert entry.reason == "typo"
+    assert entry.reason == "Typo in the section entry"
     assert entry.previous_value["section"] == a.name
     assert entry.new_value["section"] == b.name
 

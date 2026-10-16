@@ -45,6 +45,7 @@ from app.models.organization import Term
 from app.models.subjects import SectionSubjectOffering, Subject
 from app.naming import normalize_name
 from app.section_access import is_advised_by
+from app.text_rules import SHORT_MAX
 
 # `term_grades.source` is free text. Stamping it lets a migrated grade be
 # told apart from one a teacher typed, which matters when reconciling the
@@ -145,6 +146,15 @@ def _section_lookup(session, school_year_id, adviser_user_id=None) -> tuple[dict
     return by_name, ambiguous
 
 
+def _flag_long_names(result, number, fields) -> None:
+    """Adds an error for each name longer than the data-entry limit. The
+    edit forms cap names at SHORT_MAX; without the same check here a file
+    could write what no form would accept, to a free-tier database."""
+    for label, value in fields:
+        if value and len(value) > SHORT_MAX:
+            result.errors.append(RowError(number, label, f"longer than {SHORT_MAX} characters"))
+
+
 def validate_learners(
     session, rows: list[dict], mapping: dict, *, school_year_id=None, adviser_user_id=None
 ) -> ValidationResult:
@@ -179,6 +189,15 @@ def validate_learners(
             result.errors.append(RowError(number, "Last Name", "required"))
         if not first_name:
             result.errors.append(RowError(number, "First Name", "required"))
+
+        middle_name = normalize_name(row.get("middle_name"))
+        extension_name = normalize_name(row.get("extension_name"))
+        guardian_name = normalize_name(row.get("guardian_name"))
+        _flag_long_names(
+            result, number,
+            [("Last Name", last_name), ("First Name", first_name), ("Middle Name", middle_name),
+             ("Extension", extension_name), ("Parent/Guardian Name", guardian_name)],
+        )
 
         sex, sex_error = _parse_sex(row.get("sex"))
         if sex_error:
@@ -279,12 +298,12 @@ def validate_learners(
                     "__row__": number,
                     "last_name": last_name,
                     "first_name": first_name,
-                    "middle_name": normalize_name(row.get("middle_name")),
-                    "extension_name": normalize_name(row.get("extension_name")),
+                    "middle_name": middle_name,
+                    "extension_name": extension_name,
                     "sex": sex,
                     "birthdate": birthdate,
                     "lrn": lrn,
-                    "guardian_name": normalize_name(row.get("guardian_name")),
+                    "guardian_name": guardian_name,
                     "guardian_email": guardian_email,
                     "guardian_mobile": guardian_mobile,
                     "notices_consent": bool(consent),
@@ -667,6 +686,9 @@ def validate_learner_contacts(
         consent, consent_error = parse_consent(row.get("notices_consent"))
         if consent_error:
             result.errors.append(RowError(number, "Notice Consent", consent_error))
+        _flag_long_names(
+            result, number, [("Parent/Guardian Name", normalize_name(row.get("guardian_name")))]
+        )
 
         if len(result.errors) != errors_before:
             continue

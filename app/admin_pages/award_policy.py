@@ -14,6 +14,7 @@ from app.auth import require_role
 from app.models.awards import AwardPolicy, AwardPolicyVersion, LearnerAward
 from app.models.enums import AwardScope, CertificateLayout, PolicyVersionStatus
 from app.models.organization import SchoolYear
+from app.text_rules import BODY_MAX, NOTE_MAX, SHORT_MAX
 
 _GUIDE_MARKDOWN = """
 **Important:** Don't edit a version that has already been used to give out awards — create a new version instead.
@@ -69,7 +70,7 @@ def _tier_editor(key_prefix: str, existing: list[dict] | None = None) -> list[di
         # Under a TERM-scoped policy it means "minimum Term Average".
         default_min = existing[i]["min_general_average"] if i < len(existing) else 0
         col1, col2 = st.columns(2)
-        label = col1.text_input(f"Tier {i + 1} label", value=default_label, key=f"{key_prefix}_label_{i}")
+        label = col1.text_input(f"Tier {i + 1} label", value=default_label, key=f"{key_prefix}_label_{i}", max_chars=SHORT_MAX)
         min_ga = col2.number_input(
             f"Tier {i + 1} minimum average",
             min_value=0.0,
@@ -219,6 +220,7 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
             "for earning {award_name} with a {average_label} of {average}.\n"
             "Given this {date} at {venue}, during School Year {school_year}."
         ),
+        max_chars=BODY_MAX,
     )
 
     st.markdown(
@@ -233,10 +235,12 @@ def _render_version_fields(prefix: str, school_years, sy_by_id, existing: AwardP
         default_sig = existing_signatories[i] if i < len(existing_signatories) else {}
         scol1, scol2 = st.columns(2)
         sig_name = scol1.text_input(
-            f"Signatory {i + 1} name", value=default_sig.get("name", ""), key=f"{prefix}_signame_{i}"
+            f"Signatory {i + 1} name", value=default_sig.get("name", ""), key=f"{prefix}_signame_{i}",
+            max_chars=SHORT_MAX,
         )
         sig_position = scol2.text_input(
-            f"Signatory {i + 1} position", value=default_sig.get("position", ""), key=f"{prefix}_sigpos_{i}"
+            f"Signatory {i + 1} position", value=default_sig.get("position", ""), key=f"{prefix}_sigpos_{i}",
+            max_chars=SHORT_MAX,
         )
         if sig_name:
             signatory_overrides.append({"name": sig_name, "position": sig_position})
@@ -438,9 +442,10 @@ def render() -> None:
 
             with st.expander(f"Edit {policy.name}"):
                 with st.form(f"edit_policy_{policy.id}"):
-                    new_name = st.text_input("Name", value=policy.name, key=f"editname_{policy.id}")
+                    new_name = st.text_input("Name", value=policy.name, key=f"editname_{policy.id}", max_chars=SHORT_MAX)
                     new_description = st.text_area(
-                        "Description", value=policy.description or "", key=f"editdesc_{policy.id}"
+                        "Description", value=policy.description or "", key=f"editdesc_{policy.id}",
+                        max_chars=NOTE_MAX,
                     )
                     if st.form_submit_button("Save policy details"):
                         if not new_name.strip():

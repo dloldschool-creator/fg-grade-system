@@ -706,6 +706,36 @@ the components' sum, or the languages are weighted twice.
   rendered PDF, not by eye — the misalignment was easy to miss on a
   screenshot and only showed up under precise measurement.
 
+**Free text: reasons and length limits** (2026-10-16)
+
+- **A required reason goes through `app/text_rules.py`**, never a bare
+  `.strip()`. `reason_problem` / `validate_reason` need 10+ characters,
+  2+ words, 5+ letters and no character repeated 4+ times, and cap it at
+  `REASON_MAX` (300). It is a speed bump against "x" and "asdf", **not a
+  proof** — "this is my reason okay" passes, and it is loose on purpose
+  (no dictionary, no consonant rule: Filipino, "LRN" and "SF9" would be
+  false rejects). Enforced in the *service* (withdrawal, section
+  correction, notice override, attendance reopen, award override, audit
+  archive) and again as a backstop in `audit_service.record`, so a script
+  can't bypass the page. Reasons the system wraps before recording
+  (withdrawal prefixes the learner and authorizer) are checked against
+  `COMPOSED_REASON_MAX`.
+- **Every `st.text_input`/`st.text_area` carries `max_chars`** — the
+  database is a free tier and these columns are unbounded `String`s.
+  `_helpers.text_field` sets one by default; anything else must pass a
+  constant from `text_rules`. `tests/test_text_rules.py` fails on any box
+  without one. Streamlit also truncates server-side, so a stored value
+  longer than its limit is silently cut the next time that form is saved:
+  run `scripts/check_text_lengths.py` (read-only) before changing a limit.
+  It was clean on 2026-10-16 — nothing stored exceeds its box. The CSV
+  importers (`import_specs`, Subject Catalog) refuse over-long names too;
+  the columns themselves are still unbounded, so a new writer needs the
+  same check.
+- The repeated-character rule ignores digits on purpose: an LRN holds
+  "0000" and must not be refused as junk.
+- `text_rules` is imported by every page through `_helpers`, so it must
+  stay free of `app` imports (the import-order test lists it as universal).
+
 **Streamlit**
 
 - `st.success()`/`st.error()` immediately before `st.rerun()` never reach

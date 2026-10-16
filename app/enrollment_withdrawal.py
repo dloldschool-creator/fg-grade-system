@@ -87,6 +87,7 @@ from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import Role, User, UserRole
 from app.models.subjects import SectionSubjectOffering
+from app.text_rules import SHORT_MAX, clean_text, reason_problem
 
 # Rows a person entered for this enrollment that withdrawing removes —
 # after copying them into the audit entry. Everything in DERIVED is
@@ -452,12 +453,15 @@ def withdraw_enrollment(
     Returns the summary written to the audit entry's `new` value:
     learner, section, the months to reprint and the months reopened.
     """
-    reason = (reason or "").strip()
-    authorized_by = (authorized_by or "").strip()
-    if not reason:
-        raise WithdrawalRefused("A reason is required.")
+    problem = reason_problem(reason)
+    if problem:
+        raise WithdrawalRefused(problem)
+    reason = clean_text(reason)
+    authorized_by = clean_text(authorized_by)
     if not authorized_by:
         raise WithdrawalRefused("Name who authorized the withdrawal.")
+    if len(authorized_by) > SHORT_MAX:
+        raise WithdrawalRefused(f"Keep the authorizer's name to {SHORT_MAX} characters or fewer.")
 
     enrollment = session.get(Enrollment, enrollment_id)
     if enrollment is None:
@@ -510,7 +514,14 @@ def withdraw_enrollment(
         if record.finalized_months
         else []
     )
-    month_reason = f"Enrollment withdrawal of {record.name} (authorized by {authorized_by}): {reason}"
+    # Name capped so the wrapped text always fits COMPOSED_REASON_MAX, which
+    # reopen_month and audit_service enforce: 300 (reason) + 100 + 100 + the
+    # fixed wording. Left unbounded, a long name would fail the reopen
+    # halfway through the withdrawal.
+    month_reason = (
+        f"Enrollment withdrawal of {record.name[:SHORT_MAX]} "
+        f"(authorized by {authorized_by}): {reason}"
+    )
     reopened = []
     for status in month_rows:
         previous = {

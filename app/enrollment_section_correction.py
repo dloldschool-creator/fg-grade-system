@@ -52,6 +52,7 @@ from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, A
 from app.models.base import Base
 from app.models.enums import FinalizationState
 from app.models.learners import Enrollment
+from app.text_rules import clean_text, reason_problem
 
 FOLLOWS = {"learner_movements", "attendance_records"}
 DERIVED = {
@@ -184,9 +185,10 @@ def correct_section(
     correct between (an adviser: the ones they advise); `None` means
     unrestricted. Both the current and the new section must be inside it.
     """
-    reason = (reason or "").strip()
-    if not reason:
-        raise CorrectionRefused("A reason is required.")
+    problem = reason_problem(reason)
+    if problem:
+        raise CorrectionRefused(problem)
+    reason = clean_text(reason)
     unrestricted = allowed_section_ids is None
 
     # Lock first, then read: see the module docstring.

@@ -144,7 +144,7 @@ def test_reopen_locks_the_row_before_checking_it():
     """Two simultaneous Reopens both see FINALIZED unless the row is locked
     and re-read first; `version` is a plain column and can't catch it."""
     session = _FakeSession()
-    reopen_month(session, _status(FinalizationState.FINALIZED), ADVISER_ID, "reason")
+    reopen_month(session, _status(FinalizationState.FINALIZED), ADVISER_ID, "A valid test reason")
     assert session.refreshed == [{"with_for_update": True}]
 
 

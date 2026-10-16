@@ -13,6 +13,7 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Strand, Track
 from app.models.subjects import Subject, SubjectProfile, SubjectProfileSubject
+from app.text_rules import SHORT_MAX
 
 
 def _profile_subjects_section(session, profile: SubjectProfile, subjects_by_id: dict, entries=None):
@@ -141,7 +142,7 @@ def render() -> None:
                 strand_options = [s.id for s in strands if s.track_id == track_choice]
 
                 with st.form(f"edit_profile_{profile.id}"):
-                    name = st.text_input("Name", value=profile.name, key=f"prof_name_{profile.id}")
+                    name = st.text_input("Name", value=profile.name, key=f"prof_name_{profile.id}", max_chars=SHORT_MAX)
                     gl_choice = st.selectbox(
                         "Grade level",
                         options=[gl.id for gl in grade_levels],

@@ -37,6 +37,7 @@ from app.models.organization import SchoolYear, Term
 from app.models.rbac import User
 from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
 from app.nls_reasons import NLS_REASONS
+from app.text_rules import ADDRESS_MAX, NOTE_MAX, REASON_MAX, SHORT_MAX, clean_text, reason_problem
 
 
 def _section_query(session, school_year_id, adviser_user_id):
@@ -285,8 +286,14 @@ def _record_panel(session, enrollment, checked, current_user, panel_id):
     deleted = [t for t in record.tables if t.group == "deleted"]
     with st.form(f"withdraw_{enrollment.id}"):
         authorized_by = st.selectbox("Authorized by", options=authorizers)
-        reason = st.text_area("Reason — required", placeholder="e.g. Not enrolled in LIS per school head's directive")
-        confirm = st.text_input(f"Type the learner's last name ({record.last_name}) to confirm")
+        reason = st.text_area(
+            "Reason — required",
+            placeholder="e.g. Not enrolled in LIS per school head's directive",
+            max_chars=REASON_MAX,
+        )
+        confirm = st.text_input(
+            f"Type the learner's last name ({record.last_name}) to confirm", max_chars=SHORT_MAX
+        )
         acknowledged = st.checkbox(
             "I understand this deletes "
             + ", ".join(f"{t.total} {t.label.lower()}" for t in deleted)
@@ -589,12 +596,15 @@ def _roster_tab(session, adviser_user_id, current_user):
                     "Derogatory record", value=enrollment.derogatory_record, key=f"enr_derog_{enrollment.id}"
                 )
                 general_remarks = st.text_area(
-                    "General remarks", value=enrollment.general_remarks or "", key=f"enr_remarks_{enrollment.id}"
+                    "General remarks",
+                    value=enrollment.general_remarks or "",
+                    key=f"enr_remarks_{enrollment.id}",
+                    max_chars=NOTE_MAX,
                 )
                 col1, col2, col3 = st.columns(3)
-                t1 = col1.text_area("Term 1 adviser comment", value=enrollment.term1_adviser_comment or "", key=f"enr_t1_{enrollment.id}")
-                t2 = col2.text_area("Term 2 adviser comment", value=enrollment.term2_adviser_comment or "", key=f"enr_t2_{enrollment.id}")
-                t3 = col3.text_area("Term 3 adviser comment", value=enrollment.term3_adviser_comment or "", key=f"enr_t3_{enrollment.id}")
+                t1 = col1.text_area("Term 1 adviser comment", value=enrollment.term1_adviser_comment or "", key=f"enr_t1_{enrollment.id}", max_chars=NOTE_MAX)
+                t2 = col2.text_area("Term 2 adviser comment", value=enrollment.term2_adviser_comment or "", key=f"enr_t2_{enrollment.id}", max_chars=NOTE_MAX)
+                t3 = col3.text_area("Term 3 adviser comment", value=enrollment.term3_adviser_comment or "", key=f"enr_t3_{enrollment.id}", max_chars=NOTE_MAX)
 
                 if st.form_submit_button("Save"):
                     enrollment.derogatory_record = derogatory
@@ -644,7 +654,9 @@ def _roster_tab(session, adviser_user_id, current_user):
                         key=f"correct_section_to_{enrollment.id}",
                     )
                     correction_reason = st.text_input(
-                        "Reason — required", key=f"correct_section_reason_{enrollment.id}"
+                        "Reason — required",
+                        key=f"correct_section_reason_{enrollment.id}",
+                        max_chars=REASON_MAX,
                     )
                     if st.form_submit_button("Move to this section"):
                         try:
@@ -722,6 +734,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                     reason = st.text_input(
                         f"Reason for removing {len(to_remove)} ticked movement(s) — required",
                         key=reason_key,
+                        max_chars=REASON_MAX,
                         on_change=keep_panel_open,
                         args=(panel_id,),
                     )
@@ -729,8 +742,9 @@ def _roster_tab(session, adviser_user_id, current_user):
                         f"Remove {len(to_remove)} ticked movement(s)",
                         key=f"movement_delete_btn_{enrollment.id}",
                     ):
-                        if not reason.strip():
-                            flash("error", "A reason is required to remove a movement.")
+                        problem = reason_problem(reason)
+                        if problem:
+                            flash("error", problem)
                         else:
                             for m in to_remove:
                                 # Recorded before the row goes, and rolled
@@ -750,7 +764,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                                         "remarks": m.remarks,
                                     },
                                     new=None,
-                                    reason=reason.strip(),
+                                    reason=clean_text(reason),
                                 )
                                 session.delete(m)
                             # enrollment_status isn't derived on read — "Log
@@ -840,7 +854,11 @@ def _roster_tab(session, adviser_user_id, current_user):
                     # "Others (Specify)" carries no fixed sub-reason on the
                     # template itself.
                     sub_reason = st.text_input(
-                        "Specify reason", key=sub_key, on_change=keep_panel_open, args=(panel_id,)
+                        "Specify reason",
+                        key=sub_key,
+                        max_chars=SHORT_MAX,
+                        on_change=keep_panel_open,
+                        args=(panel_id,),
                     )
 
             with st.form(f"add_movement_{enrollment.id}"):
@@ -853,21 +871,23 @@ def _roster_tab(session, adviser_user_id, current_user):
                 movement_form = f"add_movement_{enrollment.id}"
                 details = None
                 if not is_nls_or_dropped:
-                    details = text_field("Details", key=f"{movement_form}.details")
+                    details = text_field("Details", key=f"{movement_form}.details", max_chars=NOTE_MAX)
                 col1, col2 = st.columns(2)
                 previous_school = text_field(
                     "Previous school" + (" (required)" if is_transferred_in else " (if applicable)"),
                     key=f"{movement_form}.previous_school",
                     container=col1,
+                    max_chars=ADDRESS_MAX,
                     disabled=is_transferred_out,
                 )
                 receiving_school = text_field(
                     "Receiving school" + (" (required)" if is_transferred_out else " (if applicable)"),
                     key=f"{movement_form}.receiving_school",
                     container=col2,
+                    max_chars=ADDRESS_MAX,
                     disabled=is_transferred_in,
                 )
-                remarks = text_field("Remarks", key=f"{movement_form}.remarks")
+                remarks = text_field("Remarks", key=f"{movement_form}.remarks", max_chars=NOTE_MAX)
 
                 if st.form_submit_button("Log movement"):
                     error = None
@@ -948,11 +968,14 @@ def _roster_tab(session, adviser_user_id, current_user):
                     )
                     with st.form(f"remove_override_{ov.id}"):
                         remove_reason = st.text_area(
-                            "Reason for removing", key=f"remove_override_reason_{ov.id}"
+                            "Reason for removing",
+                            key=f"remove_override_reason_{ov.id}",
+                            max_chars=REASON_MAX,
                         )
                         if st.form_submit_button("Remove this substitution"):
-                            if not remove_reason.strip():
-                                st.error("A reason is required.")
+                            problem = reason_problem(remove_reason)
+                            if problem:
+                                st.error(problem)
                             else:
                                 audit_service.record(
                                     session,
@@ -965,7 +988,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                                         "substitute_section_subject_offering_id": ov.substitute_section_subject_offering_id,
                                     },
                                     new=None,
-                                    reason=remove_reason.strip(),
+                                    reason=clean_text(remove_reason),
                                 )
                                 session.delete(ov)
                                 if try_commit(session, "Substitution removed."):
@@ -1016,18 +1039,19 @@ def _roster_tab(session, adviser_user_id, current_user):
                         "Reason",
                         key=f"override_reason_{enrollment.id}",
                         placeholder="e.g. already passed this subject at their previous school",
+                        max_chars=REASON_MAX,
                     )
                     if st.form_submit_button("Add substitution"):
                         if substitute_choice is None:
                             st.error("No substitute offering available for that term.")
-                        elif not override_reason.strip():
-                            st.error("A reason is required.")
+                        elif problem := reason_problem(override_reason):
+                            st.error(problem)
                         else:
                             override = EnrollmentSubjectOverride(
                                 enrollment_id=enrollment.id,
                                 original_section_subject_offering_id=original_choice,
                                 substitute_section_subject_offering_id=substitute_choice,
-                                reason=override_reason.strip(),
+                                reason=clean_text(override_reason),
                                 created_by_user_id=current_user.id,
                             )
                             session.add(override)
@@ -1056,7 +1080,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                                     "original_section_subject_offering_id": original_choice,
                                     "substitute_section_subject_offering_id": substitute_choice,
                                 },
-                                reason=override_reason.strip(),
+                                reason=clean_text(override_reason),
                             )
                             if try_commit(session, "Substitution added."):
                                 recompute_enrollment_grades_batch(session, [enrollment.id])

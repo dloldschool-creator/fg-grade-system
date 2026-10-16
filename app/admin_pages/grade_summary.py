@@ -33,6 +33,7 @@ from app.models.grades import (
 )
 from app.models.learners import Enrollment, Learner
 from app.roster_order import learner_order_by
+from app.text_rules import REASON_MAX, clean_text, reason_problem
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import CombinedLearningArea, CombinedLearningAreaComponent, SectionSubjectOffering, Subject
 
@@ -146,11 +147,15 @@ def _finalization_section(session, current_user, enrollment: Enrollment, summary
         # Registrar/Adviser).
         if current_user.has_role("SUPER_ADMIN") and not read_only:
             with st.form(f"reopen_{enrollment.id}"):
-                reason = st.text_area("Reopen reason (required)", key=f"reopen_reason_{enrollment.id}")
+                reason = st.text_area(
+                    "Reopen reason (required)", key=f"reopen_reason_{enrollment.id}", max_chars=REASON_MAX
+                )
                 if st.form_submit_button("Reopen"):
-                    if not reason:
-                        st.error("A reason is required.")
+                    problem = reason_problem(reason)
+                    if problem:
+                        st.error(problem)
                     else:
+                        reason = clean_text(reason)
                         now = datetime.now(timezone.utc)
                         latest_record.status = FinalizationRecordStatus.REOPENED
                         latest_record.reopened_by_user_id = current_user.id

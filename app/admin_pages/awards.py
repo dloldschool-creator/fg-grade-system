@@ -27,6 +27,7 @@ from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
 from app.roster_order import learner_order_by
+from app.text_rules import ADDRESS_MAX, REASON_MAX, SHORT_MAX, clean_text, reason_problem
 
 
 def _load_award_context(session, enrollments, version, version_choice, term_choice) -> dict:
@@ -239,10 +240,12 @@ def _certificate_settings(version, school, school_year):
                 name = col1.text_input(
                     f"Signatory {i + 1} name{label_suffix}", value=default_name,
                     key=f"cert_signame_{i}", on_change=keep_panel_open, args=(_panel,),
+                    max_chars=SHORT_MAX,
                 )
                 position = col2.text_input(
                     f"Signatory {i + 1} position{label_suffix}", value=default_position,
                     key=f"cert_sigpos_{i}", on_change=keep_panel_open, args=(_panel,),
+                    max_chars=SHORT_MAX,
                 )
                 if name:
                     signatories.append((name, position))
@@ -259,6 +262,7 @@ def _certificate_settings(version, school, school_year):
             value=school_year.recognition_venue or "",
             key="cert_venue",
             on_change=keep_panel_open, args=(_panel,),
+            max_chars=ADDRESS_MAX,
         )
     return signatories, issued_on, venue
 
@@ -426,7 +430,7 @@ def render() -> None:
                         # there's no policy-derived name to fall back on,
                         # so this is the only source of the name.
                         override_award_name = st.text_input(
-                            "Award name (if eligible)", key=f"oan_{award.id}"
+                            "Award name (if eligible)", key=f"oan_{award.id}", max_chars=SHORT_MAX
                         )
                     elif version.tier_thresholds:
                         # A ladder: the auto-computed name is whichever
@@ -445,11 +449,15 @@ def render() -> None:
                         # there's nothing for the admin to type.
                         override_award_name = policy_name
                         st.caption(f"Award name (if eligible): **{policy_name}**")
-                    override_reason = st.text_area("Reason for override", key=f"orr_{award.id}")
+                    override_reason = st.text_area(
+                        "Reason for override", key=f"orr_{award.id}", max_chars=REASON_MAX
+                    )
                     if st.form_submit_button("Apply override"):
-                        if not override_reason:
-                            st.error("A reason is required.")
+                        problem = reason_problem(override_reason)
+                        if problem:
+                            st.error(problem)
                         else:
+                            override_reason = clean_text(override_reason)
                             set_award_override(
                                 session,
                                 award,

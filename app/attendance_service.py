@@ -28,6 +28,7 @@ from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.models.rbac import User
 from app.roster_order import learner_sort_key
+from app.text_rules import COMPOSED_REASON_MAX, validate_reason
 
 # §28's SY 2026-2027 workbook configuration, kept as reference targets the
 # Academic Calendar page displays alongside the generated counts — NOT as
@@ -558,6 +559,9 @@ def reopen_month(
     # simultaneous Reopens would otherwise both see FINALIZED and the second
     # would overwrite the first's reason, user and timestamp. (`version` is a
     # plain column here, not a SQLAlchemy version_id_col, so it can't catch it.)
+    # The composed limit, not REASON_MAX: withdrawal wraps its typed reason
+    # in the learner's name and authorizer before calling this.
+    reason = validate_reason(reason, max_chars=COMPOSED_REASON_MAX)
     session.refresh(status, with_for_update=True)
     if status.status != FinalizationState.FINALIZED:
         raise ValueError("This month is not finalized — someone may have reopened it already.")

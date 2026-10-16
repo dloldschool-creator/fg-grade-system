@@ -18,6 +18,7 @@ from app.models.enums import EnrollmentStatus, GradeEncodingStatus, GradeWorkflo
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner
 from app.roster_order import learner_order_by, learner_sort_key
+from app.text_rules import REASON_MAX, clean_text, reason_problem
 from app.models.organization import SchoolYear, Term
 from app.models.subjects import (
     EnrollmentSubjectOverride,
@@ -376,6 +377,7 @@ def render() -> None:
                             "Reason",
                             key=generation_key(f"gradebook_{offering.id}", f"reason_{offering.id}_{enrollment.id}"),
                             placeholder="Reason for blanking (required if ticked)",
+                            max_chars=REASON_MAX,
                             label_visibility="collapsed",
                         )
                         if has_grade
@@ -406,15 +408,15 @@ def render() -> None:
                 # before anything is written, so a missing reason blocks the
                 # whole submit rather than silently skipping just that row.
                 missing_reason = [
-                    learner_names.get(enrollment_id, "?")
+                    f"{learner_names.get(enrollment_id, '?')} ({problem.rstrip('.')})"
                     for enrollment_id, (_raw_value, clear, reason) in grade_inputs.items()
-                    if clear and not (reason or "").strip()
+                    if clear and (problem := reason_problem(reason))
                 ]
                 if missing_reason:
                     flash(
                         "error",
-                        "Ticked Blank but no reason given for: "
-                        + ", ".join(missing_reason)
+                        "Ticked Blank but the reason can't be accepted for: "
+                        + "; ".join(missing_reason)
                         + ". Fill in why, then press the button again.",
                     )
                     st.rerun()
@@ -484,7 +486,7 @@ def render() -> None:
                                 audit_service.GRADE_CHANGED,
                                 previous,
                                 {"official_grade": grade_value, "status": existing.status},
-                                reason.strip() if clear else None,
+                                clean_text(reason) if clear else None,
                             )
                         )
                         changed += 1

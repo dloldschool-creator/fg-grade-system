@@ -30,6 +30,7 @@ from app.live_search import like_pattern, live_search, search_words
 from app.models.admin import AuditLog
 from app.models.learners import Learner
 from app.models.rbac import User
+from app.text_rules import REASON_MAX, SHORT_MAX, reason_problem
 
 PAGE_SIZE = 100
 ANY = "— any —"
@@ -346,16 +347,16 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
     with st.form("audit_archive_delete"):
         confirmed_saved = st.checkbox("I have downloaded and safely stored this file.")
         phrase = f"DELETE {count} LOGS"
-        typed = st.text_input(f"Type “{phrase}” to confirm")
-        reason = st.text_area("Reason (required)")
+        typed = st.text_input(f"Type “{phrase}” to confirm", max_chars=SHORT_MAX)
+        reason = st.text_area("Reason (required)", max_chars=REASON_MAX)
         submitted = st.form_submit_button("Permanently delete these entries", type="primary")
         if submitted:
             if not confirmed_saved:
                 flash("error", "Confirm you've downloaded and saved the file first.")
             elif typed != phrase:
                 flash("error", "Confirmation text didn't match — nothing was deleted.")
-            elif not reason.strip():
-                flash("error", "A reason is required (§50).")
+            elif problem := reason_problem(reason):
+                flash("error", problem)
             else:
                 try:
                     audit_archive_service.delete_before(

@@ -54,7 +54,7 @@ def test_delete_before_refuses_a_cutoff_inside_the_protected_window(session):
             before=datetime.now(timezone.utc) - timedelta(days=1),
             expected_count=0,
             actor_user_id=None,
-            reason="test",
+            reason="Routine archive test",
         )
 
 
@@ -69,7 +69,7 @@ def test_delete_before_refuses_a_stale_expected_count(session):
 
     with pytest.raises(ValueError, match="entries now match"):
         audit_archive_service.delete_before(
-            session, before=before, expected_count=999, actor_user_id=None, reason="test"
+            session, before=before, expected_count=999, actor_user_id=None, reason="Routine archive test"
         )
 
     # Nothing was deleted — a mismatch must refuse before touching any row.

@@ -18,6 +18,7 @@ from app.admin_pages._helpers import (
 from app.auth import require_role
 from app.models.academic_structure import GradeLevel, Track
 from app.models.subjects import SectionSubjectOffering, Subject, SubjectCategory
+from app.text_rules import SHORT_MAX
 
 # Names the uploader's generation, so a successful import can drop the
 # file rather than re-validating it against the rows it just wrote.
@@ -31,8 +32,8 @@ def _categories_tab(session):
     for cat in categories:
         with st.form(f"edit_cat_{cat.id}"):
             col1, col2, col3 = st.columns([2, 4, 2])
-            code = col1.text_input("Code", value=cat.code, key=f"cat_code_{cat.id}")
-            name = col2.text_input("Name", value=cat.name, key=f"cat_name_{cat.id}")
+            code = col1.text_input("Code", value=cat.code, key=f"cat_code_{cat.id}", max_chars=SHORT_MAX)
+            name = col2.text_input("Name", value=cat.name, key=f"cat_name_{cat.id}", max_chars=SHORT_MAX)
             if col3.form_submit_button("Save"):
                 cat.code = code.upper()
                 cat.name = name
@@ -64,6 +65,9 @@ def _validate_subject_row(row, gl_by_code, cat_by_code, track_by_code, taken_cod
 
     if not code or not official_name or not short_name:
         return None, "code, official_name, and short_name are required"
+    for label, value in (("code", code), ("official_name", official_name), ("short_name", short_name)):
+        if len(value) > SHORT_MAX:
+            return None, f"{label} is longer than {SHORT_MAX} characters"
     if code in taken_codes:
         return None, f"code '{code}' is already used (existing subject or earlier row in this file)"
     if gl_code not in gl_by_code:
@@ -220,12 +224,14 @@ def _subjects_tab(session):
     for subject in subjects:
         with st.expander(f"{subject.official_name} ({gl_by_id[subject.grade_level_id].code})"):
             with st.form(f"edit_subject_{subject.id}"):
-                code = st.text_input("Code", value=subject.code, key=f"subj_code_{subject.id}")
+                code = st.text_input("Code", value=subject.code, key=f"subj_code_{subject.id}", max_chars=SHORT_MAX)
                 official_name = st.text_input(
-                    "Official name", value=subject.official_name, key=f"subj_on_{subject.id}"
+                    "Official name", value=subject.official_name, key=f"subj_on_{subject.id}",
+                    max_chars=SHORT_MAX,
                 )
                 short_name = st.text_input(
-                    "Short name", value=subject.short_name, key=f"subj_sn_{subject.id}"
+                    "Short name", value=subject.short_name, key=f"subj_sn_{subject.id}",
+                    max_chars=SHORT_MAX,
                 )
                 gl_choice = st.selectbox(
                     "Grade level",

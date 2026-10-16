@@ -27,6 +27,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 
 from app.models.admin import AuditLog
+from app.text_rules import COMPOSED_REASON_MAX, clean_text, reason_problem
 
 # --- Action vocabulary -----------------------------------------------------
 # Kept as constants rather than free strings so the viewer can filter on
@@ -224,8 +225,15 @@ def record(
     transaction as the change it describes, so they succeed or fail
     together.
     """
-    if action in REASON_REQUIRED and not (reason or "").strip():
-        raise ValueError(f"{action} requires a reason (§50)")
+    if action in REASON_REQUIRED:
+        # The backstop under every page and service check. Composed limit,
+        # because some callers wrap the typed reason before recording it.
+        problem = reason_problem(reason, max_chars=COMPOSED_REASON_MAX)
+        if problem:
+            raise ValueError(f"{action} requires a valid reason (§50): {problem}")
+        # Only a required reason is normalised. Other actions keep exactly
+        # what the caller recorded (rule 8) — newlines included.
+        reason = clean_text(reason)
 
     entry = AuditLog(
         user_id=user_id,
