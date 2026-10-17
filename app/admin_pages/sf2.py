@@ -67,15 +67,20 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
     return pd.DataFrame(frame_rows)
 
 
-def _attendance_link() -> None:
-    """Where the month is encoded and finalized. Callers draw it only for
-    someone who may go there: a School Head cannot reach Attendance, and a
-    link to a page missing from their sidebar leads nowhere."""
-    st.page_link(
-        st.Page(attendance.render, title="Attendance & SF2", url_path=ATTENDANCE_URL_PATH),
-        label="Go to Attendance & SF2 to encode or finalize this month",
-        icon="🗒️",
-    )
+def _attendance_link(school_year_id, section_id, month: tuple[int, int]) -> None:
+    """Where the month is encoded and finalized, opened on this same school
+    year, section and month. Callers draw it only for someone who may go
+    there: a School Head cannot reach Attendance, and a link to a page
+    missing from their sidebar leads nowhere."""
+    if st.button("Go to Attendance & SF2 to encode or finalize this month", icon="🗒️"):
+        st.session_state[attendance.HANDOFF_KEY] = {
+            "school_year_id": school_year_id,
+            "section_id": section_id,
+            "month": month,
+        }
+        st.switch_page(
+            st.Page(attendance.render, title="Attendance & SF2", url_path=ATTENDANCE_URL_PATH)
+        )
 
 
 def render() -> None:
@@ -147,7 +152,7 @@ def render() -> None:
                 "it on the Attendance & SF2 page before it is submitted."
             )
         if current_user.has_role("REGISTRAR", "ADVISER"):
-            _attendance_link()
+            _attendance_link(sy_choice, section_choice, month_choice)
         render_reprint_notice(session, current_user, section, status)
 
         st.divider()

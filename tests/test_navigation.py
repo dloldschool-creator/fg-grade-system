@@ -139,3 +139,51 @@ def test_the_sf2_pages_link_to_attendance_resolves():
 
     module_at = {url_path: module for _h, module, _t, url_path, _r in ENTRIES}
     assert module_at[sf2.ATTENDANCE_URL_PATH] is attendance
+
+
+def test_the_sf2_button_opens_attendance_on_the_same_selection(monkeypatch):
+    """The SF2 page's "Go to Attendance & SF2" button hands over its school
+    year, section and month. A wrong key fails silently — the page just
+    opens on its defaults — which happened once while it was built."""
+    import inspect
+    from types import SimpleNamespace
+
+    from app.admin_pages import _helpers, attendance, sf2
+
+    state = {}
+    fake_st = SimpleNamespace(session_state=state)
+    monkeypatch.setattr(attendance, "st", fake_st)
+    monkeypatch.setattr(_helpers, "st", fake_st)
+
+    # What the SF2 button stores is what Attendance reads.
+    payload = {"school_year_id": "SY", "section_id": "SEC", "month": (2026, 9)}
+    button = inspect.getsource(sf2._attendance_link)
+    assert "attendance.HANDOFF_KEY" in button
+    assert all(f'"{name}"' in button for name in payload)
+
+    state[attendance.HANDOFF_KEY] = payload
+    attendance._apply_handoff()
+    grade_key, strand_key, section_key = _helpers.picker_keys(attendance.PICKER_KEY)
+    assert state == {
+        attendance.SCHOOL_YEAR_KEY: "SY",
+        grade_key: _helpers.ALL,
+        strand_key: _helpers.ALL,
+        section_key: "SEC",
+        attendance.MONTH_KEY: (2026, 9),
+    }
+
+    # And those are the keys the page's boxes are built with.
+    page = inspect.getsource(attendance.render)
+    assert "key=SCHOOL_YEAR_KEY" in page and "key=MONTH_KEY" in page
+    assert "key=PICKER_KEY" in page
+
+
+def test_the_section_picker_drops_a_section_it_cannot_offer():
+    """Another school year's section, or a preselected one the viewer may
+    not pick, must not reach the keyed box — it would raise."""
+    import inspect
+
+    from app.admin_pages import _helpers
+
+    source = inspect.getsource(_helpers.section_picker)
+    assert source.index("_forget_stale(section_key") < source.index("key=section_key")

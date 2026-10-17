@@ -8,10 +8,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app import audit_service
 from app.admin_pages._helpers import (
+    _forget_stale,
     clear_text_fields,
     flash,
     generation_key,
     get_session,
+    preselect_section,
     render_flashes,
     render_reprint_notice,
     section_picker,
@@ -538,6 +540,26 @@ def _finalization_panel(
         st.rerun()
 
 
+# The SF2 page's "go to Attendance" button leaves the school year, section and
+# month here. Not in the widgets' own keys: Streamlit drops a keyed widget's
+# state in any run that does not draw it, so what is set on the SF2 page is
+# gone by the time this page runs.
+HANDOFF_KEY = "attendance_handoff"
+PICKER_KEY = "attendance"
+SCHOOL_YEAR_KEY = "attendance_school_year"
+MONTH_KEY = "attendance_month"
+
+
+def _apply_handoff() -> None:
+    """Start the pickers on what the SF2 page had selected, once."""
+    handoff = st.session_state.pop(HANDOFF_KEY, None)
+    if not handoff:
+        return
+    st.session_state[SCHOOL_YEAR_KEY] = handoff["school_year_id"]
+    preselect_section(PICKER_KEY, handoff["section_id"])
+    st.session_state[MONTH_KEY] = handoff["month"]
+
+
 def _print_sf2(section, school_year_id, year: int, month: int, state: FinalizationState) -> None:
     """The month's SF2, offered only once it is finalized.
 
@@ -575,6 +597,7 @@ def render() -> None:
     render_flashes()
 
     adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR")
+    _apply_handoff()
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -583,11 +606,14 @@ def render() -> None:
             return
         sy_by_id = {sy.id: sy for sy in school_years}
         sy_choice = st.selectbox(
-            "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
+            "School year",
+            options=[sy.id for sy in school_years],
+            format_func=lambda v: sy_by_id[v].name,
+            key=SCHOOL_YEAR_KEY,
         )
 
         section = section_picker(
-            session, sy_choice, key="attendance",
+            session, sy_choice, key=PICKER_KEY,
             adviser_user_id=current_user.id if adviser_scoped else None,
         )
         if section is None:
@@ -606,11 +632,13 @@ def render() -> None:
             default_month_index = months.index((today.year, today.month))
         except ValueError:
             default_month_index = 0
+        _forget_stale(MONTH_KEY, months)
         month_choice = st.selectbox(
             "Month",
             options=months,
             format_func=lambda ym: f"{_calendar.month_name[ym[1]]} {ym[0]}",
             index=default_month_index,
+            key=MONTH_KEY,
         )
         year, month = month_choice
 

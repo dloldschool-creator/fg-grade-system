@@ -59,6 +59,24 @@ def picker_options(sections, grade_levels, strands, grade_choice=ALL):
     return present_grades, present_strands
 
 
+def picker_keys(key: str) -> tuple[str, str, str]:
+    """The session-state keys of a `section_picker`'s Grade level, Strand and
+    Section boxes. One definition, so `preselect_section` writes exactly the
+    keys the picker reads."""
+    return f"{key}_grade", f"{key}_strand", f"{key}_section"
+
+
+def preselect_section(key: str, section_id) -> None:
+    """Open a `section_picker` on `section_id` the next time it is drawn —
+    e.g. a page handing its selection to another. The filters go back to
+    "all", or a grade or strand left over from earlier could hide it. A
+    section the viewer may not pick is dropped by the picker itself."""
+    grade_key, strand_key, section_key = picker_keys(key)
+    st.session_state[grade_key] = ALL
+    st.session_state[strand_key] = ALL
+    st.session_state[section_key] = section_id
+
+
 def section_filters(
     sections,
     grade_levels: dict,
@@ -89,7 +107,7 @@ def section_filters(
     # Read the grade level out of session state before laying anything out:
     # the strand options depend on it, and Streamlit has already stored the
     # new grade by the time this run draws the strand box.
-    grade_key, strand_key = f"{key}_grade", f"{key}_strand"
+    grade_key, strand_key, _ = picker_keys(key)
     grade_choice = st.session_state.get(grade_key, ALL)
     present_grades, present_strands = picker_options(
         sections, grade_levels.values(), strands.values(), grade_choice
@@ -216,11 +234,16 @@ def section_picker(
         return None
 
     by_id = {s.id: s for s in visible}
+    section_key = picker_keys(key)[2]
+    # A stored section that is no longer an option — another school year's,
+    # one a handoff preselected that this viewer can't pick — would make the
+    # keyed box raise; drop it and fall back to the first.
+    _forget_stale(section_key, list(by_id))
     chosen = target.selectbox(
         label,
         options=[s.id for s in visible],
         format_func=lambda v: by_id[v].name,
-        key=f"{key}_section",
+        key=section_key,
     )
     return by_id[chosen]
 
