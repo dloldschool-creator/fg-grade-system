@@ -4,7 +4,13 @@ from datetime import date
 import streamlit as st
 
 from app import audit_service
-from app.admin_pages._helpers import flash, get_session, render_flashes, try_commit
+from app.admin_pages._helpers import (
+    flash,
+    flush_or_rollback,
+    get_session,
+    render_flashes,
+    try_commit,
+)
 from app.attendance_service import (
     WORKBOOK_CLASS_DAY_TARGETS,
     class_days_in_month,
@@ -13,6 +19,7 @@ from app.attendance_service import (
 )
 from app.auth import require_role
 from app.display_time import current_month_index
+from app.finalized_month_changes import apply_calendar_flip
 from app.models.attendance import AcademicCalendarDate
 from app.models.organization import SchoolYear, Term
 from app.text_rules import REASON_MAX, clean_text, reason_problem
@@ -146,6 +153,7 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                         day.is_default_class_day = is_class_day
                         day.is_final_class_day = is_final
                         day.note = clean_text(note) or None
+                        effect = None
                         if changed_class_day:
                             day.is_override = True
                             day.overridden_by_user_id = current_user.id
@@ -167,7 +175,22 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                             # sequence is a running count, so a gap here
                             # shifts every later day.
                             resequence_class_days(session, school_year.id)
-                        try_commit(session, f"Updated {day.calendar_date:%b %d, %Y}.")
+                            # Flushed inside the friendly-error handling, so
+                            # the queries below can't raise it as a traceback.
+                            if not flush_or_rollback(session):
+                                st.rerun()
+                            # Every section's month already finalized for
+                            # this date is flagged for reprint, or reopened
+                            # if the new class day is one nobody marked.
+                            effect = apply_calendar_flip(
+                                session, day, current_user.id, clean_text(note)
+                            )
+                        if (
+                            try_commit(session, f"Updated {day.calendar_date:%b %d, %Y}.")
+                            and effect
+                            and effect.message()
+                        ):
+                            flash("warning", effect.message())
                         st.rerun()
 
 

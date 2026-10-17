@@ -17,7 +17,7 @@ from sqlalchemy import func
 
 from app.admin_pages._helpers import get_session, render_flashes
 from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
-from app.attendance_service import display_state, reprint_pending
+from app.attendance_service import display_state, reprint_cause, reprint_pending
 from app.auth import require_role
 from app.display_time import format_time
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
@@ -244,14 +244,14 @@ def _attendance_status(session, sy_id) -> list[dict]:
     if not statuses:
         return []
 
-    # One query for the names of whoever reopened a month still awaiting a
-    # reprint — the only rows that show a name — not one per row.
-    reopener_ids = {
-        s.reopened_by_user_id for s in statuses if reprint_pending(s) and s.reopened_by_user_id
-    }
-    reopeners = (
-        {u.id: u.full_name for u in session.query(User).filter(User.id.in_(reopener_ids))}
-        if reopener_ids
+    # One query for the names of whoever reopened, or changed after
+    # finalizing, a month still awaiting a reprint — the only rows that
+    # show a name — not one per row.
+    causes = {s.id: reprint_cause(s) for s in statuses if reprint_pending(s)}
+    causer_ids = {c.user_id for c in causes.values() if c.user_id}
+    causers = (
+        {u.id: u.full_name for u in session.query(User).filter(User.id.in_(causer_ids))}
+        if causer_ids
         else {}
     )
 
@@ -261,8 +261,10 @@ def _attendance_status(session, sy_id) -> list[dict]:
     for status in sorted(statuses, key=lambda s: (s.year_month, sections[s.section_id].name)):
         awaiting = ""
         if reprint_pending(status):
-            who = reopeners.get(status.reopened_by_user_id, "someone")
-            awaiting = f"{format_time(status.reopened_at, fmt='%b %d')} by {who}"
+            cause = causes[status.id]
+            who = causers.get(cause.user_id, "someone")
+            what = "reopened" if cause.reopened else "changed after finalizing"
+            awaiting = f"{format_time(cause.at, fmt='%b %d')} by {who} ({what})"
         rows.append(
             {
                 "Section": sections[status.section_id].name,
@@ -346,7 +348,7 @@ def render() -> None:
                     f"{len(awaiting)} section-month(s) were reopened after being "
                     "finalized and are still waiting on a reprint. An SF2 or SF4 printed "
                     "before the reopen may be out of date — the adviser or registrar "
-                    "confirms the new copy on the Attendance or SF2 page.",
+                    "confirms the new copy on the Attendance & SF2 or SF2 page.",
                     icon="🖨️",
                 )
             st.dataframe(pd.DataFrame(attendance), hide_index=True, width="stretch")

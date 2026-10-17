@@ -44,12 +44,15 @@ ATTENDANCE_MONTH_FINALIZED = "ATTENDANCE_MONTH_FINALIZED"
 ATTENDANCE_MONTH_REOPENED = "ATTENDANCE_MONTH_REOPENED"
 # Confirmation that the SF2/SF4 of a reopened month was printed again.
 ATTENDANCE_REPRINT_ACKNOWLEDGED = "ATTENDANCE_REPRINT_ACKNOWLEDGED"
+# A finalized month's SF2/SF4 changed without a reopen — a calendar day
+# flipped, a movement logged or removed (app/finalized_month_changes.py).
+# Raises the same reprint notice a reopen does.
+ATTENDANCE_CHANGED_AFTER_FINALIZE = "ATTENDANCE_CHANGED_AFTER_FINALIZE"
 
 LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
-# No page offers this — `learner_movements` has no delete in the app, only
-# "Log movement" (§27). It exists for the rare correction a registrar has
-# to make outside the UI (a duplicate or mis-logged entry), so that
-# correction still leaves an audited trail rather than a silent DELETE.
+# A registrar or admin removing a duplicate or mis-logged movement on the
+# Enrollment page (the ticked "Remove" column, with a reason), so the
+# correction leaves an audited trail rather than a silent DELETE.
 LEARNER_MOVEMENT_DELETED = "LEARNER_MOVEMENT_DELETED"
 # The only way to change which section an enrollment sits in (a section
 # picked wrongly at enrolment). Refused once grades or attendance exist —

@@ -9,6 +9,7 @@ from app.admin_pages._helpers import (
     _forget_stale,
     clear_text_fields,
     flash,
+    flush_or_rollback,
     get_session,
     keep_panel_open,
     panel_is_open,
@@ -28,6 +29,12 @@ from app.enrollment_withdrawal import (
     withdrawal_history,
 )
 from app.enrollment_subject_overrides import load_overrides_by_enrollment
+from app.finalized_month_changes import (
+    apply_movement_change,
+    lock_movements,
+    movement_note,
+    removal_note,
+)
 from app.grading_service import recompute_enrollment_grades_batch
 from app.learner_access import editable_learner_ids
 from app.models.academic_structure import Section
@@ -422,7 +429,7 @@ def _withdrawn_tab(session):
         "*SF2/SF4 months affected* is what the withdrawal recorded: the copies that "
         "showed the learner. *Reprint not yet confirmed* is the live state: months "
         "the withdrawal reopened leave it when the adviser or registrar confirms the "
-        "reprint on the Attendance or SF2 page, and a month marked *not finalized "
+        "reprint on the Attendance & SF2 or SF2 page, and a month marked *not finalized "
         "yet* leaves it once finalized. An audit archive (Audit Log page) moves entries older "
         "than its cutoff into the export file — a withdrawal archived that way "
         "leaves this list, and the export file then holds its copy."
@@ -746,6 +753,9 @@ def _roster_tab(session, adviser_user_id, current_user):
                         if problem:
                             flash("error", problem)
                         else:
+                            # Before any write: locks the learner and reads
+                            # the log as it is now, not as this page rendered.
+                            log_before = lock_movements(session, enrollment)
                             for m in to_remove:
                                 # Recorded before the row goes, and rolled
                                 # back with it if the delete is refused —
@@ -781,7 +791,20 @@ def _roster_tab(session, adviser_user_id, current_user):
                                 else EnrollmentStatus.ENROLLED
                             )
                             enrollment.version += 1
-                            try_commit(session, f"Removed {len(to_remove)} movement(s).")
+                            # Flushed inside the friendly-error handling, so
+                            # the queries below can't raise it as a traceback.
+                            if not flush_or_rollback(session):
+                                st.rerun()
+                            effect = apply_movement_change(
+                                session,
+                                enrollment,
+                                before=log_before,
+                                changed=to_remove,
+                                user_id=current_user.id,
+                                note=removal_note(learner, to_remove, clean_text(reason)),
+                            )
+                            if try_commit(session, f"Removed {len(to_remove)} movement(s).") and effect.message():
+                                flash("warning", effect.message())
                         st.rerun()
 
             st.caption(
@@ -909,18 +932,18 @@ def _roster_tab(session, adviser_user_id, current_user):
                         # a Receiving school, and vice versa.
                         stored_previous_school = None if is_transferred_out else (previous_school or None)
                         stored_receiving_school = None if is_transferred_in else (receiving_school or None)
-                        session.add(
-                            LearnerMovement(
-                                enrollment_id=enrollment.id,
-                                movement_type=EnrollmentStatus(movement_type),
-                                effective_date=effective_date,
-                                details=stored_details or None,
-                                previous_school=stored_previous_school,
-                                receiving_school=stored_receiving_school,
-                                nls_reason=nls_reason,
-                                remarks=remarks or None,
-                            )
+                        log_before = lock_movements(session, enrollment)
+                        new_movement = LearnerMovement(
+                            enrollment_id=enrollment.id,
+                            movement_type=EnrollmentStatus(movement_type),
+                            effective_date=effective_date,
+                            details=stored_details or None,
+                            previous_school=stored_previous_school,
+                            receiving_school=stored_receiving_school,
+                            nls_reason=nls_reason,
+                            remarks=remarks or None,
                         )
+                        session.add(new_movement)
                         enrollment.enrollment_status = EnrollmentStatus(movement_type)
                         enrollment.version += 1
                         # §50 names "learner transferred" and "learner
@@ -946,8 +969,24 @@ def _roster_tab(session, adviser_user_id, current_user):
                                 else nls_reason or stored_details or remarks or None
                             ),
                         )
+                        # A date reaching back into a finalized month changes
+                        # that month's SF2/SF4 — flag it for reprint.
+                        if not flush_or_rollback(session):
+                            st.rerun()
+                        effect = apply_movement_change(
+                            session,
+                            enrollment,
+                            before=log_before,
+                            changed=[new_movement],
+                            user_id=current_user.id,
+                            note=movement_note(
+                                "logged", learner, new_movement.movement_type, effective_date
+                            ),
+                        )
                         if try_commit(session, "Movement logged."):
                             clear_text_fields(movement_form)
+                            if effect.message():
+                                flash("warning", effect.message())
                     st.rerun()
 
             st.subheader("Subject substitutions")

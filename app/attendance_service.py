@@ -5,6 +5,7 @@ rows.
 """
 
 import calendar as _calendar
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 from sqlalchemy import inspect
@@ -207,7 +208,7 @@ def active_window_for(session: Session, enrollment: Enrollment) -> ActiveWindow:
     )
 
 
-def _section_year_windows(
+def section_year_windows(
     session: Session, section_id, school_year_id
 ) -> list[tuple[Enrollment, Learner, ActiveWindow]]:
     """Every enrollment in this section for the year with its computed
@@ -223,9 +224,14 @@ def _section_year_windows(
     fast. See CLAUDE.md's Insights section for why `active_window_for` is
     avoided in a roster loop.
     """
+    # One section, or several at once (a calendar change reaches every
+    # section's finalized month in the same query).
+    sections = (
+        list(section_id) if isinstance(section_id, (list, tuple, set, frozenset)) else [section_id]
+    )
     enrollments = (
         session.query(Enrollment)
-        .filter_by(section_id=section_id, school_year_id=school_year_id)
+        .filter(Enrollment.section_id.in_(sections), Enrollment.school_year_id == school_year_id)
         .all()
     )
     if not enrollments:
@@ -277,7 +283,7 @@ def roster_for_month(
     """
     return [
         row
-        for row in _section_year_windows(session, section_id, school_year_id)
+        for row in section_year_windows(session, section_id, school_year_id)
         if appears_in_month(row[2], year, month)
     ]
 
@@ -300,7 +306,7 @@ def full_year_roster(
     transferred-in learner, say), which is exactly why Percentage of
     Enrolment can print above 100%.
     """
-    return _section_year_windows(session, section_id, school_year_id)
+    return section_year_windows(session, section_id, school_year_id)
 
 
 # --------------------------------------------------------------------------
@@ -565,6 +571,14 @@ def reopen_month(
     session.refresh(status, with_for_update=True)
     if status.status != FinalizationState.FINALIZED:
         raise ValueError("This month is not finalized — someone may have reopened it already.")
+    mark_reopened(status, user_id, reason)
+
+
+def mark_reopened(status: AttendanceMonthStatus, user_id, reason: str) -> None:
+    """The writes of a reopen, for a caller that has already locked the row
+    and seen it FINALIZED — `reopen_month` for one month, or a batch that
+    locked many in one query (`finalized_month_changes`). The reason must
+    already be validated."""
     status.status = FinalizationState.OPEN
     status.reopened_by_user_id = user_id
     status.reopened_at = datetime.now(timezone.utc)
@@ -572,19 +586,71 @@ def reopen_month(
     bump_version(status)
 
 
+def mark_changed_after_finalize(status: AttendanceMonthStatus, user_id, note: str) -> dict:
+    """Record that this FINALIZED month's SF2/SF4 changed without a reopen
+    (§33) — a calendar day flipped, a movement logged or removed. Same
+    locking contract as `mark_reopened`. Returns what it replaced, for the
+    audit entry's `previous`: a second change overwrites the first."""
+    previous = {
+        "changed_after_finalize_by_user_id": status.changed_after_finalize_by_user_id,
+        "changed_after_finalize_at": status.changed_after_finalize_at,
+        "change_after_finalize_note": status.change_after_finalize_note,
+    }
+    status.changed_after_finalize_by_user_id = user_id
+    status.changed_after_finalize_at = datetime.now(timezone.utc)
+    status.change_after_finalize_note = note
+    bump_version(status)
+    return previous
+
+
+@dataclass(frozen=True)
+class ReprintCause:
+    """Why a month's printed SF2/SF4 may be out of date: the latest reopen
+    or the latest change after finalizing, whichever came last."""
+
+    reopened: bool
+    at: datetime
+    user_id: object
+    text: str | None
+
+
+def reprint_cause(status: AttendanceMonthStatus | None) -> ReprintCause | None:
+    if status is None:
+        return None
+    causes = []
+    if status.reopened_at is not None:
+        causes.append(
+            ReprintCause(True, status.reopened_at, status.reopened_by_user_id, status.reopen_reason)
+        )
+    if status.changed_after_finalize_at is not None:
+        causes.append(
+            ReprintCause(
+                False,
+                status.changed_after_finalize_at,
+                status.changed_after_finalize_by_user_id,
+                status.change_after_finalize_note,
+            )
+        )
+    if not causes:
+        return None
+    return max(causes, key=lambda c: to_school_time(c.at))
+
+
 def reprint_pending(status: AttendanceMonthStatus | None) -> bool:
     """Does this month still owe a reprint of its SF2/SF4 (§33)?
 
-    True once it has been reopened, until someone acknowledges a reprint
-    *after* that reopen. Comparing the two timestamps, rather than clearing
-    a flag, is what makes a second reopen bring it back with nothing to
-    reset — and withdrawal's automatic reopen counts like any other.
+    True once it has been reopened, or changed after finalizing, until
+    someone acknowledges a reprint *after* the latest of those. Comparing
+    timestamps, rather than clearing a flag, is what makes a second reopen
+    or change bring it back with nothing to reset — and withdrawal's
+    automatic reopen counts like any other.
     """
-    if status is None or status.reopened_at is None:
+    cause = reprint_cause(status)
+    if cause is None:
         return False
     if status.reprint_acknowledged_at is None:
         return True
-    return to_school_time(status.reprint_acknowledged_at) < to_school_time(status.reopened_at)
+    return to_school_time(status.reprint_acknowledged_at) < to_school_time(cause.at)
 
 
 def acknowledge_reprint(
@@ -616,36 +682,44 @@ def acknowledge_reprint(
 def reprint_notice_for(
     session: Session, status: AttendanceMonthStatus | None, can_confirm: bool = False
 ) -> str | None:
-    """`reprint_notice` with the reopener's name looked up — the one call
-    Attendance and SF2 both make. Costs a query only while a reprint is
-    still pending."""
+    """`reprint_notice` with the name of whoever caused it looked up — the
+    one call Attendance and SF2 both make. Costs a query only while a
+    reprint is still pending."""
     if not reprint_pending(status):
         return None
     name = None
-    if status.reopened_by_user_id:
-        user = session.get(User, status.reopened_by_user_id)
+    cause = reprint_cause(status)
+    if cause.user_id:
+        user = session.get(User, cause.user_id)
         name = user.full_name if user else None
     return reprint_notice(status, name, can_confirm)
 
 
 def reprint_notice(
     status: AttendanceMonthStatus | None,
-    reopened_by_name: str | None,
+    caused_by_name: str | None,
     can_confirm: bool = False,
 ) -> str | None:
     """The "SF2 may need reprinting" flag (§33), or None once acknowledged.
 
-    Says when and why the month was reopened and leaves the judgement to
-    whoever holds the paper copy. What to do next depends on the state and
-    on the viewer: an open month cannot be acknowledged yet, and only
-    someone who `can_confirm` has a button to press, so everyone else is
-    told who does rather than pointed at nothing.
+    Says when and why the month was reopened, or what changed after it was
+    finalized, and leaves the judgement to whoever holds the paper copy.
+    What to do next depends on the state and on the viewer: an open month
+    cannot be acknowledged yet, and only someone who `can_confirm` has a
+    button to press, so everyone else is told who does rather than pointed
+    at nothing.
     """
     if not reprint_pending(status):
         return None
-    who = reopened_by_name or "someone"
-    when = format_time(status.reopened_at, fmt="%b %d, %Y %H:%M")
-    reason = f" — “{status.reopen_reason}”" if status.reopen_reason else ""
+    cause = reprint_cause(status)
+    who = caused_by_name or "someone"
+    when = format_time(cause.at, fmt="%b %d, %Y %H:%M")
+    if cause.reopened:
+        reason = f" — “{cause.text}”" if cause.text else ""
+        what = f"Reopened {when} by {who}{reason}."
+    else:
+        detail = f": {cause.text}" if cause.text else ""
+        what = f"Changed after it was finalized, {when} by {who}{detail}."
     if status.status == FinalizationState.FINALIZED and can_confirm:
         action = "Reprint it, then confirm below."
     elif status.status == FinalizationState.FINALIZED:
@@ -653,6 +727,6 @@ def reprint_notice(
     else:
         action = "Reprint it once the month is finalized again."
     return (
-        f"Reopened {when} by {who}{reason}. An SF2 or SF4 printed for this month "
-        f"before then may be out of date. {action}"
+        f"{what} An SF2 or SF4 printed for this month before then may be out of "
+        f"date. {action}"
     )

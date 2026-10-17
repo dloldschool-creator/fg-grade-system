@@ -537,6 +537,7 @@ def render_reprint_notice(session, current_user, section, status) -> None:
                 "year": status.year_month.year,
                 "month": status.year_month.month,
                 "reopened_at": status.reopened_at,
+                "changed_after_finalize_at": status.changed_after_finalize_at,
                 "reprint_acknowledged_by_user_id": status.reprint_acknowledged_by_user_id,
                 "reprint_acknowledged_at": status.reprint_acknowledged_at,
             },

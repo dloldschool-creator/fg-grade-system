@@ -90,7 +90,9 @@ def _status(state, **kwargs):
     return SimpleNamespace(
         status=state, version=1, reopened_by_user_id=None, reopened_at=None,
         reopen_reason=None, reprint_acknowledged_at=None,
-        reprint_acknowledged_by_user_id=None, **kwargs,
+        reprint_acknowledged_by_user_id=None, changed_after_finalize_at=None,
+        changed_after_finalize_by_user_id=None, change_after_finalize_note=None,
+        **kwargs,
     )
 
 
@@ -391,12 +393,26 @@ def test_the_withdrawn_tab_reads_the_live_flag(db_session):
 def test_a_failed_sf2_build_is_logged_with_which_form_it_was(caplog):
     import logging
 
-    from app.admin_pages.sf2 import _deferred_builders
+    from app.sf2_download import deferred_builders
 
-    build_xlsx, _ = _deferred_builders(uuid.uuid4(), uuid.uuid4(), 1999, 1)
+    build_xlsx, _ = deferred_builders(uuid.uuid4(), uuid.uuid4(), 1999, 1)
     with caplog.at_level(logging.ERROR), pytest.raises(Exception):
         build_xlsx()
     assert any(
         "SF2 download failed" in r.getMessage() and "1999-01" in r.getMessage()
         for r in caplog.records
     )
+
+
+@pytest.mark.parametrize("state", list(FinalizationState))
+def test_attendance_offers_the_sf2_only_once_the_month_is_finalized(monkeypatch, state):
+    """Advisers print the SF2 from Attendance, and only a finalized month
+    (2026-10-17): printing before finalizing is how a form that no longer
+    matches the saved attendance reaches the division."""
+    from app.admin_pages import attendance
+
+    offered = []
+    monkeypatch.setattr(attendance, "render_sf2_downloads", lambda *args: offered.append(args))
+    section = SimpleNamespace(id=uuid.uuid4(), name="TEST")
+    attendance._print_sf2(section, uuid.uuid4(), 1999, 1, state)
+    assert bool(offered) == (state == FinalizationState.FINALIZED)

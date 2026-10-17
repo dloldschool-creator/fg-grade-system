@@ -82,6 +82,16 @@ class AttendanceMonthStatus(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
     reprint_acknowledged_at: Mapped[datetime | None]
+    # §33: something outside the attendance grid changed this month's
+    # SF2/SF4 after it was finalized (a calendar day flipped, a movement
+    # logged or removed) — app/finalized_month_changes.py. Counts toward the
+    # reprint flag alongside reopened_at; kept apart from it so reopen_reason
+    # only ever describes a reopen.
+    changed_after_finalize_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    changed_after_finalize_at: Mapped[datetime | None]
+    change_after_finalize_note: Mapped[str | None] = mapped_column(String)
     # Stamped by _save_grid whenever a save actually changes something —
     # not just "the month was touched" (updated_at already covers that,
     # ambiguously, across Finalize/Reopen too).

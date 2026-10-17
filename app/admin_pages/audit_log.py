@@ -65,6 +65,7 @@ ACTION_GROUPS = {
         audit_service.ATTENDANCE_MONTH_FINALIZED,
         audit_service.ATTENDANCE_MONTH_REOPENED,
         audit_service.ATTENDANCE_REPRINT_ACKNOWLEDGED,
+        audit_service.ATTENDANCE_CHANGED_AFTER_FINALIZE,
     ],
     "Learners": [
         audit_service.LEARNER_CREATED,

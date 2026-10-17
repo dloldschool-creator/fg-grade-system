@@ -549,6 +549,34 @@ of each is in `docs/build-log.md`.
   itself. Don't clear it on finalize — finalizing is not evidence a
   reprint happened. `reopen_month` refuses a month that isn't FINALIZED, so a stale second
   Reopen can't overwrite the first one's reason.
+- **Advisers print the SF2 from Attendance, and the SF2 page is not
+  theirs** (2026-10-17). In the Excel workbook the SF2 sheet was where
+  attendance was typed, so advisers kept opening the SF2 page to encode,
+  whatever the guide said. The sidebar entry is now **Attendance & SF2**,
+  its **Print SF2** section offers the download only once the month is
+  FINALIZED (`attendance._print_sf2`), and the SF2 page admits only
+  SUPER_ADMIN, REGISTRAR and SCHOOL_HEAD, who can still print an unfinalized
+  month there with a warning. Both draw the buttons through
+  `app/sf2_download.py`. The SF2 page links back with `st.page_link`
+  resolved by url_path alone, so `sf2.ATTENDANCE_URL_PATH` must match
+  `streamlit_app.GROUPS` (`tests/test_navigation.py` checks it). Don't
+  give advisers the SF2 page back without discussion.
+- **A finalized month's SF2 can change without a reopen, and now says so**
+  (2026-10-17, `app/finalized_month_changes.py`). Three writers reach a
+  finalized month from outside the grid: an Academic Calendar day flipped
+  (school-wide, every section at once), a movement logged, and a movement
+  removed (registrar-only, Enrollment page — despite the comment on
+  `LEARNER_MOVEMENT_DELETED` saying no page does it). Each now **flags**
+  the month (`changed_after_finalize_*` columns, audited as
+  `ATTENDANCE_CHANGED_AFTER_FINALIZE`), and `reprint_pending` counts the
+  later of that and `reopened_at`. A change that leaves class days **nobody
+  marked** — a make-up day, or a removed movement widening the window —
+  **reopens** the month instead (the school's choice), because SF2 prints
+  an unmarked day blank, which reads as present; `printed_code` relies on
+  a finalized SF2 having no such gap. Logging a movement can only narrow
+  the window (latest entry, earliest exit), so only a removal can reopen.
+  A new writer of `academic_calendar_dates.is_default_class_day` or
+  `learner_movements` must call this module before its commit.
 - **Withdrawing an enrollment is not a movement, and it is the one
   delete of a learner's year** (2026-10-14). The school keeps this system
   in step with DepEd's LIS, and the school head may direct that a learner

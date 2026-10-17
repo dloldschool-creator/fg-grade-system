@@ -234,7 +234,7 @@ def correct_section(
             f"Attendance for {months} is finalized for one of the two sections, and "
             "moving the learner would change it. "
             + (
-                "Reopen that month on the Attendance page first, then try again."
+                "Reopen that month on the Attendance & SF2 page first, then try again."
                 if unrestricted
                 else "Ask the registrar to reopen it first."
             )

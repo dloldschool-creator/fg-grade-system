@@ -134,7 +134,7 @@ BY_ROLE = {
                 "has **grades or subject substitutions**, or when a month of their "
                 "attendance is **finalized** in either section. The message says "
                 "what is in the way. A finalized month you can reopen yourself on "
-                "the Attendance page (with a reason); for anything else, ask the "
+                "Attendance & SF2 (with a reason); for anything else, ask the "
                 "registrar, who has to decide what happens to those records.",
             ),
             (
@@ -261,6 +261,30 @@ BY_ROLE = {
             ),
             (
                 "Attendance",
+                "Encode and print the SF2 on one page: Attendance & SF2",
+                "There is no separate SF2 page for advisers, and nothing to "
+                "encode anywhere else. On **Grades & Attendance → Attendance & "
+                "SF2**:\n\n"
+                "1. Mark the absences and lates and press **Save attendance**, "
+                "as the month goes.\n"
+                "2. After the month's last class day, press **Finalize month**.\n"
+                "3. Download the SF2 (Excel or PDF) under **Print SF2**, at the "
+                "bottom of the same page.\n\n"
+                "The download only appears once the month is finalized, so the "
+                "SF2 you print always matches what is saved.\n\n"
+                "Most changes don't need a reopen. A class suspension is set "
+                "on the school calendar by the admin; a transfer or a drop is a "
+                "movement on the Enrollment page; a withdrawal reopens and "
+                "finalizes the month by itself. If one of these reaches a "
+                "month you already finalized, the page shows a reprint "
+                "reminder: download the SF2 again, print it, and press **I've "
+                "reprinted the SF2/SF4**. A make-up class added to a finalized "
+                "month reopens it instead, so you can mark that day and "
+                "finalize again. Reopen a month yourself only to correct a "
+                "learner's own mark.",
+            ),
+            (
+                "Attendance",
                 "Attendance starts as Present — click Save to record it",
                 "Every class day up to today shows **P**, so you only change the "
                 "exceptions. Those **P**s are not saved until you click **Save "
@@ -286,7 +310,7 @@ BY_ROLE = {
                 "Attendance",
                 "Finalizing a month locks it",
                 "Fix everything shown in red first. After finalizing, you can "
-                "still reopen it yourself on the Attendance page, with a reason. "
+                "still reopen it yourself on Attendance & SF2, with a reason. "
                 "If you already handed in that month's SF2, print a new one "
                 "once you finalize again. The page reminds you until you press "
                 "**I've reprinted the SF2/SF4**.",
@@ -453,13 +477,18 @@ BY_ROLE = {
                 "Enrollment & movements",
                 "A finalized attendance month can be reopened",
                 "You, an admin, or the section's adviser can reopen a finalized "
-                "month on the **Attendance** page, with a reason. Reopened months "
+                "month on the **Attendance & SF2** page, with a reason. Reopened months "
                 "are flagged on the **Dashboard** (*Reprint SF2/SF4?* column), on the SF2 "
                 "page and on Attendance: an SF2 or SF4 printed before the reopen "
                 "may be out of date, so collect a fresh copy once the month is "
                 "finalized again, then press **I've reprinted the SF2/SF4** on "
                 "either page. That clears the flag; the system can't tell on its "
-                "own that you did, so it waits for you.",
+                "own that you did, so it waits for you.\n\n"
+                "Logging or removing a movement whose date reaches into a "
+                "finalized month raises the same flag, because that month's "
+                "SF2 and SF4 change. If removing one puts a learner back on "
+                "days nobody marked, the month is reopened instead, so the "
+                "adviser can mark them.",
             ),
             (
                 "Learners & imports",
@@ -574,6 +603,17 @@ BY_ROLE = {
                 "(Eid, special non-working days, local suspensions). The page "
                 "shows a per-month comparison — those two months usually need a "
                 "manual adjustment, and changing a day needs a reason.",
+            ),
+            (
+                "School setup",
+                "Changing a day in a month already finalized",
+                "Every section whose attendance for that month is finalized is "
+                "affected, and the page tells you which. **Unticking** a class "
+                "day (a suspension) flags each one for an SF2/SF4 reprint; "
+                "nothing needs encoding. **Ticking** a new one (a make-up "
+                "class) reopens each section with learners who have no mark "
+                "that day — the SF2 would otherwise print the blank day as "
+                "present — so the advisers mark it and finalize again.",
             ),
             (
                 "Corrections & deleting",
