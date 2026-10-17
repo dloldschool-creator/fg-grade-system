@@ -398,27 +398,31 @@ def test_summary_percentage_columns_are_wide_enough():
     assert worksheet.column_dimensions["BX"].width == 13.0
 
 
-def test_sf2_page_builds_its_downloads_only_on_click():
+def test_sf2_downloads_are_built_only_on_click():
     """`st.download_button(data=bytes)` renders the form on every rerun.
-    The page passes callables instead, so the build happens on click; the
-    render function itself must not call the builders."""
+    The buttons get callables instead, so the build happens on click; the
+    code that draws them must not call the builders. Both the SF2 page and
+    Attendance (where advisers print) draw them through the one helper."""
     import inspect
 
-    from app.admin_pages import sf2
+    from app import sf2_download
+    from app.admin_pages import attendance, sf2
 
-    source = inspect.getsource(sf2.render)
+    source = inspect.getsource(sf2_download.render_sf2_downloads)
     assert "build_sf2_workbook(" not in source
     assert "workbook_to_pdf(" not in source
     assert "data=build_xlsx" in source and "data=build_pdf" in source
+    assert "render_sf2_downloads(" in inspect.getsource(sf2.render)
+    assert "render_sf2_downloads(" in inspect.getsource(attendance._print_sf2)
 
 
 def test_deferred_builders_open_their_own_session_and_produce_the_files():
     """They run on Streamlit's thread after the page's session has closed,
     so they must not lean on it — and they must produce real files."""
-    from app.admin_pages.sf2 import _deferred_builders
     from app.attendance_service import months_with_class_days, roster_for_month
     from app.database import SessionLocal
     from app.models.academic_structure import Section
+    from app.sf2_download import deferred_builders
 
     with SessionLocal() as session:
         target = None
@@ -432,6 +436,6 @@ def test_deferred_builders_open_their_own_session_and_produce_the_files():
     if target is None:
         pytest.skip("no section with learners and class days in the database")
 
-    build_xlsx, build_pdf = _deferred_builders(*target)
+    build_xlsx, build_pdf = deferred_builders(*target)
     assert build_xlsx()[:2] == b"PK"
     assert build_pdf()[:5] == b"%PDF-"

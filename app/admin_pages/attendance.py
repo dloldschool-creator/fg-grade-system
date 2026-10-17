@@ -39,6 +39,7 @@ from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
 from app.models.rbac import User
 from app.section_access import may_reopen_attendance_month
+from app.sf2_download import render_sf2_downloads
 from app.text_rules import REASON_MAX, clean_text, reason_problem
 
 # §30's printed codes. The DB stores the internal enum; these are only the
@@ -537,9 +538,34 @@ def _finalization_panel(
         st.rerun()
 
 
+def _print_sf2(section, school_year_id, year: int, month: int, state: FinalizationState) -> None:
+    """The month's SF2, offered only once it is finalized.
+
+    This is where advisers print it — the SF2 page is not in their sidebar
+    (2026-10-17). In the Excel workbook the SF2 sheet was where attendance
+    was typed, so advisers went to the SF2 page to encode and printed
+    whatever was there. Encoding, finalizing and printing on one page, in
+    that order, leaves no second page to mistake for the first. Registrars
+    and the School Head can still print an unfinalized month from the SF2
+    page, with a warning."""
+    if state != FinalizationState.FINALIZED:
+        st.info(
+            "Finalize this month above and its SF2 can be downloaded here. Until "
+            "then the figures can still change, so a printed copy could be out "
+            "of date."
+        )
+        return
+    st.caption(
+        "Generated from the attendance you encoded above. If something changes "
+        "after you print it, reopen the month, correct it, finalize again and "
+        "print a new copy."
+    )
+    render_sf2_downloads(section, school_year_id, year, month)
+
+
 def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER")
-    st.title("Attendance")
+    st.title("Attendance & SF2")
     st.caption(
         "**P** present · **X** absent · **T-L** late · **T-C** cutting. Late and "
         f"cutting both count as present. A **{NOT_ELIGIBLE}** (dot) means the learner "
@@ -676,3 +702,7 @@ def render() -> None:
             session, current_user, section, sy_choice, year, month,
             roster, class_days, has_unsaved_edits, pending_by_enrollment,
         )
+
+        st.divider()
+        st.subheader("Print SF2")
+        _print_sf2(section, sy_choice, year, month, current_state)

@@ -1,9 +1,9 @@
 import calendar as _calendar
-import logging
 
 import pandas as pd
 import streamlit as st
 
+from app.admin_pages import attendance
 from app.admin_pages._helpers import (
     get_session,
     render_flashes,
@@ -23,16 +23,12 @@ from app.display_time import current_month_index
 from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
-from app.xlsx_render import workbook_to_pdf
-from app.sf2_report import (
-    build_sf2_workbook,
-    paginate,
-    printed_code,
-    workbook_to_bytes,
-)
+from app.sf2_download import render_sf2_downloads
+from app.sf2_report import paginate, printed_code
 
-
-_LOGGER = logging.getLogger(__name__)
+# Must match the Attendance entry in streamlit_app.GROUPS — a page link is
+# resolved by url_path alone (tests/test_navigation.py checks the pair).
+ATTENDANCE_URL_PATH = "attendance"
 
 
 def _preview_frame(session, roster, class_days) -> pd.DataFrame:
@@ -71,50 +67,29 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
     return pd.DataFrame(frame_rows)
 
 
-def _deferred_builders(section_id, school_year_id, year: int, month: int):
-    """Two no-argument callables for `st.download_button(data=...)`.
-
-    Streamlit runs them on a separate thread *after* the script run, when the
-    page's own session is already closed — so each opens its own, and the
-    closures hold only ids and numbers, never the session or ORM objects.
-    """
-
-    def _workbook():
-        from app.database import SessionLocal
-
-        session = SessionLocal()
-        try:
-            return build_sf2_workbook(session, section_id, school_year_id, year, month)
-        except Exception:
-            # Streamlit logs the traceback and tells the browser the file
-            # failed, but not *which* form; name it so the log can be read.
-            _LOGGER.exception(
-                "SF2 download failed for section %s, %04d-%02d", section_id, year, month
-            )
-            raise
-        finally:
-            session.close()
-
-    def build_xlsx() -> bytes:
-        return workbook_to_bytes(_workbook())
-
-    def build_pdf() -> bytes:
-        return workbook_to_pdf(_workbook())
-
-    return build_xlsx, build_pdf
+def _attendance_link() -> None:
+    """Where the month is encoded and finalized. Callers draw it only for
+    someone who may go there: a School Head cannot reach Attendance, and a
+    link to a page missing from their sidebar leads nowhere."""
+    st.page_link(
+        st.Page(attendance.render, title="Attendance & SF2", url_path=ATTENDANCE_URL_PATH),
+        label="Go to Attendance & SF2 to encode or finalize this month",
+        icon="🗒️",
+    )
 
 
 def render() -> None:
-    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")
+    # No ADVISER (2026-10-17): advisers came here expecting to encode, as on
+    # the workbook's SF2 sheet. They print from the Attendance page instead,
+    # where encoding, finalizing and printing are one page.
+    current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
     st.title("SF2 — Daily Attendance Report of Learners")
     st.caption(
-        "Generated straight from the attendance you have already encoded. Learners "
-        "are split male and female, and a large section runs onto extra pages "
-        "rather than dropping anyone."
+        "Generated from the attendance encoded on the Attendance & SF2 page. "
+        "Advisers update and finalize each month there, and print their own SF2 "
+        "from it once the month is finalized."
     )
     render_flashes()
-
-    adviser_scoped = not current_user.has_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
@@ -126,10 +101,7 @@ def render() -> None:
             "School year", options=[sy.id for sy in school_years], format_func=lambda v: sy_by_id[v].name
         )
 
-        section = section_picker(
-            session, sy_choice, key="sf2",
-            adviser_user_id=current_user.id if adviser_scoped else None,
-        )
+        section = section_picker(session, sy_choice, key="sf2")
         if section is None:
             return
         section_choice = section.id
@@ -171,13 +143,15 @@ def render() -> None:
         if state != FinalizationState.FINALIZED:
             st.warning(
                 f"This month's attendance is **{display_state(state)}**, not FINALIZED. The form "
-                "will generate, but figures can still change — finalize on the "
-                "Attendance page before submitting it."
+                "will generate, but figures can still change — the adviser finalizes "
+                "it on the Attendance & SF2 page before it is submitted."
             )
+        if current_user.has_role("REGISTRAR", "ADVISER"):
+            _attendance_link()
         render_reprint_notice(session, current_user, section, status)
 
         st.divider()
-        st.subheader("Preview")
+        st.subheader("Preview — read-only")
         st.caption(
             "Blank means present — that is the form's own convention. "
             "**X** absent, **T-L** late, **T-C** cutting, **·** (dot) before the "
@@ -187,30 +161,4 @@ def render() -> None:
 
         st.divider()
         st.subheader("Download")
-
-        stem = f"SF2_{section.name.replace(' ', '')}_{year}-{month:02d}"
-        # Deferred: a callable `data` is built only when its button is
-        # clicked. Passing bytes would build the workbook and the PDF on
-        # every rerun of this page — each widget, the reprint confirmation
-        # included — for a download nobody asked for.
-        build_xlsx, build_pdf = _deferred_builders(section_choice, sy_choice, year, month)
-        st.caption(
-            "The file is built when you click, so it can take a few seconds. If it "
-            "fails, try once more; if it keeps failing, tell the ICT coordinator."
-        )
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.download_button(
-                "Download Excel (.xlsx)",
-                data=build_xlsx,
-                file_name=f"{stem}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        with col_b:
-            st.download_button(
-                "Download PDF",
-                data=build_pdf,
-                file_name=f"{stem}.pdf",
-                mime="application/pdf",
-            )
+        render_sf2_downloads(section, sy_choice, year, month)

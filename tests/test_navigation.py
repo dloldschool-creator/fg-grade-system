@@ -118,3 +118,24 @@ def test_a_read_only_account_gets_no_page_that_edits():
         "Dashboard", "Insights", "Grade Summary", "SF9", "SF2", "SF4", "Term Cards",
         "Export", "Parent Notices",
     }, "adding a page for a School Head is a deliberate act — confirm it cannot write"
+
+
+def test_advisers_print_the_sf2_from_attendance_not_the_sf2_page():
+    """Advisers went to the SF2 page to encode, because the workbook's SF2
+    sheet was where attendance was typed (2026-10-17). They now print it
+    from Attendance & SF2, so the SF2 page is not in their sidebar."""
+    from app.admin_pages import attendance, sf2
+
+    by_module = {module: (title, roles) for _h, module, title, _u, roles in ENTRIES}
+    assert "ADVISER" not in by_module[sf2][1]
+    assert "ADVISER" in by_module[attendance][1]
+    assert "SF2" in by_module[attendance][0], "advisers look for the word SF2"
+
+
+def test_the_sf2_pages_link_to_attendance_resolves():
+    """A page link is resolved by url_path alone, so a renamed path would
+    leave the SF2 page linking to nothing."""
+    from app.admin_pages import attendance, sf2
+
+    module_at = {url_path: module for _h, module, _t, url_path, _r in ENTRIES}
+    assert module_at[sf2.ATTENDANCE_URL_PATH] is attendance

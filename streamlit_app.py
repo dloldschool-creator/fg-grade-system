@@ -112,7 +112,10 @@ GROUPS = [
             (gradebook, "Gradebook", "📓", "gradebook", ("SUBJECT_TEACHER",)),
             (grade_summary, "Grade Summary", "📊", "grade-summary",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
-            (attendance, "Attendance", "🗒️", "attendance",
+            # "& SF2": advisers print their SF2 here, and look for the
+            # word SF2 in the sidebar because the workbook's SF2 sheet was
+            # where they typed attendance.
+            (attendance, "Attendance & SF2", "🗒️", "attendance",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER")),
         ],
     ),
@@ -130,8 +133,10 @@ GROUPS = [
         [
             (sf9, "SF9", "🧾", "sf9",
              ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+            # No adviser entry: they went here to encode. They print from
+            # Attendance & SF2 instead, once the month is finalized.
             (sf2, "SF2", "📄", "sf2",
-             ("SUPER_ADMIN", "REGISTRAR", "ADVISER", "SCHOOL_HEAD")),
+             ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
             # School-wide rather than per-section, and signed by the
             # School Head — so no adviser entry.
             (sf4, "SF4", "📈", "sf4", ("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")),
