@@ -72,7 +72,10 @@ def _attendance_link(school_year_id, section_id, month: tuple[int, int]) -> None
     year, section and month. Callers draw it only for someone who may go
     there: a School Head cannot reach Attendance, and a link to a page
     missing from their sidebar leads nowhere."""
-    if st.button("Go to Attendance & SF2 to encode or finalize this month", icon="🗒️"):
+    if st.button(
+        "Go to Attendance & SF2 to encode or finalize this month",
+        icon=":material/event_available:",
+    ):
         st.session_state[attendance.HANDOFF_KEY] = {
             "school_year_id": school_year_id,
             "section_id": section_id,
