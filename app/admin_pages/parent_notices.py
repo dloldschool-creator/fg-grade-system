@@ -199,7 +199,12 @@ def _override_form(session, section, term, data, current_user) -> None:
             horizontal=True,
             key=f"{form}_decision",
         )
-        reason = text_field("Reason", key=f"{form}.reason", max_chars=REASON_MAX)
+        reason = text_field(
+            "Reason",
+            key=f"{form}.reason",
+            max_chars=REASON_MAX,
+            placeholder="e.g. Parent already met the adviser in person",
+        )
         col1, col2 = st.columns(2)
         save = col1.form_submit_button("Save override")
         clear = col2.form_submit_button("Clear override")

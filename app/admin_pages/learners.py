@@ -781,7 +781,7 @@ def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
         search = live_search(
             "Search by name or LRN",
             key="learner_masterlist_search",
-            placeholder="Type to filter — e.g. pineda anne, or part of an LRN",
+            placeholder="Type to filter — e.g. part of a name (surname, first name or both), or part of an LRN",
         )
         learners = _listed_learners(session, search, adviser_user_id, editable)
 

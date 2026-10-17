@@ -140,7 +140,11 @@ def _month_editor(session, school_year: SchoolYear, year: int, month: int, curre
                     key=f"cfd_{day.id}",
                 )
                 note = st.text_input(
-                    "Reason / note", value=day.note or "", key=f"cn_{day.id}", max_chars=REASON_MAX
+                    "Reason / note",
+                    value=day.note or "",
+                    key=f"cn_{day.id}",
+                    max_chars=REASON_MAX,
+                    placeholder="e.g. Classes suspended by DepEd due to typhoon"
                 )
                 if st.form_submit_button("Save"):
                     changed_class_day = is_class_day != day.is_default_class_day

@@ -148,7 +148,10 @@ def _finalization_section(session, current_user, enrollment: Enrollment, summary
         if current_user.has_role("SUPER_ADMIN") and not read_only:
             with st.form(f"reopen_{enrollment.id}"):
                 reason = st.text_area(
-                    "Reopen reason (required)", key=f"reopen_reason_{enrollment.id}", max_chars=REASON_MAX
+                    "Reopen reason (required)",
+                    key=f"reopen_reason_{enrollment.id}",
+                    max_chars=REASON_MAX,
+                    placeholder="e.g. Teacher encoded the wrong Term 1 grade for one learner"
                 )
                 if st.form_submit_button("Reopen"):
                     problem = reason_problem(reason)

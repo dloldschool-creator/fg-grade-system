@@ -450,7 +450,10 @@ def render() -> None:
                         override_award_name = policy_name
                         st.caption(f"Award name (if eligible): **{policy_name}**")
                     override_reason = st.text_area(
-                        "Reason for override", key=f"orr_{award.id}", max_chars=REASON_MAX
+                        "Reason for override",
+                        key=f"orr_{award.id}",
+                        max_chars=REASON_MAX,
+                        placeholder="e.g. Grade corrected after the average was computed"
                     )
                     if st.form_submit_button("Apply override"):
                         problem = reason_problem(override_reason)

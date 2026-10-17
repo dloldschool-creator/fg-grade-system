@@ -664,6 +664,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                         "Reason — required",
                         key=f"correct_section_reason_{enrollment.id}",
                         max_chars=REASON_MAX,
+                        placeholder="e.g. Enrolled in the wrong section by mistake",
                     )
                     if st.form_submit_button("Move to this section"):
                         try:
@@ -742,6 +743,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                         f"Reason for removing {len(to_remove)} ticked movement(s) — required",
                         key=reason_key,
                         max_chars=REASON_MAX,
+                        placeholder="e.g. Same transfer was logged twice",
                         on_change=keep_panel_open,
                         args=(panel_id,),
                     )
@@ -1010,6 +1012,7 @@ def _roster_tab(session, adviser_user_id, current_user):
                             "Reason for removing",
                             key=f"remove_override_reason_{ov.id}",
                             max_chars=REASON_MAX,
+                            placeholder="e.g. Learner is taking the section's own elective after all",
                         )
                         if st.form_submit_button("Remove this substitution"):
                             problem = reason_problem(remove_reason)

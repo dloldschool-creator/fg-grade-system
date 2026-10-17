@@ -410,7 +410,11 @@ def _finalization_panel(
         )
         if may_reopen_attendance_month(current_user, section):
             with st.form(f"reopen_att_{status.id}"):
-                reason = st.text_area("Reopen reason (required)", max_chars=REASON_MAX)
+                reason = st.text_area(
+                    "Reopen reason (required)",
+                    max_chars=REASON_MAX,
+                    placeholder="e.g. Marked DELA CRUZ absent on Sep 12 by mistake",
+                )
                 if st.form_submit_button("Reopen"):
                     problem = reason_problem(reason)
                     if problem:

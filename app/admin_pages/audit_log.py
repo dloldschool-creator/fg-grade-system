@@ -349,7 +349,11 @@ def _render_archive_section(session, current_user, grand_total: int) -> None:
         confirmed_saved = st.checkbox("I have downloaded and safely stored this file.")
         phrase = f"DELETE {count} LOGS"
         typed = st.text_input(f"Type “{phrase}” to confirm", max_chars=SHORT_MAX)
-        reason = st.text_area("Reason (required)", max_chars=REASON_MAX)
+        reason = st.text_area(
+            "Reason (required)",
+            max_chars=REASON_MAX,
+            placeholder="e.g. Yearly archive of entries older than one school year",
+        )
         submitted = st.form_submit_button("Permanently delete these entries", type="primary")
         if submitted:
             if not confirmed_saved:
