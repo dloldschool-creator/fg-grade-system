@@ -1,7 +1,5 @@
 """Shared helpers for admin pages."""
 
-import csv
-import io
 from contextlib import contextmanager
 
 import streamlit as st
@@ -482,18 +480,6 @@ def try_commit(session, success_message: str) -> bool:
         session.rollback()
         flash("error", f"Couldn't save — {_friendly_integrity_error(exc)}")
         return False
-
-
-def read_uploaded_csv(uploaded_file) -> list[dict]:
-    """Parses a Streamlit-uploaded CSV into a list of {column: value}
-    dicts, keyed by the header row, with surrounding whitespace stripped
-    from every value. Lightweight bulk-import, not the full formal
-    upload/map/validate/confirm/audit pipeline in master-spec.md §51 —
-    that stays Phase 13; this is fixed-column CSV with inline validation
-    (see each page's own row-validation loop)."""
-    text = uploaded_file.getvalue().decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-    return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
 
 
 def try_delete(session, instance, label: str) -> bool:

@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from app import audit_service
 from app.models.academic_structure import Section
 from app.models.organization import Term
+from app.models.rbac import Role, User, UserRole
 from app.models.subjects import SectionSubjectOffering, Subject, TeacherAssignment
 from app.section_access import is_advised_by
 
@@ -52,6 +53,12 @@ class SubjectRow:
         """Different teachers across the terms of one subject. Legal, and
         worth showing plainly rather than picking one to display."""
         return len(self.holders) > 1
+
+    @property
+    def has_unassigned_term(self) -> bool:
+        """At least one term of this subject has no teacher — including a
+        subject another term of which is already assigned."""
+        return sum(self.holders.values()) < len(self.offerings)
 
     @property
     def sole_teacher_id(self):
@@ -82,8 +89,25 @@ def load_section_subjects(session, section_id, school_year_id) -> list[SubjectRo
         .filter_by(section_id=section_id, school_year_id=school_year_id)
         .all()
     )
+    return _subject_rows(session, offerings, school_year_id)
+
+
+def load_year_subjects(session, school_year_id) -> dict:
+    """`{section_id: [SubjectRow]}` for the whole school year, in four queries.
+
+    For callers that look at many sections at once (the bulk import and its
+    template): `load_section_subjects` per section would be four round trips
+    each, ~4 x 30 sections of waiting on every click.
+    """
+    offerings = (
+        session.query(SectionSubjectOffering).filter_by(school_year_id=school_year_id).all()
+    )
+    return _subject_rows(session, offerings, school_year_id, group_by_section=True)
+
+
+def _subject_rows(session, offerings, school_year_id, *, group_by_section=False):
     if not offerings:
-        return []
+        return {} if group_by_section else []
 
     subject_ids = {o.subject_id for o in offerings}
     subjects = {
@@ -104,7 +128,8 @@ def load_section_subjects(session, section_id, school_year_id) -> list[SubjectRo
 
     rows: dict = {}
     for offering in offerings:
-        row = rows.setdefault(offering.subject_id, SubjectRow(subject=subjects[offering.subject_id]))
+        slot = (offering.section_id, offering.subject_id) if group_by_section else offering.subject_id
+        row = rows.setdefault(slot, SubjectRow(subject=subjects[offering.subject_id]))
         row.offerings.append(offering)
         row.term_numbers.append(terms[offering.term_id].term_number)
         assignment = active.get(offering.id)
@@ -115,14 +140,30 @@ def load_section_subjects(session, section_id, school_year_id) -> list[SubjectRo
     for row in rows.values():
         row.offerings.sort(key=lambda o: terms[o.term_id].term_number)
         row.term_numbers.sort()
-    # Same rule report_card.py uses for SF9: the lowest display_order across
-    # a subject's offerings decides where it prints, so this list reads in
-    # the same order as the report card instead of alphabetically.
-    return sorted(
-        rows.values(),
-        key=lambda r: min(
-            (o.display_order if o.display_order is not None else 9999) for o in r.offerings
-        ),
+
+    def order(row):
+        # Same rule report_card.py uses for SF9: the lowest display_order across
+        # a subject's offerings decides where it prints, so this list reads in
+        # the same order as the report card instead of alphabetically.
+        return min((o.display_order if o.display_order is not None else 9999) for o in row.offerings)
+
+    if not group_by_section:
+        return sorted(rows.values(), key=order)
+    grouped: dict = {}
+    for (section_id, _subject_id), row in rows.items():
+        grouped.setdefault(section_id, []).append(row)
+    return {sid: sorted(group, key=order) for sid, group in grouped.items()}
+
+
+def active_teachers(session) -> list:
+    """Active accounts that can be named as a subject's teacher."""
+    return (
+        session.query(User)
+        .join(UserRole, UserRole.user_id == User.id)
+        .join(Role, Role.id == UserRole.role_id)
+        .filter(Role.code == "SUBJECT_TEACHER", User.is_active.is_(True))
+        .order_by(User.full_name)
+        .all()
     )
 
 

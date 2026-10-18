@@ -37,7 +37,6 @@ Run with the project's own Python:
 
 import argparse
 import csv
-import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -47,12 +46,7 @@ from app.models.academic_structure import Section
 from app.models.organization import SchoolYear, Term
 from app.models.rbac import Role, User, UserRole
 from app.models.subjects import SectionSubjectOffering, Subject, TeacherAssignment
-
-
-def key(value: str) -> str:
-    """Match on letters and digits only, so 'Ñ', punctuation and double
-    spaces can't be the reason a real name fails to resolve."""
-    return re.sub(r"[^A-Z0-9]", "", (value or "").upper().replace("Ñ", "N"))
+from app.teacher_assignment_import import key
 
 
 def load(session, school_year_name):

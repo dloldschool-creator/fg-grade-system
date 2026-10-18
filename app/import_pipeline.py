@@ -168,12 +168,18 @@ def _cell(value) -> str:
     return str(value).strip()
 
 
-def suggest_mapping(headers: list[str], spec: ImportSpec) -> dict[str, str]:
+def _columns_of(spec) -> list[ColumnSpec]:
+    """An ImportSpec's columns, or a bare column list for the small panels
+    that have no spec of their own (Subject Catalog, Teacher Assignments)."""
+    return getattr(spec, "columns", spec)
+
+
+def suggest_mapping(headers: list[str], spec) -> dict[str, str]:
     """Best-guess {field: header}, matching on a normalised header and the
     spec's known aliases. Anything unmatched is left for the user."""
     by_key = {_normalise(h): h for h in headers if h}
     mapping: dict[str, str] = {}
-    for column in spec.columns:
+    for column in _columns_of(spec):
         candidates = (column.field, column.label, *column.aliases)
         for candidate in candidates:
             header = by_key.get(_normalise(candidate))
@@ -183,8 +189,16 @@ def suggest_mapping(headers: list[str], spec: ImportSpec) -> dict[str, str]:
     return mapping
 
 
-def missing_required(mapping: dict[str, str], spec: ImportSpec) -> list[str]:
-    return [c.label for c in spec.columns if c.required and not mapping.get(c.field)]
+def missing_required(mapping: dict[str, str], spec) -> list[str]:
+    return [c.label for c in _columns_of(spec) if c.required and not mapping.get(c.field)]
+
+
+def missing_columns_message(missing: list[str], headers: list[str]) -> str:
+    """The markdown for "your file lacks these columns", with what it has."""
+    return (
+        "Couldn't find a column for: **" + "**, **".join(missing) + "**.\n\n"
+        f"The file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+    )
 
 
 def apply_mapping(rows: list[dict], mapping: dict[str, str]) -> list[dict]:

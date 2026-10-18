@@ -1,15 +1,30 @@
+from functools import partial
+
 import streamlit as st
 
 from app.admin_pages._helpers import (
+    clear_text_fields,
+    generation_key,
     get_session,
+    keep_panel_open,
+    panel_is_open,
     render_flashes,
     section_picker,
     try_commit,
 )
 from app.auth import require_role
+from app.import_pipeline import (
+    apply_mapping,
+    missing_columns_message,
+    missing_required,
+    read_table,
+    suggest_mapping,
+)
 from app.models.organization import SchoolYear
-from app.models.rbac import Role, User, UserRole
+from app.teacher_assignment_import import COLUMNS, build_plan, commit_plan
+from app.teacher_assignment_import import template_bytes as import_template_bytes
 from app.teacher_assignment_service import (
+    active_teachers,
     assign_subject,
     load_section_subjects,
     may_assign,
@@ -17,17 +32,95 @@ from app.teacher_assignment_service import (
 )
 
 UNASSIGNED = "— unassigned —"
+_UPLOAD_FORM = "teacher_assignment_upload"
 
 
-def _teacher_options(session) -> list:
-    return (
-        session.query(User)
-        .join(UserRole, UserRole.user_id == User.id)
-        .join(Role, Role.id == UserRole.role_id)
-        .filter(Role.code == "SUBJECT_TEACHER", User.is_active.is_(True))
-        .order_by(User.full_name)
-        .all()
-    )
+def _bulk_upload(session, current_user, school_year_id) -> None:
+    """Super Admin only: assign many subjects from one Excel file."""
+    _panel = "teacher_assignment_bulk"
+    with st.expander("Bulk-assign from a spreadsheet", expanded=panel_is_open(_panel)):
+        st.caption(
+            "Columns: **Section**, **Subject**, **Teacher** (name or email). The template "
+            "lists every subject in the selected school year that has no teacher yet — "
+            "fill in the Teacher column and upload it. Rows with a blank Teacher are "
+            "skipped. Each row covers every term the subject runs. Nothing is created: "
+            "a name that doesn't match is reported and the file is not applied."
+        )
+        st.download_button(
+            "Download the template (.xlsx)",
+            # Deferred: built when clicked, and it opens its own session.
+            data=partial(_template_for_year, school_year_id),
+            file_name="teacher-assignments-template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="teacher_assignment_template",
+        )
+        replace = st.checkbox(
+            "Also replace subjects that already have a different teacher",
+            help="The old assignment stays on record. Without this, those rows are only listed.",
+            key="teacher_assignment_replace",
+            on_change=keep_panel_open, args=(_panel,),
+        )
+        uploaded = st.file_uploader(
+            "Excel file (.xlsx)",
+            type=["xlsx", "csv"],
+            key=generation_key(_UPLOAD_FORM, "teacher_assignment_file"),
+            on_change=keep_panel_open, args=(_panel,),
+        )
+        if uploaded is None:
+            return
+
+        headers, rows = read_table(uploaded.getvalue(), uploaded.name)
+        if not rows:
+            st.warning("That file has a header row but no rows in it.")
+            return
+        mapping = suggest_mapping(headers, COLUMNS)
+        missing = missing_required(mapping, COLUMNS)
+        if missing:
+            st.error(
+                "Couldn't find a column for: **" + "**, **".join(missing) + "**.\n\n"
+                f"The file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+            )
+            return
+
+        plan = build_plan(session, apply_mapping(rows, mapping), school_year_id, replace=replace)
+        st.write(
+            f"**{len(plan.assignments)}** to assign · {plan.already} already correct · "
+            f"{plan.skipped_blank} blank (skipped) · {len(plan.conflicts)} held by someone else"
+            + (" (will be replaced)" if replace else " (skipped)")
+        )
+        if plan.conflicts and not replace:
+            st.dataframe(
+                [
+                    {"Section": sec.name, "Subject": sr.subject.official_name, "File says": t.full_name}
+                    for sr, t, sec in plan.conflicts
+                ],
+                hide_index=True, width="stretch",
+            )
+        if plan.errors:
+            st.error(
+                f"{len(plan.errors)} row(s) need fixing. Nothing is applied until the whole file is clean:"
+            )
+            st.dataframe(plan.errors, hide_index=True, width="stretch")
+            return
+        if not plan.assignments:
+            return
+        st.dataframe(
+            [
+                {"Section": sec.name, "Subject": sr.subject.official_name, "Teacher": t.full_name}
+                for sr, t, sec in plan.assignments
+            ],
+            hide_index=True, width="stretch",
+        )
+        if st.button(f"Assign {len(plan.assignments)} subject(s)", key="teacher_assignment_commit"):
+            written = commit_plan(session, plan, current_user.id)
+            if try_commit(session, f"Assigned {len(plan.assignments)} subject(s) ({written} term rows)."):
+                clear_text_fields(_UPLOAD_FORM)
+            st.rerun()
+
+
+def _template_for_year(school_year_id) -> bytes:
+    with get_session() as session:
+        return import_template_bytes(session, school_year_id)
 
 
 def render() -> None:
@@ -58,6 +151,9 @@ def render() -> None:
             format_func=lambda v: sy_by_id[v].name,
         )
 
+        if is_admin:
+            _bulk_upload(session, current_user, sy_choice)
+
         section = section_picker(
             session,
             sy_choice,
@@ -79,7 +175,7 @@ def render() -> None:
             st.error("You can only assign teachers in a section you advise.")
             return
 
-        teachers = _teacher_options(session)
+        teachers = active_teachers(session)
         if not teachers:
             st.info(
                 "No users with the SUBJECT_TEACHER role yet — grant that role on the "

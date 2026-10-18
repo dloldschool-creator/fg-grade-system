@@ -1,3 +1,5 @@
+from functools import partial
+
 import streamlit as st
 
 from app import audit_service
@@ -8,7 +10,6 @@ from app.admin_pages._helpers import (
     get_session,
     keep_panel_open,
     panel_is_open,
-    read_uploaded_csv,
     render_flashes,
     stateful_tabs,
     text_field,
@@ -16,6 +17,15 @@ from app.admin_pages._helpers import (
     try_delete,
 )
 from app.auth import require_role
+from app.import_pipeline import (
+    ColumnSpec,
+    apply_mapping,
+    missing_columns_message,
+    missing_required,
+    read_table,
+    suggest_mapping,
+)
+from app.import_specs import columns_template_bytes
 from app.models.academic_structure import GradeLevel, Track
 from app.models.subjects import SectionSubjectOffering, Subject, SubjectCategory
 from app.text_rules import SHORT_MAX
@@ -24,7 +34,15 @@ from app.text_rules import SHORT_MAX
 # file rather than re-validating it against the rows it just wrote.
 _UPLOAD_FORM = "subject_catalog_upload"
 
-SUBJECT_CSV_COLUMNS = "code, official_name, short_name, grade_level_code, category_code, track_restriction_code"
+SUBJECT_COLUMNS = [
+    ColumnSpec("code", "code", True),
+    ColumnSpec("official_name", "official_name", True, ("officialname", "subjectname")),
+    ColumnSpec("short_name", "short_name", True, ("shortname",)),
+    ColumnSpec("grade_level_code", "grade_level_code", True, ("gradelevel",)),
+    ColumnSpec("category_code", "category_code", True, ("category",)),
+    ColumnSpec("track_restriction_code", "track_restriction_code", False, ("trackrestriction", "track")),
+]
+SUBJECT_COLUMN_NAMES = ", ".join(c.field for c in SUBJECT_COLUMNS)
 
 
 def _categories_tab(session):
@@ -97,9 +115,9 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
 
     # Same as Learners: everything after the upload renders in here.
     _panel = "subject_bulk_add"
-    with st.expander("Bulk-add from CSV", expanded=panel_is_open(_panel)):
+    with st.expander("Bulk-add from a spreadsheet", expanded=panel_is_open(_panel)):
         st.caption(
-            f"Your file needs a header row with these columns: `{SUBJECT_CSV_COLUMNS}`. "
+            f"Your file needs a header row with these columns: `{SUBJECT_COLUMN_NAMES}`. "
             "Leave the **track_restriction_code** column empty if the subject is "
             "offered under every track. "
             f"Grade level codes: {', '.join(gl_by_code) or 'none yet'}. "
@@ -108,7 +126,7 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
         )
         st.download_button(
             "Download the template (.csv)",
-            data=SUBJECT_CSV_COLUMNS.replace(", ", ",") + "\n",
+            data=SUBJECT_COLUMN_NAMES.replace(", ", ",") + "\n",
             file_name="subjects-template.csv",
             mime="text/csv",
             key="subject_template_download",
@@ -117,18 +135,28 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
         # otherwise the rerun re-validates it against the codes just written
         # and every row reads as an already-taken code (see generation_key).
         uploaded = st.file_uploader(
-            "CSV file", type="csv",
+            "Excel file (.xlsx)", type=["xlsx", "csv"],
             key=generation_key(_UPLOAD_FORM, "subject_csv"),
             on_change=keep_panel_open, args=(_panel,),
         )
         if uploaded is None:
             return
 
-        rows = read_uploaded_csv(uploaded)
+        headers, raw_rows = read_table(uploaded.getvalue(), uploaded.name)
+        mapping = suggest_mapping(headers, SUBJECT_COLUMNS)
+        missing = missing_required(mapping, SUBJECT_COLUMNS)
+        if missing:
+            st.error(
+                "Couldn't find a column for: **" + "**, **".join(missing) + "**.\n\n"
+                f"The file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+            )
+            return
+        rows = apply_mapping(raw_rows, mapping)
         taken_codes = {code for (code,) in session.query(Subject.code).all()}
 
         valid_rows, errors = [], []
-        for i, row in enumerate(rows, start=2):
+        for row in rows:
+            i = row["__row__"]
             parsed, error = _validate_subject_row(row, gl_by_code, cat_by_code, track_by_code, taken_codes)
             if error:
                 errors.append(f"Row {i}: {error}")

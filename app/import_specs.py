@@ -1037,23 +1037,27 @@ _TEXT_FIELDS = {"lrn", "guardian_mobile"}
 
 
 def spec_template_bytes(spec) -> bytes:
-    """A blank .xlsx for any import spec: headers, plus a Columns sheet.
-
-    Built from `spec.columns`, so the template cannot drift from what the
-    importer actually reads. LRN and mobile columns are formatted as text so
-    Excel keeps leading zeros.
-    """
+    """A blank .xlsx for any import spec (see `columns_template_bytes`)."""
     if spec.job_type == ImportJobType.LEARNER_ADMISSIONS:
         return admission_template_bytes()  # its own, with typed date cells
+    return columns_template_bytes(spec.columns, _TEMPLATE_EXAMPLES.get(spec.job_type))
+
+
+def columns_template_bytes(columns, example=None, extra_rows=()) -> bytes:
+    """A blank .xlsx: headers, optional example/pre-filled rows, and a Columns sheet.
+
+    Built from the importer's own column list, so the template cannot drift
+    from what the importer reads. LRN and mobile columns are formatted as
+    text so Excel keeps leading zeros. `extra_rows` are dicts keyed by field.
+    """
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Data"
-    sheet.append([column.label for column in spec.columns])
-    example = _TEMPLATE_EXAMPLES.get(spec.job_type)
-    if example:
-        sheet.append([example.get(column.field) for column in spec.columns])
+    sheet.append([column.label for column in columns])
+    for row in ([example] if example else []) + list(extra_rows):
+        sheet.append([row.get(column.field) for column in columns])
     bold = openpyxl.styles.Font(bold=True)
-    for index, column in enumerate(spec.columns, start=1):
+    for index, column in enumerate(columns, start=1):
         letter = openpyxl.utils.get_column_letter(index)
         sheet.cell(row=1, column=index).font = bold
         sheet.column_dimensions[letter].width = max(16, len(column.label) + 4)
@@ -1067,7 +1071,7 @@ def spec_template_bytes(spec) -> bytes:
     notes.append(["Column", "Required"])
     for cell in notes[1]:
         cell.font = bold
-    for column in spec.columns:
+    for column in columns:
         notes.append([column.label, "yes" if column.required else "optional"])
     notes.column_dimensions["A"].width = 28
     notes.column_dimensions["B"].width = 12
