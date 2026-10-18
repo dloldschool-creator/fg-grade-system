@@ -372,13 +372,21 @@ def _section_subjects(session, section_id, school_year_id) -> list[Subject]:
         if offering.subject_id not in seen:
             seen.add(offering.subject_id)
             subject_ids.append(offering.subject_id)
-    return [session.get(Subject, sid) for sid in subject_ids]
+    if not subject_ids:
+        return []
+    # One IN query, not a session.get per subject (~85ms each).
+    by_id = {
+        s.id: s for s in session.query(Subject).filter(Subject.id.in_(subject_ids)).all()
+    }
+    return [by_id[sid] for sid in subject_ids if sid in by_id]
 
 
 VIEW_OPTIONS = ["Term 1", "Term 2", "Term 3", "Final"]
 
 
-def _class_summary(session, enrollments: list[Enrollment], section_id, school_year_id, panel) -> None:
+def _class_summary(
+    session, enrollments: list[Enrollment], section_id, school_year_id, panel, context, learners
+) -> None:
     st.subheader("Class summary")
     st.caption(
         "One column per subject. Pick a learner below to see their report-card "
@@ -388,15 +396,9 @@ def _class_summary(session, enrollments: list[Enrollment], section_id, school_ye
 
     all_subjects = _section_subjects(session, section_id, school_year_id)
     summaries = panel["annual"]
-    # One context for the whole roster, and one query for every learner
-    # name — the database is ~85ms away, so anything issued per learner
-    # dominates the page.
-    context = load_report_context(session, enrollments)
-    learners = {
-        l.id: l for l in session.query(Learner).filter(
-            Learner.id.in_([e.learner_id for e in enrollments])
-        ).all()
-    }
+    # `context` and `learners` are loaded once by render() and shared with
+    # the per-learner panels — the database is ~85ms away, so loading them
+    # twice per rerun was ~11 wasted round trips on every click.
 
     # A specific term only lists subjects actually offered that term (§39:
     # "show only subjects active during the selected term" — the same rule
@@ -530,14 +532,10 @@ def render() -> None:
                     "a complete one-term subject too early and finalize the whole year on it."
                 )
 
-        _class_summary(session, enrollments, section_choice, sy_choice, panel)
-
-        st.divider()
-        st.subheader("Per-learner detail")
         # Load the roster's grade data once and hand the same context to
-        # every learner's panel. Building it per learner cost ~12 queries
-        # each, which at ~85ms per round trip is the difference between an
-        # instant page and a forty-second one for a full section.
+        # the class table and every learner's panel. Building it per learner
+        # cost ~12 queries each, which at ~85ms per round trip is the
+        # difference between an instant page and a forty-second one.
         detail_context = load_report_context(session, enrollments)
         learners = {
             l.id: l
@@ -545,6 +543,12 @@ def render() -> None:
             .filter(Learner.id.in_([e.learner_id for e in enrollments]))
             .all()
         }
+        _class_summary(
+            session, enrollments, section_choice, sy_choice, panel, detail_context, learners
+        )
+
+        st.divider()
+        st.subheader("Per-learner detail")
         for enrollment in enrollments:
             learner = learners.get(enrollment.learner_id)
             label = f"{learner.last_name}, {learner.first_name}" if learner else "?"

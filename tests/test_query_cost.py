@@ -362,3 +362,41 @@ def test_sf9_context_does_not_scale_with_the_number_of_months(session, roster, m
     # structural guarantee is the monkeypatch above; this ceiling only
     # catches a new per-learner query creeping in.
     assert counter.count <= 24, f"{counter.count} queries to load the SF9 context"
+
+
+def test_gradebook_export_costs_a_fixed_number_of_queries(session, roster):
+    """Was one TermGradeSummary query per learner (49 queries for 37)."""
+    from app import export_service
+    from app.models.grades import TermGradeSummary
+
+    first = roster[0]
+    with QueryCounter() as counter:
+        table = export_service.gradebook(session, first.section_id, first.school_year_id, 1)
+    assert len(table.rows) == len(roster)
+    # roster 1 + learners 1 + load_report_context 10 + summaries 1
+    assert counter.count <= 13, (
+        f"{counter.count} queries for a {len(roster)}-learner gradebook export"
+    )
+
+    # Same Term Average the per-learner query it replaced would have found.
+    ordered, _, _ = export_service._roster(session, first.section_id, first.school_year_id)
+    for enrollment, row in zip(ordered, table.rows):
+        summary = (
+            session.query(TermGradeSummary)
+            .filter_by(enrollment_id=enrollment.id)
+            .join(Term, Term.id == TermGradeSummary.term_id)
+            .filter(Term.term_number == 1)
+            .one_or_none()
+        )
+        expected = export_service._grade(summary.term_average) if summary else None
+        assert row["Term Average"] == expected
+
+
+def test_grade_summary_section_subjects_cost_does_not_grow_with_subjects(session, roster):
+    """Was one session.get(Subject) per subject (8 queries / 0.7 s per click)."""
+    from app.admin_pages.grade_summary import _section_subjects
+
+    first = roster[0]
+    with QueryCounter() as counter:
+        subjects = _section_subjects(session, first.section_id, first.school_year_id)
+    assert counter.count <= 2, f"{counter.count} queries for {len(subjects)} subjects"

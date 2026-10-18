@@ -82,6 +82,20 @@ def gradebook(session, section_id, school_year_id, term_number: int) -> ExportTa
     enrollments, learners, context = _roster(session, section_id, school_year_id)
     subject_names = _ordered_subjects(context, term_number)
 
+    # One query for every learner's term summary, not one per learner.
+    summaries = {}
+    if enrollments:
+        summaries = {
+            s.enrollment_id: s
+            for s in session.query(TermGradeSummary)
+            .join(Term, Term.id == TermGradeSummary.term_id)
+            .filter(
+                TermGradeSummary.enrollment_id.in_([e.id for e in enrollments]),
+                Term.term_number == term_number,
+            )
+            .all()
+        }
+
     rows = []
     for enrollment in enrollments:
         row = {"LRN": _lrn(learners, enrollment), "Name": _learner_name(learners.get(enrollment.learner_id))}
@@ -92,13 +106,7 @@ def gradebook(session, section_id, school_year_id, term_number: int) -> ExportTa
                 if offering_id is not None
                 else None
             )
-        summary = (
-            session.query(TermGradeSummary)
-            .filter_by(enrollment_id=enrollment.id)
-            .join(Term, Term.id == TermGradeSummary.term_id)
-            .filter(Term.term_number == term_number)
-            .one_or_none()
-        )
+        summary = summaries.get(enrollment.id)
         row["Term Average"] = _grade(summary.term_average) if summary else None
         rows.append(row)
 
