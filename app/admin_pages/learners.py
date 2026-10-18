@@ -49,10 +49,14 @@ from app.import_specs import (
     LEARNER_IMPORT,
     admission_template_bytes,
 )
-from app.learner_access import editable_learner_ids, may_edit
-from app.learner_access import grade_12_learner_ids
+from app.learner_access import (
+    editable_learner_ids,
+    grade_12_learner_ids,
+    may_edit,
+    newest_per_learner,
+)
 from app.live_search import like_pattern, live_search, search_words
-from app.models.academic_structure import GradeLevel, Section
+from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
 from app.models.organization import SchoolYear
@@ -255,91 +259,121 @@ def _contact_form(session, learner: Learner, current_user) -> None:
             st.rerun()
 
 
+def _admission_token(record) -> str:
+    """Changes whenever the stored admission record does (an upload, another
+    user's save). Folded into the form's widget keys so a stale copy of the
+    values can never be re-submitted over newer ones: Streamlit keeps a keyed
+    widget's value across reruns, ignoring `value=`, so without it a form
+    opened before an upload would show — and save — the old numbers."""
+    if record is None or record.updated_at is None:
+        return "new"
+    return record.updated_at.strftime("%Y%m%d%H%M%S%f")
+
+
+def _keep_unset(stored, ticked):
+    """A checkbox cannot show "not yet encoded", only ticked or not. Saving
+    an untouched box over an unset (NULL) flag would turn it into a "No"
+    nobody entered (rule 2), so an unset flag stays unset until it is ticked."""
+    if stored is None and not ticked:
+        return None
+    return ticked
+
+
 def _admission_record_form(session, learner: Learner, current_user, record=None) -> None:
     # `record` comes preloaded from the caller's batched lookup. Fetching
     # it here was one round trip per learner on the list, paid whether or
     # not the panel was open — Streamlit runs an expander's body either way.
     st.caption("Usually filled in once, when the learner is admitted to Grade 11.")
+    tok = _admission_token(record)
+    seen_key = f"admission_seen_{learner.id}"
+    seen = st.session_state.get(seen_key)
+    if seen not in (None, "adopt", tok):
+        st.warning(
+            "This record was changed by someone else (for example a spreadsheet upload) "
+            "since you opened it. The form now shows the latest values — if you had "
+            "unsaved edits, enter them again."
+        )
+    st.session_state[seen_key] = tok
     with st.form(f"admission_{learner.id}"):
         date_of_shs_admission = st.date_input(
             "Date of SHS admission",
             value=record.date_of_shs_admission if record else None,
-            key=f"shs_date_{learner.id}",
+            key=f"shs_date_{learner.id}_{tok}",
         )
         col1, col2 = st.columns(2)
         jhs_completer = col1.checkbox(
             "JHS completer",
             value=bool(record.junior_high_school_completer) if record else False,
-            key=f"jhs_comp_{learner.id}",
+            key=f"jhs_comp_{learner.id}_{tok}",
         )
         jhs_ga = col2.number_input(
             "JHS general average",
             min_value=0.0,
             max_value=100.0,
             value=float(record.junior_high_school_general_average or 0) if record else 0.0,
-            key=f"jhs_ga_{learner.id}",
+            key=f"jhs_ga_{learner.id}_{tok}",
         )
         col1, col2 = st.columns(2)
         hs_completer = col1.checkbox(
             "HS completer (ALS/other)",
             value=bool(record.high_school_completer) if record else False,
-            key=f"hs_comp_{learner.id}",
+            key=f"hs_comp_{learner.id}_{tok}",
         )
         hs_ga = col2.number_input(
             "HS general average",
             min_value=0.0,
             max_value=100.0,
             value=float(record.high_school_general_average or 0) if record else 0.0,
-            key=f"hs_ga_{learner.id}",
+            key=f"hs_ga_{learner.id}_{tok}",
         )
         previous_school_name = st.text_input(
             "Previous school name", value=record.previous_school_name or "" if record else "",
-            key=f"prev_name_{learner.id}",
+            key=f"prev_name_{learner.id}_{tok}",
             max_chars=ADDRESS_MAX,
         )
         previous_school_address = st.text_input(
             "Previous school address",
             value=record.previous_school_address or "" if record else "",
-            key=f"prev_addr_{learner.id}",
+            key=f"prev_addr_{learner.id}_{tok}",
             max_chars=ADDRESS_MAX,
         )
         col1, col2, col3 = st.columns(3)
         pept_passer = col1.checkbox(
-            "PEPT passer", value=bool(record.pept_passer) if record else False, key=f"pept_p_{learner.id}"
+            "PEPT passer", value=bool(record.pept_passer) if record else False, key=f"pept_p_{learner.id}_{tok}"
         )
         pept_rating = col2.number_input(
             "PEPT rating", min_value=0.0, max_value=100.0,
-            value=float(record.pept_rating or 0) if record else 0.0, key=f"pept_r_{learner.id}",
+            value=float(record.pept_rating or 0) if record else 0.0, key=f"pept_r_{learner.id}_{tok}",
         )
         pept_date = col3.date_input(
             "PEPT exam date", value=record.pept_examination_date if record else None,
-            key=f"pept_d_{learner.id}",
+            key=f"pept_d_{learner.id}_{tok}",
         )
         col1, col2, col3 = st.columns(3)
         als_passer = col1.checkbox(
             "ALS A&E passer", value=bool(record.als_ae_passer) if record else False,
-            key=f"als_p_{learner.id}",
+            key=f"als_p_{learner.id}_{tok}",
         )
         als_rating = col2.number_input(
             "ALS A&E rating", min_value=0.0, max_value=100.0,
-            value=float(record.als_ae_rating or 0) if record else 0.0, key=f"als_r_{learner.id}",
+            value=float(record.als_ae_rating or 0) if record else 0.0, key=f"als_r_{learner.id}_{tok}",
         )
         als_date = col3.date_input(
             "ALS A&E exam date", value=record.als_ae_examination_date if record else None,
-            key=f"als_d_{learner.id}",
+            key=f"als_d_{learner.id}_{tok}",
         )
         clc_name = st.text_input(
-            "CLC name", value=record.clc_name or "" if record else "", key=f"clc_n_{learner.id}",
+            "CLC name", value=record.clc_name or "" if record else "", key=f"clc_n_{learner.id}_{tok}",
             max_chars=ADDRESS_MAX,
         )
         clc_address = st.text_input(
-            "CLC address", value=record.clc_address or "" if record else "", key=f"clc_a_{learner.id}",
+            "CLC address", value=record.clc_address or "" if record else "", key=f"clc_a_{learner.id}_{tok}",
             max_chars=ADDRESS_MAX,
         )
         other_notes = st.text_area(
             "Other eligibility notes",
             value=record.other_eligibility_notes or "" if record else "",
-            key=f"other_{learner.id}",
+            key=f"other_{learner.id}_{tok}",
             max_chars=NOTE_MAX,
         )
 
@@ -349,16 +383,16 @@ def _admission_record_form(session, learner: Learner, current_user, record=None)
                 record = LearnerAdmissionRecord(learner_id=learner.id)
                 session.add(record)
             record.date_of_shs_admission = date_of_shs_admission
-            record.junior_high_school_completer = jhs_completer
+            record.junior_high_school_completer = _keep_unset(record.junior_high_school_completer, jhs_completer)
             record.junior_high_school_general_average = jhs_ga or None
-            record.high_school_completer = hs_completer
+            record.high_school_completer = _keep_unset(record.high_school_completer, hs_completer)
             record.high_school_general_average = hs_ga or None
             record.previous_school_name = previous_school_name or None
             record.previous_school_address = previous_school_address or None
-            record.pept_passer = pept_passer
+            record.pept_passer = _keep_unset(record.pept_passer, pept_passer)
             record.pept_rating = pept_rating or None
             record.pept_examination_date = pept_date
-            record.als_ae_passer = als_passer
+            record.als_ae_passer = _keep_unset(record.als_ae_passer, als_passer)
             record.als_ae_rating = als_rating or None
             record.als_ae_examination_date = als_date
             record.clc_name = clc_name or None
@@ -377,11 +411,13 @@ def _admission_record_form(session, learner: Learner, current_user, record=None)
                     "created": created,
                     "date_of_shs_admission": date_of_shs_admission,
                     "previous_school_name": previous_school_name or None,
-                    "pept_passer": pept_passer,
-                    "als_ae_passer": als_passer,
+                    "pept_passer": record.pept_passer,
+                    "als_ae_passer": record.als_ae_passer,
                 },
             )
             try_commit(session, "Admission record saved.")
+            # The save changes the token; adopt it rather than warn about our own edit.
+            st.session_state[seen_key] = "adopt"
             st.rerun()
 
 
@@ -424,12 +460,14 @@ def _placements(session, learner_ids) -> dict:
 
     # A learner has at most one enrollment per school year, and school
     # year names sort chronologically, so the newest is the one to name.
-    newest: dict = {}
-    for enrollment in enrollments:
-        year = years.get(enrollment.school_year_id)
-        key = year.name if year else ""
-        if enrollment.learner_id not in newest or key > newest[enrollment.learner_id][0]:
-            newest[enrollment.learner_id] = (key, enrollment)
+    newest = newest_per_learner(
+        (
+            enrollment.learner_id,
+            years[enrollment.school_year_id].name if enrollment.school_year_id in years else "",
+            enrollment,
+        )
+        for enrollment in enrollments
+    )
 
     lines = {}
     for learner_id, (year_name, enrollment) in newest.items():
@@ -439,13 +477,6 @@ def _placements(session, learner_ids) -> dict:
         who = adviser.full_name if adviser else "no adviser on record"
         lines[learner_id] = f"{where} ({year_name}) — adviser: {who}"
     return lines
-
-
-def _grade_12_learner_ids(session, learner_ids) -> set:
-    """The learners whose SHS admission form is not offered (newest
-    enrollment in Grade 12). The rule lives in `learner_access` so the
-    admission upload applies the identical one."""
-    return grade_12_learner_ids(session, learner_ids)
 
 
 def _read_only_card(learner: Learner, placement: str | None) -> None:
@@ -803,7 +834,8 @@ def _admission_upload_section(session, current_user, adviser_user_id, editable: 
         )
         st.download_button(
             "Download the template (.xlsx)",
-            data=admission_template_bytes(),
+            # Deferred: built when clicked, not on every rerun of the page.
+            data=admission_template_bytes,
             file_name="shs-admission-template.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="admission_template_download",
@@ -917,7 +949,7 @@ def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
             .all()
         } if mine else {}
         placements = _placements(session, [learner.id for learner in others])
-        grade_12 = _grade_12_learner_ids(session, mine_ids)
+        grade_12 = grade_12_learner_ids(session, mine_ids)
 
         for learner in mine:
             label = f"{learner.last_name}, {learner.first_name}"

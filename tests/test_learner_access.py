@@ -136,7 +136,12 @@ def test_the_page_asks_the_access_rule_rather_than_rebuilding_it():
     """One implementation, in `app.learner_access`. A page-local
     `filter_by(adviser_user_id=...)` would drift from it the first time
     the rule gained a second half — which it already has."""
-    assert "from app.learner_access import editable_learner_ids, may_edit" in PAGE_SOURCE
+    import re
+
+    imported = re.search(r"from app\.learner_access import \(([^)]*)\)", PAGE_SOURCE)
+    assert imported is not None
+    names = {name.strip() for name in imported.group(1).split(",") if name.strip()}
+    assert {"editable_learner_ids", "may_edit"} <= names
 
 
 def test_delete_is_registrar_only():

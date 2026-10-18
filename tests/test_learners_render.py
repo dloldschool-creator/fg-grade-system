@@ -45,7 +45,7 @@ def test_the_shs_admission_form_is_hidden_for_grade_12_learners():
     and exactly the non-Grade-12 ones also have the admission form."""
     import uuid
 
-    from app.admin_pages.learners import _grade_12_learner_ids
+    from app.learner_access import grade_12_learner_ids
     from app.database import SessionLocal
 
     at = AppTest.from_string(SCRIPT, default_timeout=120)
@@ -58,13 +58,13 @@ def test_the_shs_admission_form_is_hidden_for_grade_12_learners():
         if w.label == "Parent/guardian name"
     }
     with_form = {
-        uuid.UUID(w.key.split("shs_date_")[1])
+        uuid.UUID(w.key.split("shs_date_")[1][:36])  # key = shs_date_<id>_<token>
         for w in at.date_input
         if w.key and w.key.startswith("shs_date_")
     }
     session = SessionLocal()
     try:
-        grade_12 = _grade_12_learner_ids(session, listed)
+        grade_12 = grade_12_learner_ids(session, listed)
     finally:
         session.rollback()
         session.close()

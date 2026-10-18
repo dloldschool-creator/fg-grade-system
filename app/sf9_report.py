@@ -46,14 +46,10 @@ from app.excel_template import (
     write,
     write_ref,
 )
+from app.finalization import finalized_enrollment_ids
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.enums import (
-    CompletionStatus,
-    EnrollmentStatus,
-    FinalizationRecordStatus,
-    FinalizationScopeType,
-)
-from app.models.grades import AnnualGradeSummary, GradeFinalizationRecord
+from app.models.enums import CompletionStatus, EnrollmentStatus
+from app.models.grades import AnnualGradeSummary
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear
 from app.models.rbac import User
@@ -752,31 +748,6 @@ def eligible_for_next_level(summary, finalized: bool) -> bool:
     record is frozen), so an unfinalized year never asserts an eligibility
     that a later correction or reopen could still change."""
     return finalized and _passed_everything(summary)
-
-
-def finalized_enrollment_ids(session: Session, enrollment_ids) -> set:
-    """The enrollments whose year is currently FINALIZED: the newest annual
-    finalization record says FINALIZED, not REOPENED. One query for any
-    number of enrollments — the same rule Grade Summary applies."""
-    enrollment_ids = list(enrollment_ids)
-    if not enrollment_ids:
-        return set()
-    latest: dict = {}
-    for record in (
-        session.query(GradeFinalizationRecord)
-        .filter(
-            GradeFinalizationRecord.scope_type == FinalizationScopeType.ANNUAL_ENROLLMENT,
-            GradeFinalizationRecord.enrollment_id.in_(enrollment_ids),
-        )
-        .order_by(GradeFinalizationRecord.created_at.desc())
-        .all()
-    ):
-        latest.setdefault(record.enrollment_id, record)
-    return {
-        enrollment_id
-        for enrollment_id, record in latest.items()
-        if record.status == FinalizationRecordStatus.FINALIZED
-    }
 
 
 def next_level_after(grade_number: str) -> str:

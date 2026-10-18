@@ -17,6 +17,7 @@ from app.admin_pages._helpers import (
 )
 from app.auth import require_role
 from app.display_time import format_time
+from app.finalization import latest_annual_finalization_records
 from app.grading_service import recompute_enrollment_grades, recompute_enrollment_grades_batch
 from app.report_card import build_learning_area_rows, load_report_context
 from app.models.enums import (
@@ -299,19 +300,9 @@ def _panel_data(session, enrollments, school_year_id) -> dict:
     finalization_open = (
         final_term is not None and final_term.grade_encoding_status == GradeEncodingStatus.OPEN
     )
-    # Latest ANNUAL_ENROLLMENT finalization record per learner, newest
-    # first so the first one kept per enrollment_id is the latest.
-    finalization: dict = {}
-    for record in (
-        session.query(GradeFinalizationRecord)
-        .filter(
-            GradeFinalizationRecord.scope_type == FinalizationScopeType.ANNUAL_ENROLLMENT,
-            GradeFinalizationRecord.enrollment_id.in_(ids),
-        )
-        .order_by(GradeFinalizationRecord.created_at.desc())
-        .all()
-    ):
-        finalization.setdefault(record.enrollment_id, record)
+    # Latest ANNUAL_ENROLLMENT finalization record per learner (the same
+    # reading the SF9 uses, app/finalization.py).
+    finalization = latest_annual_finalization_records(session, ids)
     return {
         "annual": annual,
         "terms": per_term,

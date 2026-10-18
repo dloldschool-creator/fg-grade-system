@@ -414,3 +414,36 @@ def test_validate_and_commit_cost_the_same_for_2_rows_as_for_30(session):
     session.rollback()
     assert large <= small + 2, (small, large)
     assert large <= 12, large
+
+
+# --- the per-learner form, next to the upload --------------------------------
+
+
+def test_an_unticked_box_leaves_an_unset_flag_unset():
+    """Rule 2: NULL is "not yet encoded". The form's checkbox can only show
+    ticked or not, so saving it untouched must not turn an unset flag into a
+    "No" nobody entered — which is exactly what a partly-filled upload
+    record (the normal case once uploads exist) would otherwise suffer."""
+    from app.admin_pages.learners import _keep_unset
+
+    assert _keep_unset(None, False) is None  # untouched: stays unset
+    assert _keep_unset(None, True) is True  # ticked: now a Yes
+    assert _keep_unset(True, False) is False  # an explicit Yes can be undone
+    assert _keep_unset(False, False) is False
+    assert _keep_unset(True, True) is True
+
+
+def test_the_form_token_changes_when_the_record_changes():
+    """The token is part of every widget key, so a record changed by an
+    upload or another user re-draws the form with the new values instead of
+    re-submitting a stale copy of the old ones."""
+    from datetime import datetime
+    from types import SimpleNamespace as Row
+
+    from app.admin_pages.learners import _admission_token
+
+    assert _admission_token(None) == "new"
+    before = Row(updated_at=datetime(2026, 10, 18, 9, 0, 0, 1))
+    after = Row(updated_at=datetime(2026, 10, 18, 9, 0, 0, 2))
+    assert _admission_token(before) != _admission_token(after)
+    assert _admission_token(before) == _admission_token(Row(updated_at=before.updated_at))

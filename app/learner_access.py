@@ -109,14 +109,27 @@ def may_edit(learner_id, editable_ids, adviser_user_id) -> bool:
     return adviser_user_id is None or learner_id in editable_ids
 
 
+def newest_per_learner(rows) -> dict:
+    """`{learner_id: (school_year_name, payload)}` keeping each learner's
+    newest enrollment. `rows` is `(learner_id, school_year_name, payload)`.
+    Newest is decided by school year name, which sorts chronologically; on a
+    tie the first row seen is kept. The one rule for "which enrollment is
+    this learner's current one", shared by the placement line and the Grade
+    12 test below."""
+    newest: dict = {}
+    for learner_id, year_name, payload in rows:
+        year_name = year_name or ""
+        if learner_id not in newest or year_name > newest[learner_id][0]:
+            newest[learner_id] = (year_name, payload)
+    return newest
+
+
 def grade_12_learner_ids(session, learner_ids) -> set:
     """The learners whose newest enrollment is in Grade 12. The SHS
     admission record belongs to the learner's entry into Grade 11, so the
     Masterlist hides its form for them and the admission upload refuses
     their rows. A learner enrolled nowhere yet is not in the set: they may
-    be an incoming Grade 11. One query for any number of learners. The
-    newest enrollment is chosen by school year name, which sorts
-    chronologically.
+    be an incoming Grade 11. One query for any number of learners.
 
     Models are imported inside the function, as in `editable_learner_ids`.
     """
@@ -127,18 +140,18 @@ def grade_12_learner_ids(session, learner_ids) -> set:
     learner_ids = list(learner_ids)
     if not learner_ids:
         return set()
-    newest: dict = {}
-    for learner_id, year_name, code, name in (
-        session.query(Enrollment.learner_id, SchoolYear.name, GradeLevel.code, GradeLevel.name)
-        .join(SchoolYear, SchoolYear.id == Enrollment.school_year_id)
-        .outerjoin(GradeLevel, GradeLevel.id == Enrollment.grade_level_id)
-        .filter(Enrollment.learner_id.in_(learner_ids))
-        .all()
-    ):
-        if learner_id not in newest or (year_name or "") > newest[learner_id][0]:
-            newest[learner_id] = (year_name or "", code, name)
+    newest = newest_per_learner(
+        (learner_id, year_name, (code, name))
+        for learner_id, year_name, code, name in (
+            session.query(Enrollment.learner_id, SchoolYear.name, GradeLevel.code, GradeLevel.name)
+            .join(SchoolYear, SchoolYear.id == Enrollment.school_year_id)
+            .outerjoin(GradeLevel, GradeLevel.id == Enrollment.grade_level_id)
+            .filter(Enrollment.learner_id.in_(learner_ids))
+            .all()
+        )
+    )
     return {
         learner_id
-        for learner_id, (_year, code, name) in newest.items()
+        for learner_id, (_year, (code, name)) in newest.items()
         if "".join(ch for ch in (code or name or "") if ch.isdigit()) == "12"
     }
