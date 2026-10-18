@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import NamedTuple
 
 import streamlit as st
 from sqlalchemy.exc import IntegrityError
@@ -99,43 +100,63 @@ def _deadline_banner(term) -> None:
         )
 
 
+class TeacherClass(NamedTuple):
+    offering: SectionSubjectOffering
+    section: Section
+    subject: Subject
+    term: Term
+    label: str
+
+
+def teacher_classes(session, teacher_user_id) -> list[TeacherClass]:
+    """The class picker's options in ONE joined query. This used to
+    session.get five rows per assignment (73 queries for a teacher with 30
+    classes). Ordered school year (newest first), section, subject, term so
+    the list is stable between reruns."""
+    rows = (
+        session.query(SectionSubjectOffering, Section, Subject, Term, SchoolYear)
+        .select_from(TeacherAssignment)
+        .join(SectionSubjectOffering, SectionSubjectOffering.id == TeacherAssignment.section_subject_offering_id)
+        .join(Section, Section.id == SectionSubjectOffering.section_id)
+        .join(Subject, Subject.id == SectionSubjectOffering.subject_id)
+        .join(Term, Term.id == SectionSubjectOffering.term_id)
+        .join(SchoolYear, SchoolYear.id == SectionSubjectOffering.school_year_id)
+        .filter(TeacherAssignment.teacher_user_id == teacher_user_id, TeacherAssignment.is_active.is_(True))
+        .order_by(SchoolYear.name.desc(), Section.name, Subject.official_name, Term.term_number)
+        .all()
+    )
+    seen = set()
+    out = []
+    for offering, section, subject, term, school_year in rows:
+        if offering.id in seen:
+            continue
+        seen.add(offering.id)
+        out.append(TeacherClass(
+            offering, section, subject, term,
+            f"{school_year.name} — {section.name} — {subject.official_name} — {term.name}",
+        ))
+    return out
+
+
 def render() -> None:
     current_user = require_role("SUBJECT_TEACHER")
     st.title("Gradebook")
     render_flashes()
 
     with get_session() as session:
-        assignments = (
-            session.query(TeacherAssignment)
-            .filter_by(teacher_user_id=current_user.id, is_active=True)
-            .all()
-        )
-        if not assignments:
+        classes = teacher_classes(session, current_user.id)
+        if not classes:
             st.info("You have no active teaching assignments yet — ask an admin to assign you on the Teacher Assignments page.")
             return
 
-        offering_by_id = {}
-        label_by_offering_id = {}
-        for assignment in assignments:
-            offering = session.get(SectionSubjectOffering, assignment.section_subject_offering_id)
-            section = session.get(Section, offering.section_id)
-            subject = session.get(Subject, offering.subject_id)
-            term = session.get(Term, offering.term_id)
-            school_year = session.get(SchoolYear, offering.school_year_id)
-            offering_by_id[offering.id] = offering
-            label_by_offering_id[offering.id] = (
-                f"{school_year.name} — {section.name} — {subject.official_name} — {term.name}"
-            )
-
+        class_by_offering_id = {c.offering.id: c for c in classes}
         offering_choice = st.selectbox(
             "Class",
-            options=list(label_by_offering_id.keys()),
-            format_func=lambda v: label_by_offering_id[v],
+            options=list(class_by_offering_id.keys()),
+            format_func=lambda v: class_by_offering_id[v].label,
         )
-        offering = offering_by_id[offering_choice]
-        section = session.get(Section, offering.section_id)
-        subject = session.get(Subject, offering.subject_id)
-        term = session.get(Term, offering.term_id)
+        chosen = class_by_offering_id[offering_choice]
+        offering, section, subject, term = chosen.offering, chosen.section, chosen.subject, chosen.term
 
         # The school's calendar date, not the host's: the host runs on UTC,
         # which would close encoding at 8 a.m. Manila time on the deadline day.

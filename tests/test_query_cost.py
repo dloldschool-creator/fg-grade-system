@@ -297,3 +297,32 @@ def test_connections_are_checked_before_reuse():
     which surfaces as random errors in a long-running app."""
     assert engine.pool._pre_ping is True
     assert engine.pool._recycle > 0
+
+
+def test_gradebook_class_picker_cost_does_not_grow_with_assignments(session):
+    """Was 5 session.get calls per assignment (73 queries for 30 classes)."""
+    from sqlalchemy import func
+
+    from app.admin_pages.gradebook import teacher_classes
+    from app.models.subjects import TeacherAssignment
+
+    row = (
+        session.query(TeacherAssignment.teacher_user_id, func.count())
+        .filter(TeacherAssignment.is_active.is_(True))
+        .group_by(TeacherAssignment.teacher_user_id)
+        .order_by(func.count().desc())
+        .first()
+    )
+    if row is None:
+        pytest.skip("no active teacher assignments")
+    teacher_id, active = row
+    session.rollback()
+    with QueryCounter() as counter:
+        classes = teacher_classes(session, teacher_id)
+    assert len(classes) == active
+    assert counter.count <= 2, f"{counter.count} queries for {active} classes"
+    # the chosen class's section/subject/term need no further queries
+    with QueryCounter() as after:
+        for c in classes:
+            _ = (c.section.name, c.subject.official_name, c.term.name, c.term.grade_encoding_status)
+    assert after.count == 0
