@@ -1020,6 +1020,62 @@ def admission_template_bytes() -> bytes:
     return buffer.getvalue()
 
 
+# Example rows are offered only where an example left in the file cannot
+# write anything: an all-zero LRN matches no learner, so the row fails
+# validation instead. The learner and term-grade imports have no such safe
+# example (a filled-in learner row would be created), so they get headers only.
+_TEMPLATE_EXAMPLES = {
+    ImportJobType.LEARNER_CONTACTS: {
+        "lrn": "000000000000",
+        "guardian_name": "Delete this example row before uploading.",
+        "guardian_email": "parent@example.com",
+        "guardian_mobile": "09171234567",
+        "notices_consent": "Yes",
+    },
+}
+_TEXT_FIELDS = {"lrn", "guardian_mobile"}
+
+
+def spec_template_bytes(spec) -> bytes:
+    """A blank .xlsx for any import spec: headers, plus a Columns sheet.
+
+    Built from `spec.columns`, so the template cannot drift from what the
+    importer actually reads. LRN and mobile columns are formatted as text so
+    Excel keeps leading zeros.
+    """
+    if spec.job_type == ImportJobType.LEARNER_ADMISSIONS:
+        return admission_template_bytes()  # its own, with typed date cells
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet.append([column.label for column in spec.columns])
+    example = _TEMPLATE_EXAMPLES.get(spec.job_type)
+    if example:
+        sheet.append([example.get(column.field) for column in spec.columns])
+    bold = openpyxl.styles.Font(bold=True)
+    for index, column in enumerate(spec.columns, start=1):
+        letter = openpyxl.utils.get_column_letter(index)
+        sheet.cell(row=1, column=index).font = bold
+        sheet.column_dimensions[letter].width = max(16, len(column.label) + 4)
+        if column.field in _TEXT_FIELDS:
+            # Pre-format enough rows that typed LRNs keep their zeros.
+            for row in range(2, 502):
+                sheet.cell(row=row, column=index).number_format = "@"
+    sheet.freeze_panes = "A2"
+
+    notes = workbook.create_sheet("Columns")
+    notes.append(["Column", "Required"])
+    for cell in notes[1]:
+        cell.font = bold
+    for column in spec.columns:
+        notes.append([column.label, "yes" if column.required else "optional"])
+    notes.column_dimensions["A"].width = 28
+    notes.column_dimensions["B"].width = 12
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 LEARNER_ADMISSION_IMPORT = ImportSpec(
     job_type=ImportJobType.LEARNER_ADMISSIONS,
     label="SHS admission records (update existing learners)",

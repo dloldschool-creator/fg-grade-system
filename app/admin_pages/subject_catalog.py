@@ -106,6 +106,13 @@ def _bulk_upload_subjects(session, grade_levels, categories, tracks) -> None:
             f"Category codes: {', '.join(cat_by_code) or 'none yet'}. "
             f"Track codes: {', '.join(track_by_code) or 'none yet'}."
         )
+        st.download_button(
+            "Download the template (.csv)",
+            data=SUBJECT_CSV_COLUMNS.replace(", ", ",") + "\n",
+            file_name="subjects-template.csv",
+            mime="text/csv",
+            key="subject_template_download",
+        )
         # Generation-carrying key so a successful import drops the file;
         # otherwise the rerun re-validates it against the codes just written
         # and every row reads as an already-taken code (see generation_key).

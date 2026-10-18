@@ -15,6 +15,7 @@ until 2026-08-21 all four could be overwritten with no record at all.
 """
 
 from datetime import date, datetime
+from functools import partial
 
 import streamlit as st
 
@@ -48,6 +49,7 @@ from app.import_specs import (
     LEARNER_CONTACT_IMPORT,
     LEARNER_IMPORT,
     admission_template_bytes,
+    spec_template_bytes,
 )
 from app.learner_access import (
     editable_learner_ids,
@@ -614,6 +616,14 @@ def _bulk_upload_section(session, current_user, adviser_user_id) -> None:
             "for good, so those rows are refused rather than guessed at."
         )
 
+        st.download_button(
+            "Download the template (.xlsx)",
+            # Deferred: built when clicked, not on every rerun of the page.
+            data=partial(spec_template_bytes, spec),
+            file_name="learners-template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="learner_template_download",
+        )
         uploaded = st.file_uploader(
             "Excel file (.xlsx)",
             # CSV is still accepted so an older file already saved that way
@@ -749,6 +759,14 @@ def _contact_upload_section(session, current_user, adviser_user_id, editable: se
             "A blank cell leaves what's stored alone, so a file with only mobile numbers "
             "won't erase anyone's email. Notice Consent is Yes or No. Save the file as "
             "Excel (.xlsx)."
+        )
+        st.download_button(
+            "Download the template (.xlsx)",
+            # Deferred: built when clicked, not on every rerun of the page.
+            data=partial(spec_template_bytes, spec),
+            file_name="guardian-contacts-template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="contact_template_download",
         )
         uploaded = st.file_uploader(
             "Excel file (.xlsx)",

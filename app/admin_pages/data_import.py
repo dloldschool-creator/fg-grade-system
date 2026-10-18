@@ -1,3 +1,5 @@
+from functools import partial
+
 import pandas as pd
 import streamlit as st
 
@@ -21,7 +23,7 @@ from app.import_pipeline import (
     record_validation,
     suggest_mapping,
 )
-from app.import_specs import SPECS
+from app.import_specs import SPECS, spec_template_bytes
 from app.models.admin import ImportJob
 from app.models.organization import SchoolYear
 
@@ -106,6 +108,15 @@ def render() -> None:
             )
         else:
             st.warning("No school years yet — create one before importing.")
+
+    st.download_button(
+        "Download the template (.xlsx)",
+        # Deferred: built when clicked, not on every rerun of the page.
+        data=partial(spec_template_bytes, spec),
+        file_name=f"{spec.job_type.value.lower()}-template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"template_{spec.job_type}",
+    )
 
     uploaded = st.file_uploader(
         # CSV is still accepted so an older file already saved that way still
