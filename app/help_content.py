@@ -152,6 +152,22 @@ BY_ROLE = {
             ),
             (
                 "Enrollment & movements",
+                "Upload SHS admission records for your class",
+                "On the **Learner Masterlist**, open **Update SHS admission "
+                "records from a spreadsheet** and download the template. One "
+                "row per learner, matched by **LRN** (the only required "
+                "column); the other columns are the fields of the learner's "
+                "admission form: admission date, JHS/HS completer (Yes or No) "
+                "and general average, previous school, PEPT and ALS A&E "
+                "passer, rating and exam date, CLC and notes.\n\n"
+                "A **blank cell keeps what is stored**, so a partial file is "
+                "safe; to clear a value, use the learner's own form. It is "
+                "for **Grade 11 learners only**, and only learners you may "
+                "edit; any other row is refused with a message and the rest "
+                "still go through.",
+            ),
+            (
+                "Enrollment & movements",
                 "A learner transfers into your section mid-year",
                 "**1. Add the learner.** Search the Learner Masterlist by LRN "
                 "first. If a read-only card shows, they are already in the "
@@ -353,6 +369,22 @@ BY_ROLE = {
     "REGISTRAR": (
         "Registrar — Learners and enrollment",
         [
+            (
+                "Learners & imports",
+                "Upload SHS admission records for many learners",
+                "On the **Learner Masterlist**, open **Update SHS admission "
+                "records from a spreadsheet** and download the template. One "
+                "row per learner, matched by **LRN** (the only required "
+                "column); the other columns are the fields of the learner's "
+                "admission form: admission date, JHS/HS completer (Yes or No) "
+                "and general average, previous school, PEPT and ALS A&E "
+                "passer, rating and exam date, CLC and notes.\n\n"
+                "A **blank cell keeps what is stored**, so a partial file is "
+                "safe; to clear a value, use the learner's own form. It is "
+                "for **Grade 11 learners only** — a Grade 12 row is refused "
+                "with a message, like every row that has a problem, and the "
+                "rest still go through.",
+            ),
             (
                 "Learners & imports",
                 "Upload as Excel (.xlsx)",

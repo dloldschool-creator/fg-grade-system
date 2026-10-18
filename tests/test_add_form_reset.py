@@ -317,3 +317,17 @@ def test_the_check_above_covers_every_page_that_uploads():
     assert names >= {
         "learners.py", "subject_catalog.py", "users.py", "data_import.py"
     }, names
+
+
+def test_the_admission_upload_panel_drops_its_file_on_success_only():
+    """The SHS admission uploader has its own generation name, and the
+    success branch (inside `if try_commit(...)`) clears that same name —
+    not the contacts panel's, or the retained file would re-import."""
+    source = (ADMIN_PAGES / "learners.py").read_text(encoding="utf-8")
+    assert 'generation_key(_UPLOAD_FORM, "admission_csv")' in source
+    section = source[source.index("def _admission_upload_section"):]
+    section = section[: section.index("@st.fragment")]
+    assert '_UPLOAD_FORM = "learner_admission_upload_form"' in section
+    commit = section[section.index("if try_commit("):]
+    assert "clear_text_fields(_UPLOAD_FORM)" in commit
+    assert section.count("clear_text_fields(") == 1, "cleared outside the success branch"

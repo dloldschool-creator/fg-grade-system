@@ -12,7 +12,11 @@ unknown subject, invalid grade, impossible date, and a subject not
 offered during that term. Each has a test.
 """
 
-from datetime import datetime
+import io
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+
+import openpyxl
 
 from app import audit_service
 from app.display_time import SCHOOL_TZ
@@ -36,16 +40,16 @@ from app.import_pipeline import (
     parse_grade,
     parse_lrn,
 )
-from app.learner_access import may_edit
+from app.learner_access import grade_12_learner_ids, may_edit
 from app.models.academic_structure import Section
 from app.models.enums import EnrollmentStatus, GradeWorkflowStatus, ImportJobType, Sex
 from app.models.grades import TermGrade
-from app.models.learners import Enrollment, Learner
+from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
 from app.models.organization import Term
 from app.models.subjects import SectionSubjectOffering, Subject
 from app.naming import normalize_name
 from app.section_access import is_advised_by
-from app.text_rules import SHORT_MAX
+from app.text_rules import ADDRESS_MAX, NOTE_MAX, SHORT_MAX
 
 # `term_grades.source` is free text. Stamping it lets a migrated grade be
 # told apart from one a teacher typed, which matters when reconciling the
@@ -760,6 +764,276 @@ def commit_learner_contacts(session, parsed: list[dict], user_id=None) -> int:
     return changed
 
 
+# --- SHS admission records (update by LRN) --------------------------------
+
+# The same fields, in the same order, as the Learner Masterlist's
+# "Save admission record" form (`_admission_record_form`), plus the
+# completion date the record also holds. (field, header, kind, limit).
+ADMISSION_FIELDS = [
+    ("date_of_shs_admission", "Date of SHS Admission", "date", None),
+    ("junior_high_school_completer", "JHS Completer", "bool", None),
+    ("junior_high_school_general_average", "JHS General Average", "number", None),
+    ("high_school_completer", "HS Completer", "bool", None),
+    ("high_school_general_average", "HS General Average", "number", None),
+    ("high_school_completion_date", "HS Completion Date", "date", None),
+    ("previous_school_name", "Previous School Name", "text", ADDRESS_MAX),
+    ("previous_school_address", "Previous School Address", "text", ADDRESS_MAX),
+    ("pept_passer", "PEPT Passer", "bool", None),
+    ("pept_rating", "PEPT Rating", "number", None),
+    ("pept_examination_date", "PEPT Exam Date", "date", None),
+    ("als_ae_passer", "ALS A&E Passer", "bool", None),
+    ("als_ae_rating", "ALS A&E Rating", "number", None),
+    ("als_ae_examination_date", "ALS A&E Exam Date", "date", None),
+    ("clc_name", "CLC Name", "text", ADDRESS_MAX),
+    ("clc_address", "CLC Address", "text", ADDRESS_MAX),
+    ("other_eligibility_notes", "Other Eligibility Notes", "text", NOTE_MAX),
+]
+
+_ADMISSION_ALIASES = {
+    "date_of_shs_admission": ("dateofadmission", "shsadmissiondate", "admissiondate"),
+    "junior_high_school_completer": ("jhscompleter", "juniorhighschoolcompleter"),
+    "junior_high_school_general_average": ("jhsgeneralaverage", "jhsga", "jhsaverage"),
+    "high_school_completer": ("hscompleter", "highschoolcompleter"),
+    "high_school_general_average": ("hsgeneralaverage", "hsga", "hsaverage"),
+    "high_school_completion_date": ("hscompletiondate", "dateofhscompletion"),
+    "previous_school_name": ("previousschool", "lastschoolattended"),
+    "pept_examination_date": ("peptexaminationdate", "peptdate"),
+    "als_ae_examination_date": ("alsaeexaminationdate", "alsdate", "alsaedate"),
+}
+
+ADMISSION_COLUMNS = [
+    ColumnSpec("lrn", "LRN", True, ("learnerreferencenumber",)),
+    *(
+        ColumnSpec(field_name, label, False, _ADMISSION_ALIASES.get(field_name, ()))
+        for field_name, label, _kind, _limit in ADMISSION_FIELDS
+    ),
+]
+
+_YES = {"y", "yes", "true", "1", "oo"}
+_NO = {"n", "no", "false", "0", "hindi"}
+GRADE_12_MESSAGE = "SHS admission is for Grade 11 learners"
+
+
+def _parse_yes_no(raw) -> tuple[bool | None, str | None]:
+    value = str(raw if raw is not None else "").strip().lower()
+    if not value:
+        return None, None
+    if value in _YES:
+        return True, None
+    if value in _NO:
+        return False, None
+    return None, f"{str(raw).strip()!r} is not Yes or No"
+
+
+def _parse_percentage(raw) -> tuple[Decimal | None, str | None]:
+    """A rating or general average: a number from 0 to 100, kept to the two
+    decimals the column holds. Blank is not an error and not a zero."""
+    text = str(raw if raw is not None else "").strip().replace(",", ".")
+    if not text:
+        return None, None
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return None, f"{str(raw).strip()!r} is not a number"
+    if not value.is_finite() or not (0 <= value <= 100):
+        return None, f"{str(raw).strip()} is outside 0-100"
+    return value.quantize(Decimal("0.01")), None
+
+
+def validate_learner_admissions(
+    session, rows: list[dict], mapping: dict, *, adviser_user_id=None, editable_ids=None
+) -> ValidationResult:
+    """SHS admission records for learners **already in the system**,
+    matched by LRN. Same fields and meaning as the Masterlist form.
+
+    Two queries for the lookups however long the file is (learners, then
+    the Grade 12 set). **A blank cell leaves the stored value alone** and
+    a non-blank one overwrites, so a field can only be cleared on the
+    form. A learner with no record gets one at commit.
+
+    Refused per row, never skipped silently: an unknown LRN, a learner the
+    viewer may not edit (`editable_ids`; no adviser means unscoped), and a
+    learner whose newest enrollment is Grade 12 — the form is not offered
+    for them either, and both use `learner_access.grade_12_learner_ids`.
+    """
+    result = ValidationResult()
+
+    lrns = {lrn for lrn, _ in (parse_lrn(row.get("lrn")) for row in rows) if lrn}
+    learners = (
+        {row.lrn: row for row in session.query(Learner).filter(Learner.lrn.in_(lrns)).all()}
+        if lrns
+        else {}
+    )
+    grade_12 = grade_12_learner_ids(session, [learner.id for learner in learners.values()])
+
+    # One reading order for every slash date in the file, decided from all
+    # the date columns together (same reasoning as the learner import).
+    date_fields = [name for name, _label, kind, _limit in ADMISSION_FIELDS if kind == "date"]
+    order = detect_date_order(row.get(name) for row in rows for name in date_fields)
+
+    seen_in_file: dict[str, int] = {}
+    for row in rows:
+        number = row.get("__row__")
+        errors_before = len(result.errors)
+
+        learner = None
+        lrn, lrn_error = parse_lrn(row.get("lrn"))
+        if lrn_error:
+            result.errors.append(RowError(number, "LRN", lrn_error))
+        elif not lrn:
+            result.errors.append(RowError(number, "LRN", "required"))
+        elif lrn in seen_in_file:
+            result.errors.append(
+                RowError(number, "LRN", f"same LRN as row {seen_in_file[lrn]} in this file")
+            )
+        else:
+            seen_in_file[lrn] = number
+            learner = learners.get(lrn)
+            if learner is None:
+                result.errors.append(RowError(number, "LRN", f"no learner with LRN {lrn}"))
+            elif not may_edit(learner.id, editable_ids or set(), adviser_user_id):
+                result.errors.append(RowError(number, "LRN", f"{lrn} is not one of your learners"))
+            elif learner.id in grade_12:
+                result.errors.append(RowError(number, "LRN", GRADE_12_MESSAGE))
+
+        changes: dict = {}
+        for name, label, kind, limit in ADMISSION_FIELDS:
+            raw = row.get(name)
+            if kind == "bool":
+                value, problem = _parse_yes_no(raw)
+            elif kind == "number":
+                value, problem = _parse_percentage(raw)
+            elif kind == "date":
+                value, problem = parse_date(raw, order)
+            else:
+                value = str(raw if raw is not None else "").strip() or None
+                problem = (
+                    f"longer than {limit} characters" if value and len(value) > limit else None
+                )
+            if problem:
+                result.errors.append(RowError(number, label, problem))
+            elif value is not None:
+                changes[name] = value
+
+        if len(result.errors) != errors_before:
+            continue
+        if not changes:
+            result.warnings.append(
+                RowError(number, None, "no admission details in this row, so nothing to update")
+            )
+            continue
+        result.parsed.append(
+            {
+                "__row__": number,
+                "__changes__": changes,
+                "learner_id": learner.id,
+                "lrn": lrn,
+                "name": f"{learner.last_name}, {learner.first_name}",
+                **changes,
+            }
+        )
+    return result
+
+
+def commit_learner_admissions(session, parsed: list[dict], user_id=None) -> int:
+    """Returns the number of learners whose admission record changed.
+
+    One query loads every existing record; a learner with none gets a new
+    row. Audited per learner as LEARNER_ADMISSION_CHANGED with the old and
+    new value of each field that differs, so re-uploading the same file
+    adds nothing. The form's entry is a thin summary; this one overwrites
+    many learners at once, so the previous values are worth keeping.
+    """
+    ids = [row["learner_id"] for row in parsed]
+    if not ids:
+        return 0
+    records = {
+        record.learner_id: record
+        for record in session.query(LearnerAdmissionRecord)
+        .filter(LearnerAdmissionRecord.learner_id.in_(ids))
+        .all()
+    }
+    changed = 0
+    for row in parsed:
+        record = records.get(row["learner_id"])
+        created = record is None
+        if created:
+            record = LearnerAdmissionRecord(learner_id=row["learner_id"])
+            session.add(record)
+            records[row["learner_id"]] = record
+        fields = row["__changes__"]
+        previous = {name: getattr(record, name, None) for name in fields}
+        for name, value in fields.items():
+            setattr(record, name, value)
+        was, now = audit_service.changes(previous, fields)
+        if was or created:
+            audit_service.record(
+                session,
+                action=audit_service.LEARNER_ADMISSION_CHANGED,
+                object_type="learners",
+                object_id=row["learner_id"],
+                user_id=user_id,
+                previous=was,
+                new={"created": created, **now},
+            )
+            changed += 1
+    return changed
+
+
+def admission_template_bytes() -> bytes:
+    """A blank .xlsx: the headers, plus one example row.
+
+    The example's LRN is all zeros, which no learner has, so a template
+    uploaded with the example still in it fails that row ("no learner with
+    LRN") instead of writing anything. LRN is a text cell, so Excel keeps
+    the zeros.
+    """
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "SHS admission"
+    sheet.append([column.label for column in ADMISSION_COLUMNS])
+    example = {
+        "lrn": "000000000000",
+        "date_of_shs_admission": date(2026, 6, 8),
+        "junior_high_school_completer": "Yes",
+        "junior_high_school_general_average": 88.5,
+        "high_school_completer": "No",
+        "previous_school_name": "Example National High School",
+        "previous_school_address": "Example Street, Example City",
+        "pept_passer": "No",
+        "als_ae_passer": "No",
+        "other_eligibility_notes": "Delete this example row before uploading.",
+    }
+    sheet.append([example.get(column.field) for column in ADMISSION_COLUMNS])
+    kinds = {name: kind for name, _label, kind, _limit in ADMISSION_FIELDS}
+    for index, column in enumerate(ADMISSION_COLUMNS, start=1):
+        letter = openpyxl.utils.get_column_letter(index)
+        sheet.cell(row=1, column=index).font = openpyxl.styles.Font(bold=True)
+        sheet.column_dimensions[letter].width = max(16, len(column.label) + 4)
+        if column.field == "lrn":
+            sheet.cell(row=2, column=index).number_format = "@"
+        elif kinds.get(column.field) == "date":
+            sheet.cell(row=2, column=index).number_format = "yyyy-mm-dd"
+    sheet.freeze_panes = "A2"
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+LEARNER_ADMISSION_IMPORT = ImportSpec(
+    job_type=ImportJobType.LEARNER_ADMISSIONS,
+    label="SHS admission records (update existing learners)",
+    description=(
+        "Adds or updates the SHS admission record of Grade 11 learners already in "
+        "the system, matched by LRN. A blank cell leaves what is stored alone. "
+        "Grade 12 learners are refused. Nobody is created or enrolled."
+    ),
+    columns=ADMISSION_COLUMNS,
+    validate=validate_learner_admissions,
+    commit=commit_learner_admissions,
+)
+
+
 TERM_GRADE_IMPORT = ImportSpec(
     job_type=ImportJobType.TERM_GRADES,
     label="Term grades",
@@ -797,5 +1071,10 @@ LEARNER_CONTACT_IMPORT = ImportSpec(
 
 SPECS = {
     spec.job_type: spec
-    for spec in (LEARNER_IMPORT, LEARNER_CONTACT_IMPORT, TERM_GRADE_IMPORT)
+    for spec in (
+        LEARNER_IMPORT,
+        LEARNER_CONTACT_IMPORT,
+        LEARNER_ADMISSION_IMPORT,
+        TERM_GRADE_IMPORT,
+    )
 }

@@ -152,6 +152,8 @@ class ImportJobType(str, enum.Enum):
     LEARNERS = "LEARNERS"
     # Parent/guardian contacts for existing learners, matched by LRN (§78.1).
     LEARNER_CONTACTS = "LEARNER_CONTACTS"
+    # SHS admission records for existing Grade 11 learners, matched by LRN.
+    LEARNER_ADMISSIONS = "LEARNER_ADMISSIONS"
     SUBJECT_CATALOG = "SUBJECT_CATALOG"
     SUBJECT_PROFILES = "SUBJECT_PROFILES"
     TERM_GRADES = "TERM_GRADES"

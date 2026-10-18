@@ -43,8 +43,14 @@ from app.guardian_contact import (
     normalise_mobile,
 )
 from app.import_pipeline import apply_mapping, missing_required, read_table, suggest_mapping
-from app.import_specs import LEARNER_CONTACT_IMPORT, LEARNER_IMPORT
+from app.import_specs import (
+    LEARNER_ADMISSION_IMPORT,
+    LEARNER_CONTACT_IMPORT,
+    LEARNER_IMPORT,
+    admission_template_bytes,
+)
 from app.learner_access import editable_learner_ids, may_edit
+from app.learner_access import grade_12_learner_ids
 from app.live_search import like_pattern, live_search, search_words
 from app.models.academic_structure import GradeLevel, Section
 from app.models.enums import EnrollmentStatus, Sex
@@ -436,31 +442,10 @@ def _placements(session, learner_ids) -> dict:
 
 
 def _grade_12_learner_ids(session, learner_ids) -> set:
-    """The learners whose newest enrollment is in Grade 12. The SHS
-    admission record belongs to the learner's entry into Grade 11, so its
-    form is not offered for them. A learner enrolled nowhere yet is not in
-    the set: they may be an incoming Grade 11. One query for any number of
-    learners, because it runs above the render loop. The newest enrollment
-    is chosen by school year name, which sorts chronologically (same rule
-    as `_placements`)."""
-    learner_ids = list(learner_ids)
-    if not learner_ids:
-        return set()
-    newest: dict = {}
-    for learner_id, year_name, code, name in (
-        session.query(Enrollment.learner_id, SchoolYear.name, GradeLevel.code, GradeLevel.name)
-        .join(SchoolYear, SchoolYear.id == Enrollment.school_year_id)
-        .outerjoin(GradeLevel, GradeLevel.id == Enrollment.grade_level_id)
-        .filter(Enrollment.learner_id.in_(learner_ids))
-        .all()
-    ):
-        if learner_id not in newest or (year_name or "") > newest[learner_id][0]:
-            newest[learner_id] = (year_name or "", code, name)
-    return {
-        learner_id
-        for learner_id, (_year, code, name) in newest.items()
-        if "".join(ch for ch in (code or name or "") if ch.isdigit()) == "12"
-    }
+    """The learners whose SHS admission form is not offered (newest
+    enrollment in Grade 12). The rule lives in `learner_access` so the
+    admission upload applies the identical one."""
+    return grade_12_learner_ids(session, learner_ids)
 
 
 def _read_only_card(learner: Learner, placement: str | None) -> None:
@@ -795,6 +780,95 @@ def _contact_upload_section(session, current_user, adviser_user_id, editable: se
             st.rerun()
 
 
+def _admission_upload_section(session, current_user, adviser_user_id, editable: set) -> None:
+    """SHS admission records for Grade 11 learners already here, by LRN.
+
+    The batch version of `_admission_record_form`: same fields, same
+    meaning. Scoped like the contacts panel (`editable`), refuses Grade 12
+    learners exactly as the form is hidden for them, and a blank cell
+    leaves the stored value alone — see `validate_learner_admissions`.
+    """
+    spec = LEARNER_ADMISSION_IMPORT
+    _panel = "learner_admission_upload"
+    _UPLOAD_FORM = "learner_admission_upload_form"
+    with st.expander("Update SHS admission records from a spreadsheet", expanded=panel_is_open(_panel)):
+        st.caption(
+            "For **Grade 11** learners already in the masterlist. One row per learner, "
+            "matched by **LRN**. Columns: "
+            f"`{'`, `'.join(c.label for c in spec.columns)}` — only LRN is required. "
+            "A blank cell leaves what's stored alone (a field can only be cleared on the "
+            "learner's own form). Completer and passer columns are Yes or No; dates are "
+            "YYYY-MM-DD or real Excel dates; ratings and averages are 0-100. "
+            "Grade 12 learners are refused. Save the file as Excel (.xlsx)."
+        )
+        st.download_button(
+            "Download the template (.xlsx)",
+            data=admission_template_bytes(),
+            file_name="shs-admission-template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="admission_template_download",
+        )
+        uploaded = st.file_uploader(
+            "Excel file (.xlsx)",
+            type=["csv", "xlsx"],
+            # Generation-carrying so a retained file is not re-validated
+            # (and re-imported) after a successful update.
+            key=generation_key(_UPLOAD_FORM, "admission_csv"),
+            on_change=keep_panel_open, args=(_panel,),
+        )
+        if uploaded is None:
+            return
+
+        headers, rows = read_table(uploaded.getvalue(), uploaded.name)
+        if not rows:
+            st.warning("That file has a header row but no learners in it.")
+            return
+        mapping = suggest_mapping(headers, spec)
+        missing = missing_required(mapping, spec)
+        if missing:
+            st.error(
+                "Couldn't find a column for: **"
+                + "**, **".join(missing)
+                + f"**.\n\nThe file's header row reads: `{'`, `'.join(h for h in headers if h)}`"
+            )
+            return
+        if not any(column.field in mapping for column in spec.columns if column.field != "lrn"):
+            st.error(
+                "No admission column found. Use the headers in the template, "
+                "for example **Date of SHS Admission** or **JHS General Average**."
+            )
+            return
+
+        result = spec.validate(
+            session,
+            apply_mapping(rows, mapping),
+            mapping,
+            adviser_user_id=adviser_user_id,
+            editable_ids=editable,
+        )
+        st.write(f"**{len(result.parsed)} of {len(rows)} row(s) ready.**")
+        if result.errors:
+            st.error(f"{len(result.errors)} row(s) need fixing and will be skipped:")
+            st.dataframe(result.error_dicts(), hide_index=True, width="stretch")
+        if result.warnings:
+            st.warning(f"{len(result.warnings)} row(s) have nothing to update and will be skipped:")
+            st.dataframe(result.warning_dicts(), hide_index=True, width="stretch")
+        if not result.parsed:
+            return
+
+        preview = [
+            {k: v for k, v in row.items() if not k.startswith("__") and not k.endswith("_id")}
+            for row in result.parsed
+        ]
+        st.dataframe(preview, hide_index=True, width="stretch")
+
+        if st.button(f"Update {len(result.parsed)} learner(s)", key="admission_upload_commit"):
+            changed = spec.commit(session, result.parsed, current_user.id)
+            if try_commit(session, f"Updated the SHS admission record of {changed} learner(s)."):
+                clear_text_fields(_UPLOAD_FORM)
+            st.rerun()
+
+
 @st.fragment
 def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
     """The search box and the learners it finds. A fragment so that typing
@@ -1015,3 +1089,4 @@ def render() -> None:
 
         _bulk_upload_section(session, current_user, adviser_user_id)
         _contact_upload_section(session, current_user, adviser_user_id, editable)
+        _admission_upload_section(session, current_user, adviser_user_id, editable)

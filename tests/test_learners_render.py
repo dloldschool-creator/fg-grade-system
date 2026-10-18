@@ -75,3 +75,14 @@ def test_the_shs_admission_form_is_hidden_for_grade_12_learners():
         import pytest
 
         pytest.skip("no Grade 12 learner among the listed learners")
+
+
+def test_the_admission_upload_panel_is_on_the_page_with_its_template():
+    at = AppTest.from_string(SCRIPT, default_timeout=120)
+    at.run(timeout=120)
+    assert not at.exception, [e.value for e in at.exception]
+    labels = [e.label for e in at.expander]
+    assert "Update SHS admission records from a spreadsheet" in labels
+    assert "Update parent/guardian contacts from a spreadsheet" in labels
+    keys = [w.key for w in at.get("download_button")]
+    assert "admission_template_download" in keys

@@ -107,3 +107,38 @@ def may_edit(learner_id, editable_ids, adviser_user_id) -> bool:
     anything.
     """
     return adviser_user_id is None or learner_id in editable_ids
+
+
+def grade_12_learner_ids(session, learner_ids) -> set:
+    """The learners whose newest enrollment is in Grade 12. The SHS
+    admission record belongs to the learner's entry into Grade 11, so the
+    Masterlist hides its form for them and the admission upload refuses
+    their rows. A learner enrolled nowhere yet is not in the set: they may
+    be an incoming Grade 11. One query for any number of learners. The
+    newest enrollment is chosen by school year name, which sorts
+    chronologically.
+
+    Models are imported inside the function, as in `editable_learner_ids`.
+    """
+    from app.models.academic_structure import GradeLevel
+    from app.models.learners import Enrollment
+    from app.models.organization import SchoolYear
+
+    learner_ids = list(learner_ids)
+    if not learner_ids:
+        return set()
+    newest: dict = {}
+    for learner_id, year_name, code, name in (
+        session.query(Enrollment.learner_id, SchoolYear.name, GradeLevel.code, GradeLevel.name)
+        .join(SchoolYear, SchoolYear.id == Enrollment.school_year_id)
+        .outerjoin(GradeLevel, GradeLevel.id == Enrollment.grade_level_id)
+        .filter(Enrollment.learner_id.in_(learner_ids))
+        .all()
+    ):
+        if learner_id not in newest or (year_name or "") > newest[learner_id][0]:
+            newest[learner_id] = (year_name or "", code, name)
+    return {
+        learner_id
+        for learner_id, (_year, code, name) in newest.items()
+        if "".join(ch for ch in (code or name or "") if ch.isdigit()) == "12"
+    }
