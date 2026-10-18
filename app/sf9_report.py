@@ -33,6 +33,7 @@ from app.attendance_engine import ActiveWindow, Movement, compute_active_window,
 from app.attendance_service import (
     active_window_for,
     class_days_in_month,
+    class_days_in_school_year,
     months_with_class_days,
     records_for_month,
     summarize_month,
@@ -289,6 +290,8 @@ class Sf9BatchContext:
     windows: dict
     attendance: dict
     movements: dict
+    learners: dict
+    advisers: dict
 
 
 def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
@@ -315,11 +318,13 @@ def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
         .filter(Strand.id.in_({x.strand_id for x in sections.values() if x.strand_id})).all()
     } if sections else {}
 
-    months = months_with_class_days(session, school_year_id)
-    class_days = {
-        (year, month): class_days_in_month(session, school_year_id, year, month)
-        for year, month in months
-    }
+    # One query for the whole year, grouped here. The per-month helpers
+    # cost a round trip each (12 months = 12 extra queries); the rows come
+    # back date-ordered, so months and each month's days keep their order.
+    class_days: dict = {}
+    for day in class_days_in_school_year(session, school_year_id):
+        class_days.setdefault((day.calendar_date.year, day.calendar_date.month), []).append(day)
+    months = list(class_days)
 
     summaries = {
         row.enrollment_id: row for row in session.query(AnnualGradeSummary)
@@ -343,6 +348,15 @@ def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
     every_day = [d.id for days in class_days.values() for d in days]
     attendance = records_for_month(session, ids, every_day)
 
+    learners = {
+        learner.id: learner for learner in session.query(Learner)
+        .filter(Learner.id.in_({e.learner_id for e in enrollments})).all()
+    }
+    adviser_ids = {s.adviser_user_id for s in sections.values() if s.adviser_user_id}
+    advisers = {
+        user.id: user for user in session.query(User).filter(User.id.in_(adviser_ids)).all()
+    } if adviser_ids else {}
+
     return Sf9BatchContext(
         report=load_report_context(session, enrollments),
         school=session.query(School).one_or_none(),
@@ -357,6 +371,8 @@ def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
         windows=windows,
         attendance=attendance,
         movements=movements,
+        learners=learners,
+        advisers=advisers,
     )
 
 
@@ -367,7 +383,9 @@ def build_sf9_workbook(session: Session, enrollment_id, context: Sf9BatchContext
     lookup is repeated per learner.
     """
     enrollment = session.get(Enrollment, enrollment_id)
-    learner = session.get(Learner, enrollment.learner_id)
+    learner = (
+        context.learners.get(enrollment.learner_id) if context is not None else None
+    ) or session.get(Learner, enrollment.learner_id)
     if context is not None:
         section = context.sections.get(enrollment.section_id)
         school = context.school
@@ -424,7 +442,9 @@ def build_sf9_workbook(session: Session, enrollment_id, context: Sf9BatchContext
     _fill_learning_areas(worksheet, anchors, rows, exit_line, blank_subject_grades)
     _fill_general_average(session, worksheet, anchors, enrollment, context)
     _fill_attendance(session, worksheet, anchors, enrollment, context)
-    _fill_transfer_certificate(session, worksheet, anchors, enrollment, section, grade_level)
+    _fill_transfer_certificate(
+        session, worksheet, anchors, enrollment, section, grade_level, context
+    )
     _fill_comments(worksheet, anchors, enrollment)
     _apply_print_setup(worksheet)
 
@@ -728,7 +748,9 @@ def next_level_after(grade_number: str) -> str:
     return NEXT_LEVEL_AFTER_GRADE_12 if number >= 12 else str(number + 1)
 
 
-def _fill_transfer_certificate(session, worksheet, anchors, enrollment, section, grade_level) -> None:
+def _fill_transfer_certificate(
+    session, worksheet, anchors, enrollment, section, grade_level, context=None
+) -> None:
     """The Certificate of Transfer block.
 
     "Admitted to Grade" is a fact of this year's enrolment, so it's always
@@ -737,9 +759,12 @@ def _fill_transfer_certificate(session, worksheet, anchors, enrollment, section,
     the year with no failed subject — leaving it blank otherwise rather
     than asserting an eligibility they haven't earned.
     """
-    summary = (
-        session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
-    )
+    if context is not None:
+        summary = context.summaries.get(enrollment.id)
+    else:
+        summary = (
+            session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
+        )
     grade_number = _grade_level_number(grade_level)
 
     write_ref(worksheet, anchors, CELL_ADMITTED_TO_GRADE, grade_number or None)
@@ -748,12 +773,13 @@ def _fill_transfer_certificate(session, worksheet, anchors, enrollment, section,
         next_level_after(grade_number) or None if _passed_everything(summary) else None,
     )
 
-    school = session.query(School).one_or_none()
-    adviser = (
-        session.get(User, section.adviser_user_id)
-        if section is not None and section.adviser_user_id
-        else None
-    )
+    has_adviser = section is not None and section.adviser_user_id
+    if context is not None:
+        school = context.school
+        adviser = context.advisers.get(section.adviser_user_id) if has_adviser else None
+    else:
+        school = session.query(School).one_or_none()
+        adviser = session.get(User, section.adviser_user_id) if has_adviser else None
     write_ref(
         worksheet, anchors, CELL_TRANSFER_ADVISER,
         adviser.full_name.upper() if adviser else None,

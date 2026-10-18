@@ -1,4 +1,5 @@
 import io
+import logging
 import zipfile
 
 import streamlit as st
@@ -23,15 +24,47 @@ from app.xlsx_render import two_up_split_workbooks_to_pdf, workbook_to_pdf, work
 
 DASH = "—"
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _fmt(value):
     return int(value) if value is not None else DASH
 
 
-def _preview(session, enrollment) -> None:
+def _deferred_builders(enrollment_id):
+    """Two no-argument callables for `st.download_button(data=...)`.
+
+    Streamlit runs them after the script run, when this page's session is
+    closed, so each opens its own and the closures hold only the id. Passing
+    bytes instead built the workbook and the PDF on every rerun (46 queries,
+    ~4 s), including each toggle of the batch-print options below.
+    """
+
+    def _workbook():
+        from app.database import SessionLocal
+
+        session = SessionLocal()
+        try:
+            return build_sf9_workbook(session, enrollment_id)
+        except Exception:
+            _LOGGER.exception("SF9 download failed for enrollment %s", enrollment_id)
+            raise
+        finally:
+            session.close()
+
+    def build_xlsx() -> bytes:
+        return workbook_to_bytes(_workbook())
+
+    def build_pdf() -> bytes:
+        return workbook_to_pdf(_workbook())
+
+    return build_xlsx, build_pdf
+
+
+def _preview(session, enrollment) -> bool:
     """The same rows the printed form carries, including the §16 rule:
     the combined parent row shows a Final Grade, its indented components
-    deliberately don't."""
+    deliberately don't. Returns False when the card can't be generated."""
     rows = build_learning_area_rows(session, enrollment)
     st.table(
         [
@@ -52,6 +85,8 @@ def _preview(session, enrollment) -> None:
             f"{MAX_LEARNING_AREAS}. The form can't be generated until the section's "
             "offerings are reduced or the template is revised."
         )
+        return False
+    return True
 
 
 def _learner_label(learner: Learner) -> str:
@@ -130,7 +165,7 @@ def render() -> None:
 
         st.divider()
         st.subheader("Learning Progress and Achievement")
-        _preview(session, enrollment)
+        can_build = _preview(session, enrollment)
 
         st.divider()
         st.subheader("Download")
@@ -138,17 +173,15 @@ def render() -> None:
             f"SF9_{learner_by_enrollment[enrollment.id].last_name}"
             f"_{learner_by_enrollment[enrollment.id].first_name}".replace(" ", "")
         )
-        try:
-            workbook = build_sf9_workbook(session, enrollment.id)
-        except ValueError as exc:
-            st.error(str(exc))
+        if not can_build:
             return
 
+        build_xlsx, build_pdf = _deferred_builders(enrollment.id)
         col_a, col_b = st.columns(2)
         with col_a:
             st.download_button(
                 "Download Excel (.xlsx)",
-                data=workbook_to_bytes(workbook),
+                data=build_xlsx,
                 file_name=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
@@ -160,7 +193,7 @@ def render() -> None:
         with col_b:
             st.download_button(
                 "Download PDF",
-                data=workbook_to_pdf(workbook),
+                data=build_pdf,
                 file_name=f"{stem}.pdf",
                 mime="application/pdf",
             )

@@ -326,3 +326,36 @@ def test_gradebook_class_picker_cost_does_not_grow_with_assignments(session):
         for c in classes:
             _ = (c.section.name, c.subject.official_name, c.term.name, c.term.grade_encoding_status)
     assert after.count == 0
+
+
+def test_sf9_card_from_a_context_issues_no_queries(session, roster):
+    """With a Sf9BatchContext a card is pure computation: the learner, the
+    adviser, the school and the annual summary all come from the context.
+    Each used to be one round trip per card (~15 s over a 37-card print)."""
+    from app.sf9_report import build_sf9_workbook, load_sf9_context
+
+    context = load_sf9_context(session, roster)
+    with QueryCounter() as counter:
+        for enrollment in roster:
+            build_sf9_workbook(session, enrollment.id, context)
+    assert counter.count == 0, (
+        f"{counter.count} queries while building {len(roster)} SF9 cards from a "
+        "preloaded context — expected none"
+    )
+
+
+def test_sf9_context_does_not_scale_with_the_number_of_months(session, roster, monkeypatch):
+    """The class days come from one query for the year and are grouped in
+    Python. The per-month helpers cost a round trip each; they must not be
+    reached from load_sf9_context at all."""
+    from app import sf9_report
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError("load_sf9_context fetched class days one month at a time")
+
+    monkeypatch.setattr(sf9_report, "class_days_in_month", _forbidden)
+    monkeypatch.setattr(sf9_report, "months_with_class_days", _forbidden)
+    with QueryCounter() as counter:
+        context = sf9_report.load_sf9_context(session, roster)
+    assert context.months == list(context.class_days)
+    assert counter.count <= 20, f"{counter.count} queries to load the SF9 context"
