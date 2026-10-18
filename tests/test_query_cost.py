@@ -392,11 +392,35 @@ def test_gradebook_export_costs_a_fixed_number_of_queries(session, roster):
         assert row["Term Average"] == expected
 
 
-def test_grade_summary_section_subjects_cost_does_not_grow_with_subjects(session, roster):
-    """Was one session.get(Subject) per subject (8 queries / 0.7 s per click)."""
+def test_grade_summary_section_subjects_come_from_the_context(session, roster):
+    """Read from the report context the page already loaded: no query of
+    its own, and the same subjects in the same order the offerings query it
+    replaced returned."""
     from app.admin_pages.grade_summary import _section_subjects
+    from app.models.subjects import SectionSubjectOffering, Subject
+    from app.report_card import load_report_context
 
     first = roster[0]
+    context = load_report_context(session, roster)
     with QueryCounter() as counter:
-        subjects = _section_subjects(session, first.section_id, first.school_year_id)
-    assert counter.count <= 2, f"{counter.count} queries for {len(subjects)} subjects"
+        subjects = _section_subjects(context)
+    assert counter.count == 0, f"{counter.count} queries for {len(subjects)} subjects"
+
+    offerings = (
+        session.query(SectionSubjectOffering)
+        .filter_by(section_id=first.section_id, school_year_id=first.school_year_id)
+        .order_by(SectionSubjectOffering.display_order)
+        .all()
+    )
+    seen: list = []
+    for offering in offerings:
+        if offering.subject_id not in seen:
+            seen.append(offering.subject_id)
+    reference = {s.id: s for s in session.query(Subject).filter(Subject.id.in_(seen)).all()}
+    assert {s.id for s in subjects} == set(seen)
+    # Order may differ only between subjects sharing a display_order, which
+    # the offerings query left to the database.
+    order = {o.subject_id: o.display_order for o in reversed(offerings)}
+    keys = [order[s.id] if order[s.id] is not None else 9999 for s in subjects]
+    assert keys == sorted(keys)
+    assert [s.official_name for s in subjects if s.id in reference]

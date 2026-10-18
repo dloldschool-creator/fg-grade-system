@@ -20,12 +20,15 @@ from app.xlsx_render import workbook_to_pdf
 _LOGGER = logging.getLogger(__name__)
 
 
-def deferred_builders(section_id, school_year_id, year: int, month: int):
-    """Two no-argument callables for `st.download_button(data=...)`.
+def deferred_workbook_builders(build_workbook, failure_message: str, *failure_args):
+    """Two no-argument callables for `st.download_button(data=...)`, shared
+    by every form that offers an Excel and a PDF download (SF2 here, SF9).
 
-    Streamlit runs them on a separate thread *after* the script run, when the
+    `build_workbook(session)` returns the openpyxl workbook. Streamlit runs
+    the callables on a separate thread *after* the script run, when the
     page's own session is already closed — so each opens its own, and the
-    closures hold only ids and numbers, never the session or ORM objects.
+    closure should hold only ids and numbers, never the session or ORM
+    objects.
     """
 
     def _workbook():
@@ -33,13 +36,11 @@ def deferred_builders(section_id, school_year_id, year: int, month: int):
 
         session = SessionLocal()
         try:
-            return build_sf2_workbook(session, section_id, school_year_id, year, month)
+            return build_workbook(session)
         except Exception:
             # Streamlit logs the traceback and tells the browser the file
             # failed, but not *which* form; name it so the log can be read.
-            _LOGGER.exception(
-                "SF2 download failed for section %s, %04d-%02d", section_id, year, month
-            )
+            _LOGGER.exception(failure_message, *failure_args)
             raise
         finally:
             session.close()
@@ -51,6 +52,14 @@ def deferred_builders(section_id, school_year_id, year: int, month: int):
         return workbook_to_pdf(_workbook())
 
     return build_xlsx, build_pdf
+
+
+def deferred_builders(section_id, school_year_id, year: int, month: int):
+    """The SF2's Excel and PDF builders for one section-month."""
+    return deferred_workbook_builders(
+        lambda session: build_sf2_workbook(session, section_id, school_year_id, year, month),
+        "SF2 download failed for section %s, %04d-%02d", section_id, year, month,
+    )
 
 
 def render_sf2_downloads(section, school_year_id, year: int, month: int) -> None:

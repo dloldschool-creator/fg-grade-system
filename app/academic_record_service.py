@@ -83,6 +83,17 @@ def capture_academic_record(session: Session, enrollment_id, user_id=None) -> Le
     return capture_academic_records_batch(session, [enrollment_id], user_id)[0]
 
 
+def _award_rank(award) -> tuple:
+    """Which of several ELIGIBLE_AWARDED rows for one enrollment/term is
+    frozen into the record. There can be several (one per award policy
+    version, plus overrides), the record has room for one name, and the old
+    `.first()` had no ORDER BY, so it was Postgres's whim. The lowest rank
+    wins: an administrator's override (§40 — a deliberate decision) over a
+    computed award, then a named award over an unnamed one, then the name
+    alphabetically so the choice is stable."""
+    return (not bool(award.is_override), award.award_name is None, award.award_name or "")
+
+
 def capture_academic_records_batch(
     session: Session, enrollment_ids, user_id=None
 ) -> list[LearnerAcademicRecord]:
@@ -160,13 +171,8 @@ def capture_academic_records_batch(
         )
         .all()
     ):
-        # An enrollment/term can hold several rows (a computed award plus
-        # overrides). The old `.first()` had no ORDER BY, so which one it
-        # returned was Postgres's whim; this picks the same way every time
-        # — a named award over an unnamed one, a computed one over an
-        # override — which is what the old query returned on the live data.
         key = (award.enrollment_id, award.term_id)
-        rank = (award.award_name is None, bool(award.is_override), award.award_name or "")
+        rank = _award_rank(award)
         if key not in awards or rank < awards[key][0]:
             awards[key] = (rank, award)
 

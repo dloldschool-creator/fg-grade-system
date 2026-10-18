@@ -1,18 +1,17 @@
 import io
-import logging
 import zipfile
 
 import streamlit as st
 
 from app.admin_pages._helpers import get_session, render_flashes, section_picker
 from app.auth import require_role
-from app.excel_template import workbook_to_bytes
 from app.models.enums import CompletionStatus
 from app.models.grades import AnnualGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.roster_order import learner_order_by
 from app.models.organization import SchoolYear
 from app.report_card import build_learning_area_rows
+from app.sf2_download import deferred_workbook_builders
 from app.sf9_report import (
     MAX_LEARNING_AREAS,
     SPLIT_AFTER_COL,
@@ -20,11 +19,9 @@ from app.sf9_report import (
     build_sf9_workbook,
     load_sf9_context,
 )
-from app.xlsx_render import two_up_split_workbooks_to_pdf, workbook_to_pdf, workbooks_to_pdf
+from app.xlsx_render import two_up_split_workbooks_to_pdf, workbooks_to_pdf
 
 DASH = "—"
-
-_LOGGER = logging.getLogger(__name__)
 
 
 def _fmt(value):
@@ -32,33 +29,14 @@ def _fmt(value):
 
 
 def _deferred_builders(enrollment_id):
-    """Two no-argument callables for `st.download_button(data=...)`.
-
-    Streamlit runs them after the script run, when this page's session is
-    closed, so each opens its own and the closures hold only the id. Passing
-    bytes instead built the workbook and the PDF on every rerun (46 queries,
-    ~4 s), including each toggle of the batch-print options below.
-    """
-
-    def _workbook():
-        from app.database import SessionLocal
-
-        session = SessionLocal()
-        try:
-            return build_sf9_workbook(session, enrollment_id)
-        except Exception:
-            _LOGGER.exception("SF9 download failed for enrollment %s", enrollment_id)
-            raise
-        finally:
-            session.close()
-
-    def build_xlsx() -> bytes:
-        return workbook_to_bytes(_workbook())
-
-    def build_pdf() -> bytes:
-        return workbook_to_pdf(_workbook())
-
-    return build_xlsx, build_pdf
+    """The card's Excel and PDF builders (see `deferred_workbook_builders`).
+    Passing bytes instead built the workbook and the PDF on every rerun
+    (46 queries, ~4 s), including each toggle of the batch-print options
+    below."""
+    return deferred_workbook_builders(
+        lambda session: build_sf9_workbook(session, enrollment_id),
+        "SF9 download failed for enrollment %s", enrollment_id,
+    )
 
 
 def _preview(session, enrollment) -> bool:

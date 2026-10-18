@@ -394,28 +394,16 @@ def _learner_detail(session, current_user, enrollment: Enrollment, context=None,
     )
 
 
-def _section_subjects(session, section_id, school_year_id) -> list[Subject]:
+def _section_subjects(context) -> list[Subject]:
     """Every subject offered to this section across the year, in offering
-    display order, deduplicated across terms."""
-    offerings = (
-        session.query(SectionSubjectOffering)
-        .filter_by(section_id=section_id, school_year_id=school_year_id)
-        .order_by(SectionSubjectOffering.display_order)
-        .all()
+    display order, deduplicated across terms. Read from the report context
+    the page already loaded (its `offerings_by_subject` holds exactly the
+    section's offered subjects; `subject_order` is each one's lowest
+    display_order), so it costs no query."""
+    ordered = sorted(
+        context.offerings_by_subject, key=lambda sid: context.subject_order.get(sid, 9999)
     )
-    subject_ids: list = []
-    seen = set()
-    for offering in offerings:
-        if offering.subject_id not in seen:
-            seen.add(offering.subject_id)
-            subject_ids.append(offering.subject_id)
-    if not subject_ids:
-        return []
-    # One IN query, not a session.get per subject (~85ms each).
-    by_id = {
-        s.id: s for s in session.query(Subject).filter(Subject.id.in_(subject_ids)).all()
-    }
-    return [by_id[sid] for sid in subject_ids if sid in by_id]
+    return [context.subjects[sid] for sid in ordered if sid in context.subjects]
 
 
 VIEW_OPTIONS = ["Term 1", "Term 2", "Term 3", "Final"]
@@ -431,7 +419,7 @@ def _class_summary(
     )
     view = st.radio("View", VIEW_OPTIONS, horizontal=True, key="class_summary_view")
 
-    all_subjects = _section_subjects(session, section_id, school_year_id)
+    all_subjects = _section_subjects(context)
     summaries = panel["annual"]
     # `context` and `learners` are loaded once by render() and shared with
     # the per-learner panels — the database is ~85ms away, so loading them
