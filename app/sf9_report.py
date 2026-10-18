@@ -47,8 +47,13 @@ from app.excel_template import (
     write_ref,
 )
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.enums import CompletionStatus, EnrollmentStatus
-from app.models.grades import AnnualGradeSummary
+from app.models.enums import (
+    CompletionStatus,
+    EnrollmentStatus,
+    FinalizationRecordStatus,
+    FinalizationScopeType,
+)
+from app.models.grades import AnnualGradeSummary, GradeFinalizationRecord
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear
 from app.models.rbac import User
@@ -292,6 +297,7 @@ class Sf9BatchContext:
     movements: dict
     learners: dict
     advisers: dict
+    finalized: set  # enrollment ids whose year is currently FINALIZED
 
 
 def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
@@ -373,6 +379,7 @@ def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
         movements=movements,
         learners=learners,
         advisers=advisers,
+        finalized=finalized_enrollment_ids(session, ids),
     )
 
 
@@ -738,6 +745,40 @@ def _passed_everything(summary) -> bool:
     )
 
 
+def eligible_for_next_level(summary, finalized: bool) -> bool:
+    """Whether the card may print "Eligible for Admission to Grade": the year
+    is finalized AND the learner completed it with nothing below passing.
+    Finalizing is what makes the result official (grades lock, the permanent
+    record is frozen), so an unfinalized year never asserts an eligibility
+    that a later correction or reopen could still change."""
+    return finalized and _passed_everything(summary)
+
+
+def finalized_enrollment_ids(session: Session, enrollment_ids) -> set:
+    """The enrollments whose year is currently FINALIZED: the newest annual
+    finalization record says FINALIZED, not REOPENED. One query for any
+    number of enrollments — the same rule Grade Summary applies."""
+    enrollment_ids = list(enrollment_ids)
+    if not enrollment_ids:
+        return set()
+    latest: dict = {}
+    for record in (
+        session.query(GradeFinalizationRecord)
+        .filter(
+            GradeFinalizationRecord.scope_type == FinalizationScopeType.ANNUAL_ENROLLMENT,
+            GradeFinalizationRecord.enrollment_id.in_(enrollment_ids),
+        )
+        .order_by(GradeFinalizationRecord.created_at.desc())
+        .all()
+    ):
+        latest.setdefault(record.enrollment_id, record)
+    return {
+        enrollment_id
+        for enrollment_id, record in latest.items()
+        if record.status == FinalizationRecordStatus.FINALIZED
+    }
+
+
 def next_level_after(grade_number: str) -> str:
     """What a completer is eligible to enter next. Grade 12 is the end of
     Senior High, so its completers move on to COLLEGE rather than a
@@ -755,22 +796,25 @@ def _fill_transfer_certificate(
 
     "Admitted to Grade" is a fact of this year's enrolment, so it's always
     filled. "Eligible for Admission to Grade" is a judgement about the
-    learner's result, so it's only filled once they've actually completed
-    the year with no failed subject — leaving it blank otherwise rather
-    than asserting an eligibility they haven't earned.
+    learner's result, so it's only filled once the year is FINALIZED and
+    they completed it with no failed subject — leaving it blank otherwise
+    rather than asserting an eligibility they haven't earned (or one a
+    reopen could still change).
     """
     if context is not None:
         summary = context.summaries.get(enrollment.id)
+        finalized = enrollment.id in context.finalized
     else:
         summary = (
             session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment.id).one_or_none()
         )
+        finalized = enrollment.id in finalized_enrollment_ids(session, [enrollment.id])
     grade_number = _grade_level_number(grade_level)
 
     write_ref(worksheet, anchors, CELL_ADMITTED_TO_GRADE, grade_number or None)
     write_ref(
         worksheet, anchors, CELL_ELIGIBLE_FOR_GRADE,
-        next_level_after(grade_number) or None if _passed_everything(summary) else None,
+        next_level_after(grade_number) or None if eligible_for_next_level(summary, finalized) else None,
     )
 
     has_adviser = section is not None and section.adviser_user_id
