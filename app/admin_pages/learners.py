@@ -46,7 +46,7 @@ from app.import_pipeline import apply_mapping, missing_required, read_table, sug
 from app.import_specs import LEARNER_CONTACT_IMPORT, LEARNER_IMPORT
 from app.learner_access import editable_learner_ids, may_edit
 from app.live_search import like_pattern, live_search, search_words
-from app.models.academic_structure import Section
+from app.models.academic_structure import GradeLevel, Section
 from app.models.enums import EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerAdmissionRecord
 from app.models.organization import SchoolYear
@@ -435,6 +435,34 @@ def _placements(session, learner_ids) -> dict:
     return lines
 
 
+def _grade_12_learner_ids(session, learner_ids) -> set:
+    """The learners whose newest enrollment is in Grade 12. The SHS
+    admission record belongs to the learner's entry into Grade 11, so its
+    form is not offered for them. A learner enrolled nowhere yet is not in
+    the set: they may be an incoming Grade 11. One query for any number of
+    learners, because it runs above the render loop. The newest enrollment
+    is chosen by school year name, which sorts chronologically (same rule
+    as `_placements`)."""
+    learner_ids = list(learner_ids)
+    if not learner_ids:
+        return set()
+    newest: dict = {}
+    for learner_id, year_name, code, name in (
+        session.query(Enrollment.learner_id, SchoolYear.name, GradeLevel.code, GradeLevel.name)
+        .join(SchoolYear, SchoolYear.id == Enrollment.school_year_id)
+        .outerjoin(GradeLevel, GradeLevel.id == Enrollment.grade_level_id)
+        .filter(Enrollment.learner_id.in_(learner_ids))
+        .all()
+    ):
+        if learner_id not in newest or (year_name or "") > newest[learner_id][0]:
+            newest[learner_id] = (year_name or "", code, name)
+    return {
+        learner_id
+        for learner_id, (_year, code, name) in newest.items()
+        if "".join(ch for ch in (code or name or "") if ch.isdigit()) == "12"
+    }
+
+
 def _read_only_card(learner: Learner, placement: str | None) -> None:
     """What an adviser sees for someone else's learner.
 
@@ -815,6 +843,7 @@ def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
             .all()
         } if mine else {}
         placements = _placements(session, [learner.id for learner in others])
+        grade_12 = _grade_12_learner_ids(session, mine_ids)
 
         for learner in mine:
             label = f"{learner.last_name}, {learner.first_name}"
@@ -825,10 +854,11 @@ def _learner_list(current_user, adviser_user_id, may_delete: bool) -> None:
                 _identity_form(session, learner, current_user, may_delete=may_delete)
                 st.divider()
                 _contact_form(session, learner, current_user)
-                st.divider()
-                _admission_record_form(
-                    session, learner, current_user, admission_records.get(learner.id)
-                )
+                if learner.id not in grade_12:
+                    st.divider()
+                    _admission_record_form(
+                        session, learner, current_user, admission_records.get(learner.id)
+                    )
 
         if others:
             # No heading, and the caption carries the whole label. The

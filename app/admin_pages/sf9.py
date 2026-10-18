@@ -17,7 +17,6 @@ from app.sf9_report import (
     SPLIT_AFTER_COL,
     SPLIT_BACK_START_COL,
     build_sf9_workbook,
-    finalized_enrollment_ids,
     load_sf9_context,
 )
 from app.xlsx_render import two_up_split_workbooks_to_pdf, workbooks_to_pdf
@@ -140,11 +139,6 @@ def render() -> None:
             st.warning(
                 "This learner's record isn't COMPLETE. The card will still generate, but "
                 "unencoded subjects print blank — recompute on Grade Summary first."
-            )
-        elif enrollment.id not in finalized_enrollment_ids(session, [enrollment.id]):
-            st.info(
-                "This learner's year isn't finalized yet, so \"Eligible for Admission to "
-                "Grade\" prints blank on the card. Finalize it on Grade Summary first."
             )
 
         st.divider()
