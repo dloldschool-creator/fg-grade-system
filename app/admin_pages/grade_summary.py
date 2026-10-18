@@ -3,7 +3,11 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from app import audit_service
-from app.academic_record_service import capture_academic_record, get_academic_record
+from app.academic_record_service import (
+    capture_academic_record,
+    capture_academic_records_batch,
+    get_academic_record,
+)
 from app.admin_pages._helpers import (
     flash,
     get_session,
@@ -54,41 +58,53 @@ def _fmt_units(value):
     return str(int(value)) if value == int(value) else str(value.normalize())
 
 
-def _finalize_enrollment(session, current_user, enrollment: Enrollment, summary, now) -> int:
-    """The actual write side of finalizing one enrollment — shared by the
-    single Finalize button and the section-wide "Finalize all eligible"
-    action so the two can never drift apart. Returns the number of term
-    grades finalized (for the audit entry and the caller's tally)."""
+def _mark_finalized(session, current_user, enrollment_id, term_grades, now) -> None:
+    """The writes that don't depend on the academic-record freeze: the
+    finalization record and the FINALIZED status on the term grades."""
     session.add(
         GradeFinalizationRecord(
             scope_type=FinalizationScopeType.ANNUAL_ENROLLMENT,
-            enrollment_id=enrollment.id,
+            enrollment_id=enrollment_id,
             finalized_by_user_id=current_user.id,
             finalized_at=now,
             status=FinalizationRecordStatus.FINALIZED,
         )
     )
-    term_grades = session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
     for tg in term_grades:
         tg.status = GradeWorkflowStatus.FINALIZED
         tg.finalized_by_user_id = current_user.id
         tg.finalized_at = now
         tg.version += 1
-    # Freeze the permanent academic record (§38). Everything it shows is
-    # copied now, so renaming a subject or editing the grading policy in a
-    # later year can't rewrite this one.
-    capture_academic_record(session, enrollment.id, current_user.id)
+
+
+def _audit_finalized(session, current_user, enrollment_id, summary, term_grade_count) -> None:
     audit_service.record(
         session,
         action=audit_service.GRADE_FINALIZED,
         object_type="enrollments",
-        object_id=enrollment.id,
+        object_id=enrollment_id,
         user_id=current_user.id,
         new={
             "general_average": summary.general_average if summary else None,
-            "term_grades_finalized": len(term_grades),
+            "term_grades_finalized": term_grade_count,
         },
     )
+
+
+def _finalize_enrollment(session, current_user, enrollment: Enrollment, summary, now) -> int:
+    """The actual write side of finalizing one enrollment — used by the
+    single Finalize button. The section-wide "Finalize all eligible" action
+    does the same writes through the same helpers
+    (`finalize_eligible_enrollments`), batched, so the two can never drift
+    apart. Returns the number of term grades finalized (for the audit entry
+    and the caller's tally)."""
+    term_grades = session.query(TermGrade).filter_by(enrollment_id=enrollment.id).all()
+    _mark_finalized(session, current_user, enrollment.id, term_grades, now)
+    # Freeze the permanent academic record (§38). Everything it shows is
+    # copied now, so renaming a subject or editing the grading policy in a
+    # later year can't rewrite this one.
+    capture_academic_record(session, enrollment.id, current_user.id)
+    _audit_finalized(session, current_user, enrollment.id, summary, len(term_grades))
     return len(term_grades)
 
 
@@ -99,9 +115,9 @@ def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> 
 
     `panel["annual"]` and `panel["finalization"]` are already loaded flat
     for the whole section (see `_panel_data`), so deciding who's eligible
-    costs nothing here — only `_finalize_enrollment`'s per-learner
-    academic-record freeze (§38) still runs once per learner, because each
-    one really does get its own snapshot.
+    costs nothing here. The writes are batched too: one `IN (...)` for the
+    term grades and one `capture_academic_records_batch` for the permanent
+    academic records (§38) — a fixed number of queries, not ~40 per learner.
     """
     finalized = incomplete = already = 0
     if not panel["finalization_open"]:
@@ -111,6 +127,7 @@ def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> 
         # last term.
         return finalized, incomplete, already
     now = datetime.now(timezone.utc)
+    eligible = []
     for enrollment in enrollments:
         latest_record = panel["finalization"].get(enrollment.id)
         if latest_record is not None and latest_record.status == FinalizationRecordStatus.FINALIZED:
@@ -120,7 +137,27 @@ def finalize_eligible_enrollments(session, current_user, enrollments, panel) -> 
         if summary is None or summary.completion_status != CompletionStatus.COMPLETE:
             incomplete += 1
             continue
-        _finalize_enrollment(session, current_user, enrollment, summary, now)
+        eligible.append((enrollment, summary))
+    if not eligible:
+        return finalized, incomplete, already
+
+    grades_by_enrollment: dict = {}
+    for tg in (
+        session.query(TermGrade)
+        .filter(TermGrade.enrollment_id.in_([e.id for e, _ in eligible]))
+        .all()
+    ):
+        grades_by_enrollment.setdefault(tg.enrollment_id, []).append(tg)
+    for enrollment, _summary in eligible:
+        _mark_finalized(
+            session, current_user, enrollment.id, grades_by_enrollment.get(enrollment.id, []), now
+        )
+    capture_academic_records_batch(session, [e.id for e, _ in eligible], current_user.id)
+    for enrollment, summary in eligible:
+        _audit_finalized(
+            session, current_user, enrollment.id, summary,
+            len(grades_by_enrollment.get(enrollment.id, [])),
+        )
         finalized += 1
     return finalized, incomplete, already
 

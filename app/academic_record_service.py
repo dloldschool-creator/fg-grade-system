@@ -30,7 +30,7 @@ from app.models.grades import AnnualGradeSummary, TermGradeSummary
 from app.models.learners import Enrollment, Learner
 from app.models.organization import School, SchoolYear, Term
 from app.models.subjects import GradingPolicy, GradingPolicyVersion, Subject, SubjectCategory
-from app.report_card import build_learning_area_rows
+from app.report_card import ReportCardContext, build_learning_area_rows, load_report_context
 
 
 def _learner_name(learner: Learner) -> str:
@@ -75,79 +75,204 @@ def capture_academic_record(session: Session, enrollment_id, user_id=None) -> Le
     previous rows and bumps `revision`, rather than accumulating
     duplicates — the record describes the year's outcome, and there is
     only ever one current outcome.
+
+    A 1-element wrapper over `capture_academic_records_batch`, so the
+    single Finalize button and the section-wide one share one
+    implementation. Flushes, never commits.
     """
-    enrollment = session.get(Enrollment, enrollment_id)
-    learner = session.get(Learner, enrollment.learner_id)
-    section = session.get(Section, enrollment.section_id)
+    return capture_academic_records_batch(session, [enrollment_id], user_id)[0]
+
+
+def capture_academic_records_batch(
+    session: Session, enrollment_ids, user_id=None
+) -> list[LearnerAcademicRecord]:
+    """`capture_academic_record` for many enrollments in a fixed number of
+    queries (the same split as `load_report_context` /
+    `recompute_enrollment_grades_batch`): shared lookups are loaded once,
+    per-enrollment rows with one `IN (...)` each, and the report-card rows
+    come from one `load_report_context` per section. The maths and the §16
+    language-pair rule stay in `build_learning_area_rows`.
+
+    Returns the records in the order of `enrollment_ids`. Flushes, never
+    commits — the caller owns the transaction.
+    """
+    enrollment_ids = list(enrollment_ids)
+    if not enrollment_ids:
+        return []
+
+    enrollments = {
+        e.id: e for e in session.query(Enrollment).filter(Enrollment.id.in_(enrollment_ids)).all()
+    }
+    ordered = [enrollments[i] for i in enrollment_ids]  # KeyError == unknown enrollment
+
+    learner_ids = {e.learner_id for e in ordered}
+    section_ids = {e.section_id for e in ordered}
+    grade_level_ids = {e.grade_level_id for e in ordered if e.grade_level_id}
+    year_ids = {e.school_year_id for e in ordered}
+
+    learners = {l.id: l for l in session.query(Learner).filter(Learner.id.in_(learner_ids)).all()}
+    sections = {s.id: s for s in session.query(Section).filter(Section.id.in_(section_ids)).all()}
+    grade_levels = (
+        {g.id: g for g in session.query(GradeLevel).filter(GradeLevel.id.in_(grade_level_ids)).all()}
+        if grade_level_ids
+        else {}
+    )
+    track_ids = {s.track_id for s in sections.values() if s.track_id}
+    strand_ids = {s.strand_id for s in sections.values() if s.strand_id}
+    tracks = (
+        {t.id: t for t in session.query(Track).filter(Track.id.in_(track_ids)).all()}
+        if track_ids
+        else {}
+    )
+    strands = (
+        {t.id: t for t in session.query(Strand).filter(Strand.id.in_(strand_ids)).all()}
+        if strand_ids
+        else {}
+    )
     school = session.query(School).one_or_none()
-    school_year = session.get(SchoolYear, enrollment.school_year_id)
-    grade_level = (
-        session.get(GradeLevel, enrollment.grade_level_id) if enrollment.grade_level_id else None
-    )
-    track = session.get(Track, section.track_id) if section and section.track_id else None
-    strand = session.get(Strand, section.strand_id) if section and section.strand_id else None
-    summary = (
-        session.query(AnnualGradeSummary).filter_by(enrollment_id=enrollment_id).one_or_none()
-    )
-    version, policy_label, passing_grade = _resolve_policy(session, enrollment.school_year_id)
+    school_years = {
+        y.id: y for y in session.query(SchoolYear).filter(SchoolYear.id.in_(year_ids)).all()
+    }
+    summaries = {
+        s.enrollment_id: s
+        for s in session.query(AnnualGradeSummary)
+        .filter(AnnualGradeSummary.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+    policies = {year_id: _resolve_policy(session, year_id) for year_id in year_ids}
 
-    record = (
-        session.query(LearnerAcademicRecord).filter_by(enrollment_id=enrollment_id).one_or_none()
-    )
-    if record is None:
-        record = LearnerAcademicRecord(enrollment_id=enrollment_id, learner_id=learner.id)
-        session.add(record)
-    else:
-        record.revision = (record.revision or 0) + 1
-        _clear_children(session, record.id)
+    existing = {
+        r.enrollment_id: r
+        for r in session.query(LearnerAcademicRecord)
+        .filter(LearnerAcademicRecord.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+    if existing:
+        _clear_children_batch(session, [r.id for r in existing.values()])
 
-    record.lrn = learner.lrn
-    record.learner_name = _learner_name(learner)
-    record.school_name = school.school_name if school else None
-    record.deped_school_id = school.deped_school_id if school else None
-    record.school_year_name = school_year.name if school_year else ""
-    record.grade_level = (grade_level.code or grade_level.name) if grade_level else None
-    record.section_name = section.name if section else None
-    record.track_name = track.name if track else None
-    record.strand_name = strand.name if strand else None
-    record.general_average = summary.general_average if summary else None
-    # How that average was reached, frozen as text and a number (§38). A
-    # later revision of DO 017's Table 19 must not re-explain — or worse,
-    # re-derive — a General Average that has already been issued.
-    record.averaging_method = (
-        summary.averaging_method.value
-        if summary and summary.averaging_method is not None
-        else None
-    )
-    record.total_units = summary.total_units if summary else None
-    record.completion_status = (
-        summary.completion_status if summary else CompletionStatus.INCOMPLETE
-    )
-    record.general_average_remark = _general_average_remark(summary, passing_grade)
-    record.award_name = _annual_award_name(session, enrollment_id)
-    record.passing_grade = passing_grade
-    record.grading_policy_version_id = version.id if version else None
-    record.grading_policy_label = policy_label
-    record.snapshot_at = datetime.now(timezone.utc)
-    record.snapshot_by_user_id = user_id
+    # Awards: one query for both the annual (term_id NULL) and per-term ones.
+    awards: dict = {}
+    for award in (
+        session.query(LearnerAward)
+        .filter(
+            LearnerAward.enrollment_id.in_(enrollment_ids),
+            LearnerAward.award_result == AwardResult.ELIGIBLE_AWARDED,
+        )
+        .all()
+    ):
+        # An enrollment/term can hold several rows (a computed award plus
+        # overrides). The old `.first()` had no ORDER BY, so which one it
+        # returned was Postgres's whim; this picks the same way every time
+        # — a named award over an unnamed one, a computed one over an
+        # override — which is what the old query returned on the live data.
+        key = (award.enrollment_id, award.term_id)
+        rank = (award.award_name is None, bool(award.is_override), award.award_name or "")
+        if key not in awards or rank < awards[key][0]:
+            awards[key] = (rank, award)
+
+    records: dict = {}
+    for enrollment in ordered:
+        if enrollment.id in records:
+            continue
+        learner = learners[enrollment.learner_id]
+        section = sections.get(enrollment.section_id)
+        school_year = school_years.get(enrollment.school_year_id)
+        grade_level = grade_levels.get(enrollment.grade_level_id) if enrollment.grade_level_id else None
+        track = tracks.get(section.track_id) if section and section.track_id else None
+        strand = strands.get(section.strand_id) if section and section.strand_id else None
+        summary = summaries.get(enrollment.id)
+        version, policy_label, passing_grade = policies[enrollment.school_year_id]
+
+        record = existing.get(enrollment.id)
+        if record is None:
+            record = LearnerAcademicRecord(enrollment_id=enrollment.id, learner_id=learner.id)
+            session.add(record)
+        else:
+            record.revision = (record.revision or 0) + 1
+
+        record.lrn = learner.lrn
+        record.learner_name = _learner_name(learner)
+        record.school_name = school.school_name if school else None
+        record.deped_school_id = school.deped_school_id if school else None
+        record.school_year_name = school_year.name if school_year else ""
+        record.grade_level = (grade_level.code or grade_level.name) if grade_level else None
+        record.section_name = section.name if section else None
+        record.track_name = track.name if track else None
+        record.strand_name = strand.name if strand else None
+        record.general_average = summary.general_average if summary else None
+        # How that average was reached, frozen as text and a number (§38). A
+        # later revision of DO 017's Table 19 must not re-explain — or worse,
+        # re-derive — a General Average that has already been issued.
+        record.averaging_method = (
+            summary.averaging_method.value
+            if summary and summary.averaging_method is not None
+            else None
+        )
+        record.total_units = summary.total_units if summary else None
+        record.completion_status = (
+            summary.completion_status if summary else CompletionStatus.INCOMPLETE
+        )
+        record.general_average_remark = _general_average_remark(summary, passing_grade)
+        annual_award = awards.get((enrollment.id, None))
+        record.award_name = annual_award[1].award_name if annual_award else None
+        record.passing_grade = passing_grade
+        record.grading_policy_version_id = version.id if version else None
+        record.grading_policy_label = policy_label
+        record.snapshot_at = datetime.now(timezone.utc)
+        record.snapshot_by_user_id = user_id
+        records[enrollment.id] = record
 
     # Flush only once the NOT NULL columns are populated — and before the
     # child rows, which need record.id. Flushing straight after add()
     # would fire the INSERT with every field still None.
     session.flush()
 
-    _capture_subjects(session, record, enrollment)
-    _capture_terms(session, record, enrollment)
-    return record
+    lookup = _subject_lookup(session)
+    terms_by_year = _terms_by_year(session, year_ids)
+    term_summaries = {
+        (s.enrollment_id, s.term_id): s
+        for s in session.query(TermGradeSummary)
+        .filter(TermGradeSummary.enrollment_id.in_(enrollment_ids))
+        .all()
+    }
+
+    # `load_report_context` shares offerings and combined areas, so it takes
+    # one section's learners at a time.
+    groups: dict = {}
+    for enrollment in enrollments.values():
+        key = (enrollment.section_id, enrollment.school_year_id, enrollment.grade_level_id)
+        groups.setdefault(key, []).append(enrollment)
+    for group in groups.values():
+        context = load_report_context(session, group)
+        for enrollment in group:
+            record = records[enrollment.id]
+            _capture_subjects(session, record, enrollment, context, lookup)
+            _capture_terms(
+                record, enrollment, terms_by_year[enrollment.school_year_id],
+                term_summaries, awards, session,
+            )
+    return [records[i] for i in enrollment_ids]
 
 
-def _clear_children(session: Session, record_id) -> None:
-    session.query(LearnerAcademicRecordSubject).filter_by(
-        learner_academic_record_id=record_id
+def _clear_children_batch(session: Session, record_ids) -> None:
+    session.query(LearnerAcademicRecordSubject).filter(
+        LearnerAcademicRecordSubject.learner_academic_record_id.in_(record_ids)
     ).delete(synchronize_session=False)
-    session.query(LearnerAcademicRecordTerm).filter_by(
-        learner_academic_record_id=record_id
+    session.query(LearnerAcademicRecordTerm).filter(
+        LearnerAcademicRecordTerm.learner_academic_record_id.in_(record_ids)
     ).delete(synchronize_session=False)
+
+
+def _terms_by_year(session: Session, year_ids) -> dict:
+    by_year: dict = {year_id: [] for year_id in year_ids}
+    for term in (
+        session.query(Term)
+        .filter(Term.school_year_id.in_(year_ids))
+        .order_by(Term.term_number)
+        .all()
+    ):
+        by_year[term.school_year_id].append(term)
+    return by_year
 
 
 def _general_average_remark(summary, passing_grade) -> str | None:
@@ -156,16 +281,13 @@ def _general_average_remark(summary, passing_grade) -> str | None:
     return "PASSED" if summary.general_average >= passing_grade else "FAILED"
 
 
-def _annual_award_name(session: Session, enrollment_id) -> str | None:
-    award = (
-        session.query(LearnerAward)
-        .filter_by(enrollment_id=enrollment_id, term_id=None, award_result=AwardResult.ELIGIBLE_AWARDED)
-        .first()
-    )
-    return award.award_name if award else None
-
-
-def _capture_subjects(session: Session, record: LearnerAcademicRecord, enrollment: Enrollment) -> None:
+def _capture_subjects(
+    session: Session,
+    record: LearnerAcademicRecord,
+    enrollment: Enrollment,
+    context: ReportCardContext,
+    lookup: dict,
+) -> None:
     """One row per learning area, in the §16 print order.
 
     The names and categories are resolved here, once, and stored as text.
@@ -173,9 +295,12 @@ def _capture_subjects(session: Session, record: LearnerAcademicRecord, enrollmen
     though §16 blanks that cell on the printed card — the record holds the
     truth, the form decides what to show.
     """
-    lookup = _subject_lookup(session)
-    for order, row in enumerate(build_learning_area_rows(session, enrollment)):
+    for order, row in enumerate(build_learning_area_rows(session, enrollment, context)):
         subject_id, code, category = lookup.get(row.name, (None, None, None))
+        component_final = None
+        if row.is_component and subject_id is not None:
+            final = context.finals.get((enrollment.id, subject_id))
+            component_final = final.final_grade if final else None
         session.add(
             LearnerAcademicRecordSubject(
                 learner_academic_record_id=record.id,
@@ -197,53 +322,20 @@ def _capture_subjects(session: Session, record: LearnerAcademicRecord, enrollmen
                 remark=row.remark,
                 is_combined_parent=not row.is_component and "/" in row.name,
                 is_component=row.is_component,
-                component_final_grade=_component_final_grade(session, enrollment, subject_id)
-                if row.is_component
-                else None,
+                component_final_grade=component_final,
             )
         )
 
 
-def _component_final_grade(session: Session, enrollment: Enrollment, subject_id):
-    if subject_id is None:
-        return None
-    from app.models.grades import SubjectFinalGrade
-
-    final = (
-        session.query(SubjectFinalGrade)
-        .filter_by(enrollment_id=enrollment.id, subject_id=subject_id)
-        .one_or_none()
-    )
-    return final.final_grade if final else None
-
-
-def _capture_terms(session: Session, record: LearnerAcademicRecord, enrollment: Enrollment) -> None:
-    terms = (
-        session.query(Term)
-        .filter_by(school_year_id=enrollment.school_year_id)
-        .order_by(Term.term_number)
-        .all()
-    )
+def _capture_terms(record, enrollment, terms, term_summaries: dict, awards: dict, session) -> None:
     comments = {
         1: enrollment.term1_adviser_comment,
         2: enrollment.term2_adviser_comment,
         3: enrollment.term3_adviser_comment,
     }
     for term in terms:
-        summary = (
-            session.query(TermGradeSummary)
-            .filter_by(enrollment_id=enrollment.id, term_id=term.id)
-            .one_or_none()
-        )
-        award = (
-            session.query(LearnerAward)
-            .filter_by(
-                enrollment_id=enrollment.id,
-                term_id=term.id,
-                award_result=AwardResult.ELIGIBLE_AWARDED,
-            )
-            .first()
-        )
+        summary = term_summaries.get((enrollment.id, term.id))
+        award = awards.get((enrollment.id, term.id))
         session.add(
             LearnerAcademicRecordTerm(
                 learner_academic_record_id=record.id,
@@ -259,7 +351,7 @@ def _capture_terms(session: Session, record: LearnerAcademicRecord, enrollment: 
                 completion_status=(
                     summary.completion_status if summary else CompletionStatus.INCOMPLETE
                 ),
-                award_name=award.award_name if award else None,
+                award_name=award[1].award_name if award else None,
                 adviser_comment=comments.get(term.term_number),
             )
         )
