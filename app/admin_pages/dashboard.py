@@ -9,8 +9,6 @@ recomputes a grade or an attendance total, so what a principal sees here
 is exactly what the gradebooks and report cards say.
 """
 
-import calendar as _calendar
-
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func
@@ -227,6 +225,8 @@ def _encoding_progress(session, sy_id) -> list[dict]:
 # reprint, so one name.
 REPRINT_COLUMN = "Reprint SF2/SF4?"
 
+MONTH_COLUMN = st.column_config.DateColumn("Month", format="MMMM YYYY")
+
 
 def _attendance_status(session, sy_id) -> list[dict]:
     """Which section-months are still open (§33). Blank means nobody has
@@ -255,10 +255,13 @@ def _attendance_status(session, sy_id) -> list[dict]:
         else {}
     )
 
-    # year_month is a date pinned to the 1st, not separate year/month
-    # columns.
+    # Latest month first, sections alphabetical within a month. year_month
+    # is a date pinned to the 1st, so its ordinal orders months.
     rows = []
-    for status in sorted(statuses, key=lambda s: (s.year_month, sections[s.section_id].name)):
+    for status in sorted(
+        statuses,
+        key=lambda s: (-s.year_month.toordinal(), sections[s.section_id].name),
+    ):
         awaiting = ""
         if reprint_pending(status):
             cause = causes[status.id]
@@ -268,7 +271,9 @@ def _attendance_status(session, sy_id) -> list[dict]:
         rows.append(
             {
                 "Section": sections[status.section_id].name,
-                "Month": f"{_calendar.month_name[status.year_month.month]} {status.year_month.year}",
+                # The date itself, formatted by MONTH_COLUMN, so clicking
+                # the header sorts by date rather than alphabetically.
+                "Month": status.year_month,
                 "Status": display_state(status.status) if status.status else DASH,
                 # §33: a reopened month's printed SF2/SF4 may be stale.
                 REPRINT_COLUMN: awaiting,
@@ -351,7 +356,12 @@ def render() -> None:
                     "confirms the new copy on the Attendance & SF2 or SF2 page.",
                     icon="🖨️",
                 )
-            st.dataframe(pd.DataFrame(attendance), hide_index=True, width="stretch")
+            st.dataframe(
+                pd.DataFrame(attendance),
+                hide_index=True,
+                width="stretch",
+                column_config={"Month": MONTH_COLUMN},
+            )
         else:
             st.caption("No attendance months have been started yet.")
 

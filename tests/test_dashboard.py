@@ -1,9 +1,16 @@
 """The School Dashboard (§3E "view dashboards", "review section summaries")."""
 
+import uuid
+from datetime import date
+from types import SimpleNamespace
+
 import pytest
 
-from app.admin_pages.dashboard import DISPLAY_COLUMNS, _enrollment_overview
+from app.admin_pages.dashboard import DISPLAY_COLUMNS, _attendance_status, _enrollment_overview
 from app.database import SessionLocal
+from app.models.academic_structure import Section
+from app.models.attendance import AttendanceMonthStatus
+from app.models.enums import FinalizationState
 from app.models.organization import SchoolYear
 
 
@@ -58,6 +65,67 @@ def test_every_display_column_is_present_on_each_row(session):
     for row in rows:
         for column in DISPLAY_COLUMNS:
             assert column in row, f"{column} missing"
+
+
+class _FakeQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    filter_by = filter
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    """Just enough session for `_attendance_status`: sections, then their
+    month statuses. No reprint is pending, so `User` is never queried."""
+
+    def __init__(self, sections, statuses):
+        self._rows = {Section: sections, AttendanceMonthStatus: statuses}
+
+    def query(self, model):
+        return _FakeQuery(self._rows[model])
+
+
+def _month(section_id, year_month):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        section_id=section_id,
+        year_month=year_month,
+        status=FinalizationState.OPEN,
+        reopened_at=None,
+        changed_after_finalize_at=None,
+        reprint_acknowledged_at=None,
+    )
+
+
+def test_attendance_months_are_latest_first_then_by_section():
+    """Latest month on top, sections alphabetical within a month — and
+    Month stays a date, so clicking its header sorts by date rather than
+    alphabetically (April before October)."""
+    a, b = uuid.uuid4(), uuid.uuid4()
+    sections = [SimpleNamespace(id=b, name="BEZOS"), SimpleNamespace(id=a, name="ARISTOTLE")]
+    statuses = [
+        _month(b, date(2026, 8, 1)),
+        _month(a, date(2026, 10, 1)),
+        _month(a, date(2026, 8, 1)),
+        _month(b, date(2026, 10, 1)),
+        _month(a, date(2026, 9, 1)),
+    ]
+
+    rows = _attendance_status(_FakeSession(sections, statuses), sy_id=None)
+
+    assert [(r["Month"], r["Section"]) for r in rows] == [
+        (date(2026, 10, 1), "ARISTOTLE"),
+        (date(2026, 10, 1), "BEZOS"),
+        (date(2026, 9, 1), "ARISTOTLE"),
+        (date(2026, 8, 1), "ARISTOTLE"),
+        (date(2026, 8, 1), "BEZOS"),
+    ]
 
 
 def test_the_overview_cost_does_not_scale_with_sections(session):
