@@ -561,7 +561,14 @@ of each is in `docs/build-log.md`.
   default, verifies every day reads the same, needs the new code live
   first). A month's bits share one `updated_at`, so Parent Notices'
   "attendance changed" can over-report across September's term split —
-  never under-report.
+  never under-report. **Done on the live database 2026-10-29:** migration
+  applied, code deployed at `8c23f79`, compaction run (49,171 P rows
+  became 2,667 month rows; 31 P rows kept because audit entries point at
+  them; all 51,159 days read back identically), then `--vacuum-full`:
+  `attendance_records` 12.6 MB -> 0.4 MB and the database 53 MB -> 41 MB.
+  Expect growth of about 5 MB a year from here, not 63. Nothing left to
+  run; a future restore from a pre-compaction backup would need the
+  compaction again.
 - **Advisers and registrars can reopen a finalized attendance month**
   (2026-10-15, §33 amended) — the adviser only for a section they advise,
   via `section_access.may_reopen_attendance_month`, never a hand-rolled
