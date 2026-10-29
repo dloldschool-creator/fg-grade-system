@@ -4,14 +4,19 @@ Read-only by construction: it draws no control that writes anything, so a
 School Head reaching it cannot change official data whatever else changes
 around it. That is a stronger guarantee than hiding buttons.
 
-Every figure is read from the already-computed tables — this page never
-recomputes a grade or an attendance total, so what a principal sees here
-is exactly what the gradebooks and report cards say.
+Every school figure is read from the already-computed tables — this page
+never recomputes a grade or an attendance total, so what a principal sees
+here is exactly what the gradebooks and report cards say. The one
+exception is the Super Admin's database-space card, which reads Postgres's
+own size catalogs and says nothing about grades.
 """
+
+import logging
+import os
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from app.admin_pages._helpers import get_session, render_flashes
 from app.analytics_service import ACTIVE_ENROLLMENT_STATUSES
@@ -33,6 +38,8 @@ from app.models.rbac import User
 ACTIVE_STATUSES = ACTIVE_ENROLLMENT_STATUSES
 
 DASH = "—"
+
+logger = logging.getLogger(__name__)
 
 
 def _enrollment_overview(session, sy_id) -> list[dict]:
@@ -282,6 +289,86 @@ def _attendance_status(session, sy_id) -> list[dict]:
     return rows
 
 
+# Supabase's free tier caps the database at 500 MB. Past it the project
+# goes read-only, which for this app means no grade can be saved. Set
+# DB_LIMIT_MB when the plan changes, so no code edit or redeploy is needed.
+DB_LIMIT_MB = int(os.environ.get("DB_LIMIT_MB", "500"))
+DB_WARN_FRACTION = 0.8
+DB_CRITICAL_FRACTION = 0.9
+DB_USAGE_TTL_SECONDS = 300
+_MB = 1024 * 1024
+
+
+@st.cache_data(ttl=DB_USAGE_TTL_SECONDS, show_spinner=False)
+def _database_usage() -> tuple[int, list[tuple[str, int]]] | None:
+    """(total bytes, [(table, bytes incl. indexes)] largest five), or None
+    if the catalogs could not be read.
+
+    Cached because the size moves slowly and every dashboard rerun would
+    otherwise pay two round trips for it. A failure is returned as None
+    rather than raised, because an exception is not cached and a down
+    database would be retried on every click. Nothing here is per-viewer,
+    so sharing the cache across users is safe. The session is opened
+    inside, since a Session cannot cross the cache boundary.
+
+    The total covers every schema, so the table list does too: Supabase's
+    own auth and storage tables count against the same quota.
+    """
+    try:
+        with get_session() as session:
+            total = session.execute(text("SELECT pg_database_size(current_database())")).scalar()
+            tables = session.execute(
+                text(
+                    "SELECT n.nspname, c.relname, pg_total_relation_size(c.oid) "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE c.relkind = 'r' "
+                    "AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
+                    "ORDER BY 3 DESC LIMIT 5"
+                )
+            ).all()
+    except Exception:
+        logger.exception("Could not read database size")
+        return None
+    return int(total), [
+        (name if schema == "public" else f"{schema}.{name}", int(size))
+        for schema, name, size in tables
+    ]
+
+
+def _render_database_usage() -> None:
+    """A card showing how much of the free-tier database is used."""
+    usage = _database_usage()
+    if usage is None:
+        st.caption("Database size is unavailable right now.")
+        return
+    total, tables = usage
+
+    used_mb = total / _MB
+    fraction = used_mb / DB_LIMIT_MB
+    with st.container(border=True):
+        st.markdown("**Database space**")
+        st.metric("Used", f"{used_mb:,.1f} MB")
+        st.progress(min(fraction, 1.0), text=f"{fraction:.0%} of {DB_LIMIT_MB} MB")
+        if fraction >= DB_CRITICAL_FRACTION:
+            st.error(
+                "The database is nearly full. At the limit Supabase makes it "
+                "read-only and no grade can be saved. Archive old audit entries "
+                "or upgrade the plan.",
+                icon="🚨",
+            )
+        elif fraction >= DB_WARN_FRACTION:
+            st.warning(
+                f"The database is over {DB_WARN_FRACTION:.0%} of its {DB_LIMIT_MB} MB limit.",
+                icon="⚠️",
+            )
+        if tables:
+            st.caption(
+                "Largest tables: "
+                + ", ".join(f"{name} {size / _MB:,.1f} MB" for name, size in tables)
+            )
+        st.caption(f"Refreshed at most every {DB_USAGE_TTL_SECONDS // 60} minutes.")
+
+
 def render() -> None:
     current_user = require_role("SUPER_ADMIN", "REGISTRAR", "SCHOOL_HEAD")
     st.title("Dashboard")
@@ -289,6 +376,12 @@ def render() -> None:
         "This page is for viewing data only."
     )
     render_flashes()
+
+    # Infrastructure, not school data: only the administrator can act on it.
+    # Above the school-year picker and its early returns, since the size is
+    # of the whole database and must show even for a year with no sections.
+    if "SUPER_ADMIN" in current_user.role_codes:
+        _render_database_usage()
 
     with get_session() as session:
         school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
