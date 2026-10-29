@@ -11,11 +11,11 @@ groups**, and the groups are what this module is about:
 
 1. **Follows the enrollment.** Rows that describe the learner, not the
    section, and stay correct when `section_id` changes:
-   `learner_movements` (a Transferred In stays true) and
-   `attendance_records`. Attendance is keyed by (enrollment, calendar
-   date) and carries no section, so the rows simply appear on the new
-   section's sheet. That matters because saving a month's attendance grid writes a
-   PRESENT row for every learner (the old Prepare button did the same) —
+   `learner_movements` (a Transferred In stays true), `attendance_records`
+   and `attendance_encoded_days`. Attendance is keyed by enrollment and
+   date and carries no section, so it simply appears on the new section's
+   sheet. That matters because saving a month's attendance grid saves a
+   P for every learner (the old Prepare button did the same) —
    blocking on attendance would refuse nearly every real correction. The
    one real attendance hazard is a **finalized** month on either side, and
    that is checked separately.
@@ -48,13 +48,18 @@ from sqlalchemy import Date, func, literal, select, union_all
 
 from app import audit_service
 from app.models.academic_structure import Section
-from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
+from app.models.attendance import (
+    AcademicCalendarDate,
+    AttendanceEncodedDays,
+    AttendanceMonthStatus,
+    AttendanceRecord,
+)
 from app.models.base import Base
 from app.models.enums import FinalizationState
 from app.models.learners import Enrollment
 from app.text_rules import clean_text, reason_problem
 
-FOLLOWS = {"learner_movements", "attendance_records"}
+FOLLOWS = {"learner_movements", "attendance_records", "attendance_encoded_days"}
 DERIVED = {
     "subject_final_grades",
     "combined_learning_area_results",
@@ -138,11 +143,15 @@ def finalized_attendance_months(session, enrollment, section_ids) -> list:
     """Months this learner has attendance in that are FINALIZED for any of
     `section_ids`. Moving out of one would change a finalized SF2; moving
     into one would add a learner to it."""
-    months = (
+    # A saved P is a bit in attendance_encoded_days, not a row.
+    months = union_all(
         select(func.date_trunc("month", AcademicCalendarDate.calendar_date).cast(Date))
         .join(AttendanceRecord, AttendanceRecord.calendar_date_id == AcademicCalendarDate.id)
-        .where(AttendanceRecord.enrollment_id == enrollment.id)
-        .distinct()
+        .where(AttendanceRecord.enrollment_id == enrollment.id),
+        select(AttendanceEncodedDays.year_month).where(
+            AttendanceEncodedDays.enrollment_id == enrollment.id,
+            AttendanceEncodedDays.days != 0,
+        ),
     )
     return sorted(
         {

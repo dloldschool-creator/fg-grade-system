@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, ForeignKey, SmallInteger, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, SmallInteger, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,12 @@ class AcademicCalendarDate(UUIDPKMixin, TimestampMixin, Base):
 
 
 class AttendanceRecord(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
+    """One day that says something other than a plain save of P: an X,
+    T-L or T-C, or a day corrected back to P (kept so its audit entries
+    still point at a row). A saved P needs no row — see
+    `AttendanceEncodedDays`. Rows written as P before 2026-10-29 are still
+    valid and read the same."""
+
     __tablename__ = "attendance_records"
     __table_args__ = (UniqueConstraint("enrollment_id", "calendar_date_id"),)
 
@@ -48,6 +54,36 @@ class AttendanceRecord(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
         default=AttendanceStatus.PRESENT, server_default=AttendanceStatus.PRESENT.value
     )
     encoded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class AttendanceEncodedDays(UUIDPKMixin, TimestampMixin, VersionMixin, Base):
+    """Which days of one month have been encoded for one enrollment.
+
+    `days` is a bitmask: bit (d - 1) is set when day d of `year_month` has
+    been saved. A set bit with no `AttendanceRecord` is a **P**; a clear
+    bit with no record is "not yet encoded" (§33, rule 2). This replaced
+    one PRESENT row per learner per day, which was 96% of
+    `attendance_records` — one row here stands for a whole month.
+
+    Read through `attendance_service.statuses_for_days`, never directly:
+    a day is encoded if its bit is set *or* it has a record, and the
+    status is the record's when there is one. Written only with bitwise
+    `|` and `& ~` in SQL, so two saves of one month cannot overwrite each
+    other's bits (rule 9) — `version` still counts the changes.
+    """
+
+    __tablename__ = "attendance_encoded_days"
+    __table_args__ = (UniqueConstraint("enrollment_id", "year_month"),)
+
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("enrollments.id", ondelete="RESTRICT"), nullable=False
+    )
+    # First of the month, like attendance_month_status.year_month.
+    year_month: Mapped[date] = mapped_column(Date, nullable=False)
+    days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_saved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
 

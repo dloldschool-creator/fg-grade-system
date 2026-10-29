@@ -505,10 +505,11 @@ of each is in `docs/build-log.md`.
   `enrollments.section_id` after creation. Every table with an FK to
   `enrollments` falls into one of three groups, and **blocking is the
   default**, so a new table blocks the day it exists:
-  *follows the learner* — `learner_movements` and `attendance_records`,
-  which has **no section column**. The first version blocked on
-  attendance, and saving a month's grid writes PRESENT rows for everyone
-  (the old Prepare button did the same), so it refused almost every real case.
+  *follows the learner* — `learner_movements`, `attendance_records` and
+  `attendance_encoded_days`, which have **no section column**. The first
+  version blocked on attendance, and saving a month's grid saves a P for
+  everyone (the old Prepare button did the same), so it refused almost
+  every real case.
   The real attendance check is a **FINALIZED month on either section**.
   *Derived* — summaries, final grades, combined results, non-override
   awards: deleted, and the next recompute rebuilds them.
@@ -528,14 +529,39 @@ of each is in `docs/build-log.md`.
   list every learner as unencoded beside a grid showing P. Future days
   stay blank: the old button wrote the whole month, which counted days
   that hadn't happened as present in Insights and the page summary.
-  Default Ps go in with `ON CONFLICT DO NOTHING` so two first-saves of
-  one month can't collide; any other new code still uses the ORM, so a
-  real clash still surfaces. **Audit:** a first entry of X, T-L or T-C
-  *is* logged as ATTENDANCE_CHANGED (previous "not yet encoded") even
-  though it is a create — the grid showed the day as P, so it is the
-  change from present §50 cares about; a first P is not, and clearing a
-  saved day logs status None. Found in the live data first: six
-  section-months had been saved without ever being prepared.
+  Saved Ps are bits ORed in SQL (next entry), so two first-saves of one
+  month can't collide; any other new code still uses the ORM, so a real
+  clash still surfaces. **Audit:** a first entry of X, T-L or T-C *is*
+  logged as ATTENDANCE_CHANGED (previous "not yet encoded", or PRESENT
+  over a saved P) even though it is a create — the grid showed the day as
+  P, so it is the change from present §50 cares about; a first P is not,
+  and clearing a saved day logs status None. Found in the live data
+  first: six section-months had been saved without ever being prepared.
+- **A saved P is a bit, not a row** (2026-10-29). `attendance_records`
+  was 13 MB for 51,159 rows, 96% plain PRESENT — about 63 MB a year at
+  ~1,200 learners on a 500 MB database. Now every saved day sets its bit
+  in `attendance_encoded_days` (one row per learner per **month**, `days`
+  a bitmask, day d = bit d−1), and only a day that says something else
+  has a record. Bit or record = encoded; record's status if any, else P;
+  neither = **not yet encoded**, so rule 2 and §33 are untouched.
+  **Read through `attendance_service.statuses_for_days`** (or
+  `statuses_for_enrollment`, `attendance_for_days`), never the table
+  alone: a reader that queries `attendance_records` runs fine and counts
+  every P as unencoded — on SF2, SF9, Insights, the awards.
+  `tests/test_attendance_storage.py` fails on `AttendanceRecord.status`
+  or a whole-row query outside `attendance_service.py`. Three details:
+  bits are written only with `|` / `& ~` in SQL (`mark_encoded` /
+  `mark_unencoded`, the Core table — a list of params with the entity is
+  an ORM bulk op), so concurrent saves can't overwrite each other; a day
+  corrected **back** to P keeps its record, because the perfect-attendance
+  staleness checks join audit entries through `attendance_records.id`;
+  and clearing a bit-only P is audited against the month row's id
+  (`ENCODED_DAYS_OBJECT`). Old P rows still read correctly;
+  `scripts/compact_attendance.py` moves them into bits (dry run by
+  default, verifies every day reads the same, needs the new code live
+  first). A month's bits share one `updated_at`, so Parent Notices'
+  "attendance changed" can over-report across September's term split —
+  never under-report.
 - **Advisers and registrars can reopen a finalized attendance month**
   (2026-10-15, §33 amended) — the adviser only for a section they advise,
   via `section_access.may_reopen_attendance_month`, never a hand-rolled
@@ -595,8 +621,8 @@ of each is in `docs/build-log.md`.
   REOPENED/FINALIZED audit pair, restoring the original finalizer rather
   than stamping the registrar over them. Every month the learner
   **appeared on SF2** — `appears_in_month` over the active window, not
-  "has an attendance row", since a save before a backdated exit leaves
-  default PRESENT rows past the exit date — is listed as an SF2/SF4 to reprint on Enrollment →
+  "has attendance saved", since a save before a backdated exit leaves
+  saved Ps past the exit date — is listed as an SF2/SF4 to reprint on Enrollment →
   **Withdrawn**. Finalized grades, a frozen academic
   record and award overrides still block, and so does any table pointing
   at `enrollments` that is not in `DELETED`/`DERIVED` — same

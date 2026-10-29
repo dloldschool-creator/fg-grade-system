@@ -411,3 +411,31 @@ If it ever needs pruning, verified read-only on 2026-10-29: `postgres` may
 - It is a raw write to the live database: show the statement and a count
   first, and get approval.
 - Postgres may not hand the freed space back to the card straight away.
+
+### Attendance: saved Ps are bits (2026-10-29)
+
+`attendance_records` was the second-largest table: 13 MB for 51,159 rows,
+49,202 of them plain PRESENT, growing about 63 MB a year at ~1,200
+learners. A saved P is now a bit in `attendance_encoded_days` (one row per
+learner per month); only X, T-L and T-C keep a row each. Rehearsed against
+the live data, rolled back: 49,171 P rows move into 2,667 month rows
+(~0.3 MB), 31 P rows stay because audit entries point at them, and all
+51,159 days read back identically. Expected growth after: ~5 MB a year.
+
+Deploy in this order — the code needs the table, and the compaction needs
+the code:
+
+1. `alembic upgrade head` (`d7b3e5a19c42`). Additive: a new table; the
+   running code ignores it.
+2. Push and **Reboot**; check the footer shows the new commit. From here a
+   saved P writes no row, and old P rows still read correctly.
+3. Outside encoding hours: `python -m scripts.compact_attendance` (dry
+   run, rolls back), then `--confirm`. It refuses to keep anything unless
+   every day reads the same afterwards.
+4. Optional: `python -m scripts.compact_attendance --vacuum-full` to hand
+   the freed ~12 MB back so the Database space card shows it. Locks
+   `attendance_records` for a second or two.
+
+Don't run step 3 before step 2: code from before this change reads only
+rows, and would show every compacted day as not encoded. Don't downgrade
+the migration after step 3 — the bits are then the only record of those Ps.

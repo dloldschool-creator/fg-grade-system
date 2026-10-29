@@ -47,10 +47,10 @@ Every month the learner **appeared on SF2** is listed in the withdrawal
 entry as an **SF2/SF4 to reprint**, because a copy already printed or
 submitted still carries them. "Appeared" is
 `attendance_engine.appears_in_month` over the learner's active window,
-not "has an attendance row": saving a month writes a default PRESENT row
-for everyone on that day's roster (the old Prepare button wrote the whole
-month), so an exit movement backdated after a save leaves rows past the
-exit date that no SF2 ever printed.
+not "has attendance saved": saving a month saves a default P for
+everyone on that day's roster (the old Prepare button wrote the whole
+month), so an exit movement backdated after a save leaves saved days past
+the exit date that no SF2 ever printed.
 
 **Concurrency.** Same as the section correction: the enrollment row is
 locked `FOR UPDATE` before anything is counted, which conflicts with the
@@ -76,11 +76,11 @@ from sqlalchemy import String, case, cast, func, literal, select, union_all
 
 from app import audit_service
 from app.attendance_engine import EXIT_MOVEMENTS, Movement, appears_in_month, compute_active_window
-from app.attendance_service import bump_version, reopen_month
+from app.attendance_service import bump_version, reopen_month, statuses_for_enrollment
 from app.display_time import to_school_time
 from app.enrollment_section_correction import DERIVED, _enrollment_fks
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
+from app.models.attendance import AttendanceMonthStatus
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.grades import TermGrade
 from app.models.learners import Enrollment, Learner, LearnerMovement
@@ -95,6 +95,7 @@ from app.text_rules import SHORT_MAX, clean_text, reason_problem
 DELETED = {
     "term_grades",
     "attendance_records",
+    "attendance_encoded_days",
     "learner_movements",
     "enrollment_subject_overrides",
     "grade_finalization_records",
@@ -105,7 +106,8 @@ DELETED = {
 
 LABELS = {
     "term_grades": "Term grades",
-    "attendance_records": "Attendance days",
+    "attendance_records": "Attendance day records",
+    "attendance_encoded_days": "Attendance months (saved days)",
     "learner_movements": "Movements",
     "enrollment_subject_overrides": "Subject substitutions",
     "grade_finalization_records": "Grade finalization records",
@@ -287,12 +289,7 @@ def load_record(session, enrollment_id) -> LearnerRecord:
         .order_by(LearnerMovement.effective_date, LearnerMovement.created_at)
         .all()
     )
-    days = session.execute(
-        select(AcademicCalendarDate.calendar_date, AttendanceRecord.status)
-        .join(AttendanceRecord, AttendanceRecord.calendar_date_id == AcademicCalendarDate.id)
-        .where(AttendanceRecord.enrollment_id == enrollment.id)
-        .order_by(AcademicCalendarDate.calendar_date)
-    ).all()
+    days = statuses_for_enrollment(session, enrollment.id)
 
     # Every term_grades row, so these add up to the Term grades line in
     # `tables` — a row blanked back to not-yet-encoded is still a row
@@ -320,7 +317,7 @@ def load_record(session, enrollment_id) -> LearnerRecord:
         grades.setdefault(term_name, {})["offerings"] = n
 
     # The same window SF2 uses (§32): a month counts only if the learner
-    # was printed on it, not merely if a default PRESENT row exists.
+    # was printed on it, not merely if a default P was saved.
     window = compute_active_window([Movement(m.movement_type, m.effective_date) for m in movements])
     affected = [
         month
@@ -386,11 +383,11 @@ def _anomalies(enrollment, window, days) -> list[str]:
         after = [d for d, s in days if d > window.end and s in PRESENT_LIKE]
         if after:
             found.append(
-                f"{len(after)} attendance row(s) marked present after the learner left on "
+                f"{len(after)} attendance day(s) marked present after the learner left on "
                 f"{window.end:%d %b %Y} (latest {after[-1]:%d %b %Y}). SF2 does not count "
                 "days after a learner leaves, so the printed form is unaffected — these "
-                "are usually the month's default \"present\" rows that were never "
-                "changed, and they are stray data."
+                "are usually the month's default P, saved before the exit was logged, "
+                "and they are stray data."
             )
     elif enrollment.enrollment_status not in EXIT_MOVEMENTS:
         today = date.today()

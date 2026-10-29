@@ -208,7 +208,10 @@ def test_summarize_month_batch_costs_a_fixed_number_of_queries(session, roster):
     to call `summarize_month` per learner — each one its own
     `records_for_month` query — turning one page render into 2×N round
     trips (`validate_month` also queried `LearnerMovement` per learner on
-    top of that)."""
+    top of that).
+
+    Still one since 2026-10-29: `statuses_for_days` reads the records and
+    the month's saved-P bits (`attendance_encoded_days`) as one UNION ALL."""
     from app.attendance_service import class_days_in_month, movements_by_enrollment, roster_for_month, summarize_month_batch
     from app.models.organization import SchoolYear
 

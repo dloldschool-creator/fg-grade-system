@@ -33,8 +33,9 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from app import audit_service
 from app.attendance_engine import Movement, compute_active_window, summarize_attendance
+from app.attendance_service import attendance_for_days
 from app.guardian_contact import display_mobile
-from app.models.attendance import AcademicCalendarDate, AttendanceRecord
+from app.models.attendance import AcademicCalendarDate
 from app.models.enums import CompletionStatus
 from app.models.grades import TermGradeSummary
 from app.models.learners import Enrollment, Learner, LearnerMovement
@@ -249,30 +250,18 @@ def load_section_notices(session, section, term: Term, today: date | None = None
     ):
         movements.setdefault(movement.enrollment_id, []).append(movement)
 
-    # Three columns, not ORM objects — a term is ~60 class days times the
-    # roster, and hydrating that many instances is the expensive part.
+    # Columns, not ORM objects — a term is ~60 class days times the roster,
+    # and hydrating that many instances is the expensive part. A saved P is
+    # a bit, not a row, so this goes through attendance_for_days.
     statuses: dict = {}
-    attendance_changed: dict = {}
-    if day_by_id:
-        for enrollment_id, calendar_date_id, status, updated_at in (
-            session.query(
-                AttendanceRecord.enrollment_id,
-                AttendanceRecord.calendar_date_id,
-                AttendanceRecord.status,
-                AttendanceRecord.updated_at,
-            )
-            .filter(
-                AttendanceRecord.enrollment_id.in_(enrollment_ids),
-                AttendanceRecord.calendar_date_id.in_(list(day_by_id)),
-            )
-            .all()
-        ):
-            day = day_by_id.get(calendar_date_id)
-            if day is not None:
-                statuses.setdefault(enrollment_id, {})[day] = status
-            updated_at = _naive_utc(updated_at)
-            if updated_at and updated_at > attendance_changed.get(enrollment_id, datetime.min):
-                attendance_changed[enrollment_id] = updated_at
+    by_day, changed_at = attendance_for_days(session, enrollment_ids, class_days)
+    for (enrollment_id, calendar_date_id), status in by_day.items():
+        day = day_by_id.get(calendar_date_id)
+        if day is not None:
+            statuses.setdefault(enrollment_id, {})[day] = status
+    attendance_changed = {
+        enrollment_id: _naive_utc(updated_at) for enrollment_id, updated_at in changed_at.items()
+    }
 
     summaries = {
         s.enrollment_id: s

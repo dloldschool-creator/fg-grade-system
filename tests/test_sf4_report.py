@@ -36,11 +36,6 @@ class FakeDay:
 
 
 @dataclass
-class FakeRecord:
-    status: AttendanceStatus
-
-
-@dataclass
 class FakeMovement:
     enrollment_id: int
     movement_type: EnrollmentStatus
@@ -146,10 +141,10 @@ def test_late_and_cutting_count_as_present():
     enrollments = [FakeEnrollment(1, 1)]
     learners = {1: FakeLearner(1, Sex.MALE)}
     attendance = {
-        (1, JUNE[0].id): FakeRecord(AttendanceStatus.LATE),
-        (1, JUNE[1].id): FakeRecord(AttendanceStatus.CUTTING),
-        (1, JUNE[2].id): FakeRecord(AttendanceStatus.PRESENT),
-        (1, JUNE[3].id): FakeRecord(AttendanceStatus.ABSENT),
+        (1, JUNE[0].id): AttendanceStatus.LATE,
+        (1, JUNE[1].id): AttendanceStatus.CUTTING,
+        (1, JUNE[2].id): AttendanceStatus.PRESENT,
+        (1, JUNE[3].id): AttendanceStatus.ABSENT,
     }
     rows = _run(enrollments, learners, attendance=attendance)
     assert rows[0].present_days.total == 3
@@ -163,7 +158,7 @@ def test_attendance_is_measured_against_eligible_days_only():
     rows = _run(
         enrollments, learners,
         movements=[FakeMovement(1, EnrollmentStatus.LATE_ENROLLMENT, date(2026, 6, 11))],
-        attendance={(1, JUNE[3].id): FakeRecord(AttendanceStatus.PRESENT)},
+        attendance={(1, JUNE[3].id): AttendanceStatus.PRESENT},
     )
     assert rows[0].eligible_days.total == 2, "only the 11th and 12th were attendable"
     assert rows[0].percentage().total == pytest.approx(50.0)

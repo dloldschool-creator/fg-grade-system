@@ -1262,6 +1262,9 @@ def _enrollments_without_attendance(session, school_year, section, day_ids, limi
     longer be assumed unmarked. The fixture still rolls back and never
     commits, so nothing a teacher entered was ever at risk; the fix is to
     stop assuming the days picked are blank.
+
+    "Encoded" is either form: a record, or the day's bit in
+    `attendance_encoded_days` — a saved P has only the bit.
     """
     from app.models.attendance import AttendanceRecord
     from app.models.learners import Enrollment
@@ -1281,9 +1284,31 @@ def _enrollments_without_attendance(session, school_year, section, day_ids, limi
             Enrollment.school_year_id == school_year.id,
             Enrollment.section_id == section.id,
             Enrollment.id.notin_(encoded),
+            Enrollment.id.notin_(_bit_encoded_enrollments(session, day_ids)),
         )
         .limit(limit)
         .all()
+    )
+
+
+def _bit_encoded_enrollments(session, day_ids):
+    """Subquery: enrollments with the bit set for any of `day_ids`."""
+    from sqlalchemy import Date, Integer, cast, func, literal
+
+    from app.models.attendance import AcademicCalendarDate, AttendanceEncodedDays
+
+    day_of_month = cast(func.extract("day", AcademicCalendarDate.calendar_date), Integer)
+    return (
+        session.query(AttendanceEncodedDays.enrollment_id)
+        .join(
+            AcademicCalendarDate,
+            AttendanceEncodedDays.year_month
+            == cast(func.date_trunc("month", AcademicCalendarDate.calendar_date), Date),
+        )
+        .filter(
+            AcademicCalendarDate.id.in_(day_ids),
+            AttendanceEncodedDays.days.op("&")(literal(1).op("<<")(day_of_month - 1)) != 0,
+        )
     )
 
 

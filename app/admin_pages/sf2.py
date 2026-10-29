@@ -16,11 +16,11 @@ from app.attendance_service import (
     get_month_status,
     months_with_class_days,
     roster_for_month,
+    statuses_for_days,
     summarize_month_batch,
 )
 from app.auth import require_role
 from app.display_time import current_month_index
-from app.models.attendance import AttendanceRecord
 from app.models.enums import FinalizationState, Sex
 from app.models.organization import SchoolYear
 from app.sf2_download import render_sf2_downloads
@@ -35,17 +35,7 @@ def _preview_frame(session, roster, class_days) -> pd.DataFrame:
     """On-screen preview of the same marks the printed form carries. Uses
     the printed codes (blank for present), so what's shown here is what
     lands on the page."""
-    records = {}
-    if roster and class_days:
-        rows = (
-            session.query(AttendanceRecord)
-            .filter(
-                AttendanceRecord.enrollment_id.in_([e.id for e, _, _ in roster]),
-                AttendanceRecord.calendar_date_id.in_([d.id for d in class_days]),
-            )
-            .all()
-        )
-        records = {(r.enrollment_id, r.calendar_date_id): r.status for r in rows}
+    records = statuses_for_days(session, [e.id for e, _, _ in roster], class_days)
 
     summaries = summarize_month_batch(session, roster, class_days)
     frame_rows = []

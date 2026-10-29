@@ -26,12 +26,15 @@ from app.admin_pages.attendance import (
 )
 from app.attendance_service import (
     class_days_in_month,
+    encoded_masks,
     get_month_status,
     months_with_class_days,
     roster_for_month,
+    statuses_for_days,
 )
 from app.database import SessionLocal
 from app.models.attendance import AttendanceRecord
+from tests.test_analytics_service import _bit_encoded_enrollments
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
 
@@ -90,6 +93,7 @@ def _enrollments_without_attendance(session, school_year, section, day_ids, limi
             Enrollment.school_year_id == school_year.id,
             Enrollment.section_id == section.id,
             ~Enrollment.id.in_(encoded),
+            ~Enrollment.id.in_(_bit_encoded_enrollments(session, day_ids)),
         )
         .limit(limit)
         .all()
@@ -507,10 +511,12 @@ def test_grid_defaults_present_up_to_the_cutoff_and_counts_them(session, school_
 
 
 def test_save_grid_writes_default_presents_and_opens_the_month(session, school_year, monkeypatch):
-    """Saving an untouched grid of defaults must write every default P —
+    """Saving an untouched grid of defaults must save every default P —
     that is the whole replacement for the Prepare button — and move a
-    NOT_STARTED month to OPEN. try_commit is a flush; the fixture rolls
-    back, so nothing reaches the live database."""
+    NOT_STARTED month to OPEN. A saved P is a bit, so none of them writes
+    an AttendanceRecord row (the space saving, 2026-10-29). try_commit is
+    a flush; the fixture rolls back, so nothing reaches the live
+    database."""
 
     def fake_try_commit(session, message):
         session.flush()
@@ -533,17 +539,22 @@ def test_save_grid_writes_default_presents_and_opens_the_month(session, school_y
         pytest.skip("every day of that month already has a record")
     ids = [e.id for e, _, _ in roster]
     day_ids = [d.id for d in days]
-    count = lambda: session.query(AttendanceRecord).filter(
+    rows = lambda: session.query(AttendanceRecord).filter(
         AttendanceRecord.enrollment_id.in_(ids), AttendanceRecord.calendar_date_id.in_(day_ids)
     ).count()
-    before = count()
+    rows_before = rows()
+    encoded_before = statuses_for_days(session, ids, days)
 
     saved = _save_grid(
         session, section.id, school_year.id, year, month, roster, days, dataframe.copy(),
         section.adviser_user_id,
     )
     assert saved is True
-    assert count() == before + sum(pending.values())
+    encoded_after = statuses_for_days(session, ids, days)
+    assert len(encoded_after) == len(encoded_before) + sum(pending.values())
+    new_days = set(encoded_after) - set(encoded_before)
+    assert {encoded_after[k] for k in new_days} == {AttendanceStatus.PRESENT}
+    assert rows() == rows_before
     _, still_pending = _build_grid(session, roster, days, default_through=days[-1].calendar_date)
     assert still_pending == {}
     status = get_month_status(session, section.id, year, month)
@@ -598,6 +609,7 @@ def test_save_grid_clearing_a_recorded_day_unencodes_it(session, school_year, mo
     assert session.query(AttendanceRecord).filter_by(
         enrollment_id=enrollment.id, calendar_date_id=day.id
     ).count() == 0
+    assert (enrollment.id, day.id) not in statuses_for_days(session, [enrollment.id], days)
 
 
 def test_save_grid_audits_a_first_absence_but_not_a_first_present(session, school_year, monkeypatch):
@@ -639,3 +651,154 @@ def test_save_grid_audits_a_first_absence_but_not_a_first_present(session, schoo
     ).one()
     entry = session.query(AuditLog).filter_by(object_id=record.id).one()
     assert entry.new_value["status"] == "ABSENT"
+
+
+# --- a saved P is a bit, not a row (2026-10-29) ----------------------------
+
+
+def _flush_instead_of_commit(monkeypatch):
+    def fake_try_commit(session, message):
+        session.flush()
+        return True
+
+    monkeypatch.setattr("app.admin_pages.attendance.try_commit", fake_try_commit)
+
+
+def _learner_with_a_free_day(session, school_year):
+    """(year, month, days, section, roster, row index, day) for a learner
+    with nothing encoded on an in-window class day of the latest month."""
+    months = months_with_class_days(session, school_year.id)
+    if not months:
+        pytest.skip("no class days on the calendar")
+    year, month = months[-1]
+    days = class_days_in_month(session, school_year.id, year, month)
+    section = _any_advised_section(session, school_year)
+    roster = roster_for_month(session, section.id, school_year.id, year, month)
+    if not roster or not days:
+        pytest.skip("need a roster and class days")
+    for day in days:
+        free = {
+            e.id for e in _enrollments_without_attendance(
+                session, school_year, section, [day.id], len(roster)
+            )
+        }
+        for index, (enrollment, _, window) in enumerate(roster):
+            if enrollment.id in free and window.contains(day.calendar_date):
+                return year, month, days, section, roster, index, day
+    pytest.skip("no learner with a free, in-window day in this month")
+
+
+def _save_one(session, school_year, year, month, days, section, roster, index, day, code):
+    grid, _ = _build_grid(session, roster, days)
+    grid.loc[index, str(day.calendar_date.day)] = code
+    return _save_grid(
+        session, section.id, school_year.id, year, month, roster, days, grid,
+        section.adviser_user_id,
+    )
+
+
+def test_a_saved_present_is_a_bit_with_no_record(session, school_year, monkeypatch):
+    _flush_instead_of_commit(monkeypatch)
+    year, month, days, section, roster, index, day = _learner_with_a_free_day(session, school_year)
+    enrollment = roster[index][0]
+
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "P")
+
+    assert session.query(AttendanceRecord).filter_by(
+        enrollment_id=enrollment.id, calendar_date_id=day.id
+    ).count() == 0
+    assert statuses_for_days(session, [enrollment.id], days)[(enrollment.id, day.id)] == (
+        AttendanceStatus.PRESENT
+    )
+    shown, _ = _build_grid(session, roster, days)
+    assert shown.loc[index, str(day.calendar_date.day)] == "P"
+
+
+def test_clearing_a_saved_present_unencodes_it_and_is_audited(session, school_year, monkeypatch):
+    """No record to log against, so the entry names the month's bits row."""
+    from app.attendance_service import ENCODED_DAYS_OBJECT, month_of
+    from app.models.admin import AuditLog
+
+    _flush_instead_of_commit(monkeypatch)
+    year, month, days, section, roster, index, day = _learner_with_a_free_day(session, school_year)
+    enrollment = roster[index][0]
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "P")
+    key = (enrollment.id, month_of(day.calendar_date))
+    mask_id, _ = encoded_masks(session, [enrollment.id], [key[1]])[key]
+
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, None)
+
+    assert (enrollment.id, day.id) not in statuses_for_days(session, [enrollment.id], days)
+    entry = (
+        session.query(AuditLog)
+        .filter_by(action=audit_service.ATTENDANCE_CHANGED, object_id=mask_id)
+        .one()
+    )
+    assert entry.object_type == ENCODED_DAYS_OBJECT
+    assert entry.previous_value["status"] == "PRESENT"
+    assert entry.new_value["status"] is None
+    # The finalization panel's "changed after your last save" check finds it.
+    assert _last_attendance_change(session, roster, days).id == entry.id
+
+
+def test_an_absence_on_a_saved_present_records_present_as_the_previous_value(
+    session, school_year, monkeypatch
+):
+    from app.models.admin import AuditLog
+
+    _flush_instead_of_commit(monkeypatch)
+    year, month, days, section, roster, index, day = _learner_with_a_free_day(session, school_year)
+    enrollment = roster[index][0]
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "P")
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "X")
+
+    record = session.query(AttendanceRecord).filter_by(
+        enrollment_id=enrollment.id, calendar_date_id=day.id
+    ).one()
+    assert record.status == AttendanceStatus.ABSENT
+    entry = session.query(AuditLog).filter_by(object_id=record.id).one()
+    assert entry.previous_value["status"] == "PRESENT"
+    assert statuses_for_days(session, [enrollment.id], days)[(enrollment.id, day.id)] == (
+        AttendanceStatus.ABSENT
+    )
+
+
+def test_correcting_an_absence_back_to_present_keeps_its_record(session, school_year, monkeypatch):
+    """The record stays, as a P, so the audit entries about the day still
+    point at a row — the perfect-attendance staleness checks join on it."""
+    _flush_instead_of_commit(monkeypatch)
+    year, month, days, section, roster, index, day = _learner_with_a_free_day(session, school_year)
+    enrollment = roster[index][0]
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "X")
+    record = session.query(AttendanceRecord).filter_by(
+        enrollment_id=enrollment.id, calendar_date_id=day.id
+    ).one()
+
+    assert _save_one(session, school_year, year, month, days, section, roster, index, day, "P")
+
+    session.refresh(record)
+    assert record.status == AttendanceStatus.PRESENT
+    assert record.version == 2
+
+
+def test_two_saves_of_one_month_keep_each_others_days(session, school_year, monkeypatch):
+    """The bits are ORed in SQL, so a second save adds its days rather than
+    replacing the first's — rule 9 without a version check."""
+    from app.attendance_service import day_bit, mark_encoded, month_of
+
+    _flush_instead_of_commit(monkeypatch)
+    year, month, days, section, roster, index, day = _learner_with_a_free_day(session, school_year)
+    enrollment = roster[index][0]
+    other = next(
+        (d for d in days if d.id != day.id and roster[index][2].contains(d.calendar_date)), None
+    )
+    if other is None:
+        pytest.skip("learner has only one eligible day")
+    key = (enrollment.id, month_of(day.calendar_date))
+    before = encoded_masks(session, [enrollment.id], [key[1]]).get(key, (None, 0))[1]
+
+    mark_encoded(session, {key: day_bit(day.calendar_date)}, section.adviser_user_id)
+    mark_encoded(session, {key: day_bit(other.calendar_date)}, section.adviser_user_id)
+
+    _, mask = encoded_masks(session, [enrollment.id], [key[1]])[key]
+    assert mask == before | day_bit(day.calendar_date) | day_bit(other.calendar_date)

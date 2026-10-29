@@ -745,6 +745,12 @@ term split (§29).
 `UNIQUE (school_year_id, calendar_date)`
 
 ### `attendance_records`
+Since 2026-10-29 a row exists only for a day that says something other
+than a plain saved P — an X, T-L or T-C, or a day corrected back to P
+(kept so its audit entries still point at a row). A saved P is a bit in
+`attendance_encoded_days`. Rows written as P before then remain valid.
+Read through `attendance_service.statuses_for_days`, never on its own.
+
 | Column | Type | Notes |
 |---|---|---|
 | id | UUID PK | |
@@ -756,6 +762,26 @@ term split (§29).
 | created_at, updated_at | TIMESTAMPTZ | |
 
 `UNIQUE (enrollment_id, calendar_date_id)`
+
+### `attendance_encoded_days`
+Which days of one month have been encoded for one enrollment — one row
+per learner per month in place of ~20 PRESENT rows. A day is encoded if
+its bit is set **or** it has an `attendance_records` row; its status is
+the row's if there is one, else PRESENT. Neither means "not yet encoded"
+(§33, rule 2). Migration `d7b3e5a19c42`; existing P rows were moved in by
+`scripts/compact_attendance.py`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | audit object for clearing a saved P (no record to point at) |
+| enrollment_id | UUID FK → enrollments NOT NULL | follows a section correction; deleted (and copied) by withdrawal |
+| year_month | DATE NOT NULL | first-of-month convention |
+| days | INTEGER NOT NULL DEFAULT 0 | bit (d − 1) set ⇔ day d encoded; day 31 is bit 30, so it fits a signed int |
+| last_saved_by_user_id | UUID FK → users NULL | who last changed the month's bits |
+| version | INTEGER NOT NULL DEFAULT 1 | bumped on every change; bits are written with `\|` / `& ~` in SQL, so concurrent saves never overwrite each other |
+| created_at, updated_at | TIMESTAMP | Parent Notices reads `updated_at` as "attendance changed" |
+
+`UNIQUE (enrollment_id, year_month)`
 
 ### `attendance_month_status`
 | Column | Type | Notes |
@@ -1052,7 +1078,8 @@ of an outdated card first marks the old row SUPERSEDED.
    `learner_movements`
 6. **Grades** — `term_grades`, `subject_final_grades`, `combined_learning_area_results`,
    `annual_grade_summaries`, `grade_finalization_records`
-7. **Attendance** — `academic_calendar_dates`, `attendance_records`, `attendance_month_status`
+7. **Attendance** — `academic_calendar_dates`, `attendance_records`, `attendance_encoded_days`,
+   `attendance_month_status`
 8. **Awards** — `award_policies`/`_versions`, `learner_awards`
 9. **Reports** — `report_templates`, `report_generation_logs` *(`report_snapshots` deferred)*
 10. **Administration** — `audit_logs`, `import_jobs`, `export_jobs`

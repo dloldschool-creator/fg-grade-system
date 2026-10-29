@@ -35,7 +35,7 @@ from app.attendance_service import (
     class_days_in_month,
     class_days_in_school_year,
     months_with_class_days,
-    records_for_month,
+    statuses_for_days,
     summarize_month,
 )
 from app.enrollment_status import latest_exit_movement, movement_status_line
@@ -247,8 +247,8 @@ def _monthly_attendance(
             class_days = context.class_days.get((year, month), [])
             by_id = {d.id: d.calendar_date for d in class_days}
             statuses = {
-                by_id[day_id]: record.status
-                for (enrollment_id, day_id), record in context.attendance.items()
+                by_id[day_id]: status
+                for (enrollment_id, day_id), status in context.attendance.items()
                 if enrollment_id == enrollment.id and day_id in by_id
             }
             summary = summarize_attendance(
@@ -289,7 +289,7 @@ class Sf9BatchContext:
     class_days: dict
     summaries: dict
     windows: dict
-    attendance: dict
+    attendance: dict  # {(enrollment_id, day_id): status} — statuses_for_days
     movements: dict
     learners: dict
     advisers: dict
@@ -347,8 +347,8 @@ def load_sf9_context(session: Session, enrollments: list) -> Sf9BatchContext:
         for e in enrollments
     }
 
-    every_day = [d.id for days in class_days.values() for d in days]
-    attendance = records_for_month(session, ids, every_day)
+    every_day = [d for days in class_days.values() for d in days]
+    attendance = statuses_for_days(session, ids, every_day)
 
     learners = {
         learner.id: learner for learner in session.query(Learner)

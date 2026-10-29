@@ -38,7 +38,7 @@ import openpyxl
 from sqlalchemy.orm import Session
 
 from app.attendance_engine import Movement, compute_active_window
-from app.attendance_service import class_days_in_month, records_for_month
+from app.attendance_service import class_days_in_month, statuses_for_days
 from app.excel_template import (
     anchor_map,
     assert_no_external_links,
@@ -47,7 +47,6 @@ from app.excel_template import (
     write_ref,
 )
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import School, SchoolYear, Term
@@ -221,7 +220,9 @@ def aggregate(
 
     Takes plain collections rather than a session so the counting rules
     are testable without a database — the same split the grading and
-    attendance engines use.
+    attendance engines use. `attendance` is
+    `attendance_service.statuses_for_days`' `{(enrollment_id, day_id):
+    status}`, so a saved P is in it whether or not it has a row.
     """
     first_day, last_day = month_bounds(year, month)
     class_dates = [d.calendar_date for d in class_days]
@@ -282,8 +283,7 @@ def aggregate(
             if not window.contains(day_by_id[day.id]):
                 continue
             row.eligible_days.add(learner.sex)
-            record = attendance.get((enrollment.id, day.id))
-            if record is not None and record.status in PRESENT_STATUSES:
+            if attendance.get((enrollment.id, day.id)) in PRESENT_STATUSES:
                 row.present_days.add(learner.sex)
 
         for movement in entries:
@@ -375,7 +375,7 @@ def build_sf4_workbook(session: Session, school_year_id, year: int, month: int):
     )
 
     class_days = class_days_in_month(session, school_year_id, year, month)
-    attendance = records_for_month(session, enrollment_ids, [d.id for d in class_days])
+    attendance = statuses_for_days(session, enrollment_ids, class_days)
 
     rows = aggregate(
         enrollments=enrollments,

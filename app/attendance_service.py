@@ -8,7 +8,9 @@ import calendar as _calendar
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from sqlalchemy import inspect
+from sqlalchemy import Date, Integer, bindparam, func, inspect, null, select, union_all
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.attendance_engine import (
@@ -23,8 +25,13 @@ from app.attendance_engine import (
     summarize_attendance,
 )
 from app.display_time import format_time, to_school_time
-from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
-from app.models.enums import FinalizationState
+from app.models.attendance import (
+    AcademicCalendarDate,
+    AttendanceEncodedDays,
+    AttendanceMonthStatus,
+    AttendanceRecord,
+)
+from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.models.rbac import User
@@ -312,22 +319,240 @@ def full_year_roster(
 # --------------------------------------------------------------------------
 # Attendance records
 # --------------------------------------------------------------------------
+#
+# A day is stored in one of two places (2026-10-29). Every saved day sets
+# its bit in `AttendanceEncodedDays` — one row per learner per month — and
+# only a day that says something other than a plain P also has an
+# `AttendanceRecord`. So a P is the bit alone, and a day with neither is
+# "not yet encoded" (§33, rule 2), exactly as a missing row was before.
+# Plain P rows were 96% of attendance_records; a month's bits cost less
+# than one of them.
+#
+# Rows written as P before then still count, and so does a record whose
+# bit is not set, so data in either form reads the same. Anything asking
+# what a day says goes through `statuses_for_days` (or
+# `statuses_for_enrollment`) — reading attendance_records alone now
+# misses every P.
+
+# Day 1 is bit 0 and day 31 bit 30, so a month always fits a signed int4.
+FULL_MONTH = (1 << 31) - 1
+
+# AuditLog.object_type for a change to a day that had no record — clearing
+# a saved P. The object is that month's AttendanceEncodedDays row.
+ENCODED_DAYS_OBJECT = "attendance_encoded_days"
+
+
+def day_bit(day: date) -> int:
+    return 1 << (day.day - 1)
+
+
+def month_of(day: date) -> date:
+    return day.replace(day=1)
 
 
 def records_for_month(
     session: Session, enrollment_ids: list, class_day_ids: list
 ) -> dict[tuple, AttendanceRecord]:
+    """The explicit rows only, as ORM objects — for the save path, which
+    edits them. A plain saved P has no row, so anything that only reads
+    wants `statuses_for_days`."""
     if not enrollment_ids or not class_day_ids:
         return {}
     rows = (
         session.query(AttendanceRecord)
         .filter(
-            AttendanceRecord.enrollment_id.in_(enrollment_ids),
-            AttendanceRecord.calendar_date_id.in_(class_day_ids),
+            AttendanceRecord.enrollment_id.in_(list(enrollment_ids)),
+            AttendanceRecord.calendar_date_id.in_(list(class_day_ids)),
         )
         .all()
     )
     return {(row.enrollment_id, row.calendar_date_id): row for row in rows}
+
+
+def encoded_masks(session: Session, enrollment_ids, months) -> dict[tuple, tuple]:
+    """`{(enrollment_id, year_month): (row id, bitmask)}`. Columns rather
+    than ORM objects: the masks change by SQL update (`mark_encoded`),
+    which an instance already held in the session would not see."""
+    if not enrollment_ids or not months:
+        return {}
+    return {
+        (enrollment_id, year_month): (row_id, mask)
+        for row_id, enrollment_id, year_month, mask in session.query(
+            AttendanceEncodedDays.id,
+            AttendanceEncodedDays.enrollment_id,
+            AttendanceEncodedDays.year_month,
+            AttendanceEncodedDays.days,
+        ).filter(
+            AttendanceEncodedDays.enrollment_id.in_(list(enrollment_ids)),
+            AttendanceEncodedDays.year_month.in_(list(months)),
+        )
+    }
+
+
+def statuses_for_days(session: Session, enrollment_ids, class_days) -> dict[tuple, AttendanceStatus]:
+    """`{(enrollment_id, calendar_date_id): status}` for every **encoded**
+    day among `class_days`. A day missing from the result is not yet
+    encoded — never a P, never a zero (rule 2).
+
+    The one reader of both storage forms, in one query whatever the
+    roster or the span of days. `class_days` needs `.id` and
+    `.calendar_date`: an `AcademicCalendarDate`, or a row of those two
+    columns."""
+    return attendance_for_days(session, enrollment_ids, class_days)[0]
+
+
+def attendance_for_days(session: Session, enrollment_ids, class_days) -> tuple[dict, dict]:
+    """`statuses_for_days`, plus `{enrollment_id: when its attendance in
+    these days last changed}` — the later `updated_at` of its records and
+    of its months' bits, naive UTC as stored.
+
+    One round trip: the records and the months' bits come back as one
+    UNION ALL, since every attendance screen calls this several times per
+    rerun and the database is ~85ms away. A month's bits carry one
+    timestamp for the whole month, so a P saved on a September Term 1 day
+    also moves the time for September's Term 2 days (§29). That errs
+    towards "changed", never the other way."""
+    if not enrollment_ids or not class_days:
+        return {}, {}
+    enrollment_ids = list(enrollment_ids)
+    by_month: dict = {}
+    for day in class_days:
+        by_month.setdefault(month_of(day.calendar_date), []).append(day)
+
+    records = select(
+        AttendanceRecord.enrollment_id,
+        AttendanceRecord.calendar_date_id,
+        AttendanceRecord.status,
+        null().cast(Date).label("year_month"),
+        null().cast(Integer).label("days"),
+        AttendanceRecord.updated_at,
+    ).where(
+        AttendanceRecord.enrollment_id.in_(enrollment_ids),
+        AttendanceRecord.calendar_date_id.in_([d.id for d in class_days]),
+    )
+    months = select(
+        AttendanceEncodedDays.enrollment_id,
+        null().cast(UUID(as_uuid=True)),
+        null().cast(AttendanceRecord.status.type),
+        AttendanceEncodedDays.year_month,
+        AttendanceEncodedDays.days,
+        AttendanceEncodedDays.updated_at,
+    ).where(
+        AttendanceEncodedDays.enrollment_id.in_(enrollment_ids),
+        AttendanceEncodedDays.year_month.in_(list(by_month)),
+    )
+
+    statuses: dict = {}
+    changed: dict = {}
+    masks = []
+    for enrollment_id, day_id, status, year_month, mask, updated_at in session.execute(
+        union_all(records, months)
+    ):
+        if updated_at is not None and (
+            enrollment_id not in changed or updated_at > changed[enrollment_id]
+        ):
+            changed[enrollment_id] = updated_at
+        if day_id is not None:
+            statuses[(enrollment_id, day_id)] = status
+        else:
+            masks.append((enrollment_id, year_month, mask))
+    # After every record is in: a record's status wins over its bit.
+    for enrollment_id, year_month, mask in masks:
+        for day in by_month.get(year_month, ()):
+            if mask & day_bit(day.calendar_date):
+                statuses.setdefault((enrollment_id, day.id), AttendanceStatus.PRESENT)
+    return statuses, changed
+
+
+def statuses_for_enrollment(session: Session, enrollment_id) -> list[tuple[date, AttendanceStatus]]:
+    """Every encoded day one enrollment has, as `(date, status)` in date
+    order, whatever the calendar says of the day now — the learner's whole
+    attendance footprint (Check record, withdrawal), not one month's
+    sheet."""
+    days = {
+        calendar_date: status
+        for calendar_date, status in session.query(
+            AcademicCalendarDate.calendar_date, AttendanceRecord.status
+        )
+        .join(AttendanceRecord, AttendanceRecord.calendar_date_id == AcademicCalendarDate.id)
+        .filter(AttendanceRecord.enrollment_id == enrollment_id)
+    }
+    for year_month, mask in session.query(
+        AttendanceEncodedDays.year_month, AttendanceEncodedDays.days
+    ).filter(AttendanceEncodedDays.enrollment_id == enrollment_id):
+        last = _calendar.monthrange(year_month.year, year_month.month)[1]
+        for day_number in range(1, last + 1):
+            if mask & (1 << (day_number - 1)):
+                days.setdefault(year_month.replace(day=day_number), AttendanceStatus.PRESENT)
+    return sorted(days.items())
+
+
+def mark_encoded(session: Session, bits: dict, user_id) -> None:
+    """ORs `{(enrollment_id, year_month): bitmask}` into the stored masks,
+    creating a month's row on its first save.
+
+    Bitwise in SQL rather than read-modify-write, so two people saving the
+    same month at once each add their days and neither replaces the
+    other's (rule 9) — the job ON CONFLICT DO NOTHING did for the old
+    default P rows. The Core table, not the entity: a list of parameters
+    with the entity would be taken for an ORM bulk operation."""
+    if not bits:
+        return
+    table = AttendanceEncodedDays.__table__
+    stmt = pg_insert(table)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[table.c.enrollment_id, table.c.year_month],
+        set_={
+            "days": table.c.days.op("|")(stmt.excluded.days),
+            "last_saved_by_user_id": stmt.excluded.last_saved_by_user_id,
+            "updated_at": func.now(),
+            "version": table.c.version + 1,
+        },
+    )
+    session.execute(
+        stmt,
+        [
+            {
+                "enrollment_id": enrollment_id,
+                "year_month": year_month,
+                "days": mask,
+                "last_saved_by_user_id": user_id,
+            }
+            for (enrollment_id, year_month), mask in bits.items()
+        ],
+    )
+
+
+def mark_unencoded(session: Session, bits: dict, user_id) -> None:
+    """Clears `{(enrollment_id, year_month): bitmask}` from the stored
+    masks, taking those days back to "not yet encoded". Same in-SQL
+    bitwise shape as `mark_encoded`. A month left at 0 keeps its row,
+    which reads exactly like no row."""
+    if not bits:
+        return
+    table = AttendanceEncodedDays.__table__
+    session.execute(
+        table.update()
+        .where(
+            table.c.enrollment_id == bindparam("b_enrollment_id"),
+            table.c.year_month == bindparam("b_year_month"),
+        )
+        .values(
+            days=table.c.days.op("&")(bindparam("b_keep")),
+            last_saved_by_user_id=bindparam("b_user_id"),
+            updated_at=func.now(),
+            version=table.c.version + 1,
+        ),
+        [
+            {
+                "b_enrollment_id": enrollment_id,
+                "b_year_month": year_month,
+                "b_keep": FULL_MONTH & ~mask,
+                "b_user_id": user_id,
+            }
+            for (enrollment_id, year_month), mask in bits.items()
+        ],
+    )
 
 
 def summarize_month_batch(
@@ -336,7 +561,7 @@ def summarize_month_batch(
     class_days: list[AcademicCalendarDate],
 ) -> dict:
     """`{enrollment_id: AttendanceSummary}` for a whole roster in one
-    `records_for_month` call, instead of `summarize_month`'s one query per
+    `statuses_for_days` call, instead of `summarize_month`'s one query per
     learner. Several pages call `summarize_month` in a per-learner loop
     right after already loading `roster` — the Attendance page's monthly
     summary and finalization report, SF2's preview and the printed form,
@@ -346,11 +571,11 @@ def summarize_month_batch(
     by_id = {d.id: d.calendar_date for d in class_days}
     all_days = [d.calendar_date for d in class_days]
     enrollment_ids = [e.id for e, _, _ in roster]
-    records = records_for_month(session, enrollment_ids, list(by_id))
+    statuses = statuses_for_days(session, enrollment_ids, class_days)
 
     statuses_by_enrollment: dict = {}
-    for (enrollment_id, calendar_date_id), record in records.items():
-        statuses_by_enrollment.setdefault(enrollment_id, {})[by_id[calendar_date_id]] = record.status
+    for (enrollment_id, calendar_date_id), status in statuses.items():
+        statuses_by_enrollment.setdefault(enrollment_id, {})[by_id[calendar_date_id]] = status
 
     return {
         enrollment.id: summarize_attendance(all_days, window, statuses_by_enrollment.get(enrollment.id, {}))

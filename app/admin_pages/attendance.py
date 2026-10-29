@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select, union_all
 
 from app import audit_service
 from app.admin_pages._helpers import (
@@ -20,23 +20,30 @@ from app.admin_pages._helpers import (
     try_commit,
 )
 from app.attendance_service import (
+    ENCODED_DAYS_OBJECT,
     bump_version,
     class_days_in_month,
+    day_bit,
     display_state,
+    encoded_masks,
     finalize_month,
     get_month_status,
     get_or_create_month_status,
+    mark_encoded,
+    mark_unencoded,
+    month_of,
     months_with_class_days,
     records_for_month,
     reopen_month,
     roster_for_month,
+    statuses_for_days,
     summarize_month_batch,
     validate_month,
 )
 from app.auth import require_role
 from app.display_time import SCHOOL_TZ, format_time
 from app.models.admin import AuditLog
-from app.models.attendance import AttendanceRecord
+from app.models.attendance import AttendanceEncodedDays, AttendanceRecord
 from app.models.enums import AttendanceStatus, FinalizationState
 from app.models.organization import SchoolYear
 from app.models.rbac import User
@@ -95,19 +102,29 @@ def _last_attendance_change(session, roster, class_days) -> AuditLog | None:
     """Most recent ATTENDANCE_CHANGED entry for this month's records, or
     None if nothing has ever overridden a day (seeding to PRESENT is
     deliberately not logged — see `_save_grid`'s comment — so a month
-    that's only ever been prepared, never edited, returns None here)."""
+    that's only ever been prepared, never edited, returns None here).
+    Clearing a saved P is logged against the month's
+    AttendanceEncodedDays row, so those ids are searched too."""
     enrollment_ids = [e.id for e, _, _ in roster]
     class_day_ids = [d.id for d in class_days]
     if not enrollment_ids or not class_day_ids:
         return None
     record_ids = [
         row[0]
-        for row in session.query(AttendanceRecord.id)
-        .filter(
-            AttendanceRecord.enrollment_id.in_(enrollment_ids),
-            AttendanceRecord.calendar_date_id.in_(class_day_ids),
-        )
-        .all()
+        for row in session.execute(
+            union_all(
+                select(AttendanceRecord.id).where(
+                    AttendanceRecord.enrollment_id.in_(enrollment_ids),
+                    AttendanceRecord.calendar_date_id.in_(class_day_ids),
+                ),
+                select(AttendanceEncodedDays.id).where(
+                    AttendanceEncodedDays.enrollment_id.in_(enrollment_ids),
+                    AttendanceEncodedDays.year_month.in_(
+                        {month_of(d.calendar_date) for d in class_days}
+                    ),
+                ),
+            )
+        ).all()
     ]
     if not record_ids:
         return None
@@ -194,9 +211,7 @@ def _build_grid(
     is only shown; nothing is written until Save, so merely viewing a
     month never inserts rows.
     """
-    records = records_for_month(
-        session, [e.id for e, _, _ in roster], [d.id for d in class_days]
-    )
+    statuses = statuses_for_days(session, [e.id for e, _, _ in roster], class_days)
     rows = []
     pending: dict = {}
     for enrollment, learner, window in roster:
@@ -209,9 +224,9 @@ def _build_grid(
             if not window.contains(day.calendar_date):
                 row[column] = NOT_ELIGIBLE
                 continue
-            record = records.get((enrollment.id, day.id))
-            if record is not None:
-                row[column] = CODE_BY_STATUS[record.status]
+            status = statuses.get((enrollment.id, day.id))
+            if status is not None:
+                row[column] = CODE_BY_STATUS[status]
             elif default_through is not None and day.calendar_date <= default_through:
                 row[column] = CODE_BY_STATUS[AttendanceStatus.PRESENT]
                 pending[enrollment.id] = pending.get(enrollment.id, 0) + 1
@@ -229,20 +244,21 @@ def _save_grid(
     same commit — the finalization panel's "changed after your last save"
     check reads that column, not "a save happened at all," so a no-op
     save must not move it."""
-    records = records_for_month(
-        session, [e.id for e, _, _ in roster], [d.id for d in class_days]
-    )
+    enrollment_ids = [e.id for e, _, _ in roster]
+    records = records_for_month(session, enrollment_ids, [d.id for d in class_days])
+    masks = encoded_masks(session, enrollment_ids, {month_of(d.calendar_date) for d in class_days})
     changed = 0
     invalid: list[str] = []
-    # A record-less cell saved as P — almost always a grid default — goes in
-    # with ON CONFLICT DO NOTHING. Every first Save of a month now inserts
-    # all of those, so two people saving the same month at once would
-    # otherwise collide on (enrollment, day) and lose the whole save,
-    # edits included. Doing nothing on conflict is right: whatever the
-    # other user just wrote for that day was a real decision, and P was
-    # only a default. Any other new code still goes through the ORM, so a
-    # genuine clash (two people typing X and T-L) still surfaces.
-    new_presents: list[dict] = []
+    # A saved P is a bit in AttendanceEncodedDays, not a row (2026-10-29):
+    # every first Save of a month would otherwise insert one row per
+    # learner per day. `encode`/`unencode` collect `{(enrollment_id,
+    # year_month): bits}` and go in as two bitwise statements at the end,
+    # so two people saving the same month at once each add their days —
+    # the job ON CONFLICT DO NOTHING did for the old P rows. An X, T-L or
+    # T-C still goes through the ORM, so a genuine clash (two people typing
+    # X and T-L) still surfaces.
+    encode: dict = {}
+    unencode: dict = {}
     for index, (enrollment, learner, window) in enumerate(roster):
         for day in class_days:
             column = str(day.calendar_date.day)
@@ -251,51 +267,54 @@ def _save_grid(
             raw = _cell_code(edited.iloc[index][column])
             if raw == NOT_ELIGIBLE:
                 continue
+            month_key = (enrollment.id, month_of(day.calendar_date))
+            bit = day_bit(day.calendar_date)
+            mask_id, mask = masks.get(month_key, (None, 0))
+            saved_present = bool(mask & bit)
+            record = records.get((enrollment.id, day.id))
             if raw == "":
-                # Clearing a day that has a record takes it back to "not
+                # Clearing a day that has been saved takes it back to "not
                 # encoded" — the only way to undo the old Prepare button's
                 # Present marks on days that hadn't happened. On a past day
                 # the grid then offers its default P again. Audited like any
-                # other change, since it alters what the day said.
-                record = records.get((enrollment.id, day.id))
-                if record is not None:
+                # other change, since it alters what the day said. A plain P
+                # has no record, so it is logged against its month's row.
+                if record is not None or saved_present:
                     audit_service.record(
                         session,
                         action=audit_service.ATTENDANCE_CHANGED,
-                        object_type="attendance_records",
-                        object_id=record.id,
+                        object_type="attendance_records" if record is not None else ENCODED_DAYS_OBJECT,
+                        object_id=record.id if record is not None else mask_id,
                         user_id=user_id,
-                        previous={"status": record.status},
+                        previous={
+                            "status": record.status if record is not None else AttendanceStatus.PRESENT
+                        },
                         new={
                             "status": None,
                             "learner": f"{learner.last_name}, {learner.first_name}",
                             "date": day.calendar_date,
                         },
                     )
-                    session.delete(record)
+                    if record is not None:
+                        session.delete(record)
+                    unencode[month_key] = unencode.get(month_key, 0) | bit
                     changed += 1
                 continue
             status = STATUS_BY_CODE.get(raw)
             if status is None:
                 invalid.append(f"{learner.last_name} on {day.calendar_date:%b %d}: '{raw}'")
                 continue
-            record = records.get((enrollment.id, day.id))
             if record is None and status == AttendanceStatus.PRESENT:
-                new_presents.append(
-                    {
-                        "enrollment_id": enrollment.id,
-                        "calendar_date_id": day.id,
-                        "status": status,
-                        "encoded_by_user_id": user_id,
-                    }
-                )
-                changed += 1
+                # Almost always a grid default being saved. Not audited — a
+                # first P is the initial entry, and logging it would bury
+                # every month's real corrections under hundreds of rows.
+                if not saved_present:
+                    encode[month_key] = encode.get(month_key, 0) | bit
+                    changed += 1
             elif record is None:
-                # A first entry of X, T-L or T-C is audited even though it is
-                # a create: the grid showed the day as a default P, so this
-                # is the change from present that §50 cares about. A first P
-                # (the default being saved) is not, or every month would
-                # bury its real corrections under hundreds of rows.
+                # A first X, T-L or T-C is audited even though it is a
+                # create: the grid showed the day as P (saved or default),
+                # so this is the change from present that §50 cares about.
                 new_record = AttendanceRecord(
                     id=uuid.uuid4(),
                     enrollment_id=enrollment.id,
@@ -304,6 +323,7 @@ def _save_grid(
                     encoded_by_user_id=user_id,
                 )
                 session.add(new_record)
+                encode[month_key] = encode.get(month_key, 0) | bit
                 changed += 1
                 audit_service.record(
                     session,
@@ -311,7 +331,7 @@ def _save_grid(
                     object_type="attendance_records",
                     object_id=new_record.id,
                     user_id=user_id,
-                    previous={"status": "not yet encoded"},
+                    previous={"status": AttendanceStatus.PRESENT if saved_present else "not yet encoded"},
                     new={
                         "status": status,
                         "learner": f"{learner.last_name}, {learner.first_name}",
@@ -319,6 +339,8 @@ def _save_grid(
                     },
                 )
             elif record.status != status:
+                # Including a change back to P: the record stays, as a P, so
+                # the audit entries about this day still point at a row.
                 previous_status = record.status
                 record.status = status
                 record.encoded_by_user_id = user_id
@@ -346,15 +368,8 @@ def _save_grid(
             "error",
             "Ignored unrecognised code(s) — use P, X, T-L or T-C: " + "; ".join(invalid[:5]),
         )
-    if new_presents:
-        # executemany form, so the Python-side `id`/`version` defaults are
-        # applied per row.
-        session.execute(
-            pg_insert(AttendanceRecord).on_conflict_do_nothing(
-                index_elements=["enrollment_id", "calendar_date_id"]
-            ),
-            new_presents,
-        )
+    mark_unencoded(session, unencode, user_id)
+    mark_encoded(session, encode, user_id)
     if changed:
         row = get_or_create_month_status(session, section_id, school_year_id, year, month)
         row.last_saved_by_user_id = user_id

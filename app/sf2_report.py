@@ -43,11 +43,11 @@ from app.attendance_service import (
     full_year_roster,
     movements_by_enrollment,
     roster_for_month,
+    statuses_for_days,
     summarize_month_batch,
 )
 from app.enrollment_status import movement_label, movement_status_line
 from app.models.academic_structure import GradeLevel, Section, Strand, Track
-from app.models.attendance import AttendanceRecord
 from app.models.enums import AttendanceStatus, EnrollmentStatus, Sex
 from app.models.organization import School, SchoolYear, Term
 from app.models.rbac import User
@@ -241,18 +241,7 @@ def _learner_rows(session: Session, section_id, school_year_id, year: int, month
     in SF2's order (male then female, alphabetical) — `roster_for_month`
     handles that ordering and the §32 visibility rule."""
     roster = roster_for_month(session, section_id, school_year_id, year, month)
-    day_ids = [d.id for d in class_days]
-    records = {}
-    if roster and day_ids:
-        rows = (
-            session.query(AttendanceRecord)
-            .filter(
-                AttendanceRecord.enrollment_id.in_([e.id for e, _, _ in roster]),
-                AttendanceRecord.calendar_date_id.in_(day_ids),
-            )
-            .all()
-        )
-        records = {(r.enrollment_id, r.calendar_date_id): r.status for r in rows}
+    records = statuses_for_days(session, [e.id for e, _, _ in roster], class_days)
 
     month_start = date(year, month, 1)
     month_end = date(year, month, _calendar.monthrange(year, month)[1])

@@ -43,6 +43,7 @@ from app.database import SessionLocal
 # enrollments, enrollments before learners.
 LEARNER_DEPENDENTS = [
     ("attendance_records", "enrollment_id in (select id from enrollments where learner_id = :id)"),
+    ("attendance_encoded_days", "enrollment_id in (select id from enrollments where learner_id = :id)"),
     ("term_grades", "enrollment_id in (select id from enrollments where learner_id = :id)"),
     ("subject_final_grades", "enrollment_id in (select id from enrollments where learner_id = :id)"),
     ("combined_learning_area_results", "enrollment_id in (select id from enrollments where learner_id = :id)"),

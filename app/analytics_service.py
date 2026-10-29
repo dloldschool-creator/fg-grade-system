@@ -1786,7 +1786,8 @@ def attendance_risk(
         compute_active_window,
         summarize_attendance,
     )
-    from app.models.attendance import AcademicCalendarDate, AttendanceRecord
+    from app.attendance_service import statuses_for_days
+    from app.models.attendance import AcademicCalendarDate
     from app.models.learners import LearnerMovement
     from app.models.organization import SchoolYear
 
@@ -1843,22 +1844,14 @@ def attendance_risk(
     ):
         movements.setdefault(movement.enrollment_id, []).append(movement)
 
-    # Three columns, not ORM objects: a month across the whole school is
-    # roughly 20 class days times the roster, and hydrating that many
-    # instances is the expensive part.
+    # Columns, not ORM objects: a month across the whole school is roughly
+    # 20 class days times the roster, and hydrating that many instances is
+    # the expensive part. Through statuses_for_days, which reads a saved P
+    # from its bit — attendance_records alone has almost no PRESENT rows.
     statuses: dict = {}
-    for enrollment_id, calendar_date_id, status in (
-        session.query(
-            AttendanceRecord.enrollment_id,
-            AttendanceRecord.calendar_date_id,
-            AttendanceRecord.status,
-        )
-        .filter(
-            AttendanceRecord.enrollment_id.in_(enrollment_ids),
-            AttendanceRecord.calendar_date_id.in_(list(day_by_id)),
-        )
-        .all()
-    ):
+    for (enrollment_id, calendar_date_id), status in statuses_for_days(
+        session, enrollment_ids, class_days
+    ).items():
         day = day_by_id.get(calendar_date_id)
         if day is not None:
             statuses.setdefault(enrollment_id, {})[day] = status

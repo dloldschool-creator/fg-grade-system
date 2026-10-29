@@ -44,10 +44,11 @@ from app.attendance_service import (
     mark_reopened,
     movements_by_enrollment,
     section_year_windows,
+    statuses_for_days,
 )
 from app.enrollment_status import movement_label
 from app.models.academic_structure import Section
-from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus, AttendanceRecord
+from app.models.attendance import AcademicCalendarDate, AttendanceMonthStatus
 from app.models.enums import FinalizationState
 from app.models.learners import Enrollment
 from app.models.organization import SchoolYear
@@ -250,19 +251,13 @@ def apply_calendar_flip(
 
 
 def _sections_missing_a_mark(session: Session, day: AcademicCalendarDate, section_ids) -> set:
-    """Sections with at least one learner in window on `day` and no record
+    """Sections with at least one learner in window on `day` and no mark
     for it. A fixed handful of queries whatever the number of sections."""
     rows = section_year_windows(session, set(section_ids), day.school_year_id)
     in_window = {e.id: e.section_id for e, _, window in rows if window.contains(day.calendar_date)}
     if not in_window:
         return set()
-    marked = {
-        row.enrollment_id
-        for row in session.query(AttendanceRecord.enrollment_id).filter(
-            AttendanceRecord.calendar_date_id == day.id,
-            AttendanceRecord.enrollment_id.in_(list(in_window)),
-        )
-    }
+    marked = {enrollment_id for enrollment_id, _ in statuses_for_days(session, list(in_window), [day])}
     return {section_id for enrollment_id, section_id in in_window.items() if enrollment_id not in marked}
 
 
@@ -339,13 +334,7 @@ def _months_with_unmarked_regained_days(
     ]
     if not candidates:
         return set()
-    marked = {
-        row.calendar_date_id
-        for row in session.query(AttendanceRecord.calendar_date_id).filter(
-            AttendanceRecord.enrollment_id == enrollment.id,
-            AttendanceRecord.calendar_date_id.in_([d.id for d in candidates]),
-        )
-    }
+    marked = {day_id for _, day_id in statuses_for_days(session, [enrollment.id], candidates)}
     return {
         (enrollment.section_id, d.calendar_date.replace(day=1))
         for d in candidates
