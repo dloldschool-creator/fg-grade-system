@@ -380,3 +380,34 @@ Log.
 4. Generate SF9s — the whole section at once from the SF9 page.
 5. Take a **backup** and store it somewhere encrypted.
 6. Close encoding for the term.
+
+---
+
+## 11. Database space and `auth.refresh_tokens`
+
+The Super Admin's **Dashboard** has a *Database space* card: size against the
+500 MB free-tier limit (set `DB_LIMIT_MB` if the plan changes), warnings at
+80% and 90%, and the five largest tables across all schemas. Cached for five
+minutes. Past the limit Supabase makes the database read-only, so no grade
+can be saved.
+
+**`auth.refresh_tokens` is Supabase's own table and the largest one.** Checked
+2026-10-29: 39,650 rows (96% revoked, the rest active), 15 MB including
+indexes, growing about 150 KB a day. Left alone on purpose; it is ~3% of the
+limit. Nothing prunes it: Supabase Auth has cleanup code, but it is opt-in and
+there is no sign it runs on hosted projects (supabase/auth issue #2870, open).
+This project is on the old per-refresh-row token system (no session has the
+newer token columns filled), which is why it grows. Generated PDFs are never
+stored, so they add nothing.
+
+If it ever needs pruning, verified read-only on 2026-10-29: `postgres` may
+`DELETE` from it, no triggers, and `refresh_tokens.session_id` cascades from
+`sessions`. Revoked rows older than a day are never read by Supabase, so:
+
+- Delete only `revoked = true AND updated_at < now() - interval '7 days'`, in
+  batches. Never touch `revoked = false` rows: those are live sign-ins.
+- Don't delete from `auth.sessions` wholesale. It signs everyone out. Ones
+  with no refresh in 30+ days are safe if you want them gone.
+- It is a raw write to the live database: show the statement and a count
+  first, and get approval.
+- Postgres may not hand the freed space back to the card straight away.
