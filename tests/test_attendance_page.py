@@ -23,6 +23,7 @@ from app.admin_pages.attendance import (
     _last_attendance_change,
     _naive_utc,
     _save_grid,
+    ready_to_finalize_message,
 )
 from app.attendance_service import (
     class_days_in_month,
@@ -254,6 +255,44 @@ def test_blocking_reasons_stacks_every_applicable_reason():
         pending_defaults=3,
     )
     assert len(reasons) == 4
+
+
+# --- ready_to_finalize_message --------------------------------------------
+
+
+def test_ready_message_is_none_while_the_month_cannot_be_finalized():
+    assert ready_to_finalize_message(False, 0) is None
+    assert ready_to_finalize_message(False, 2) is None
+
+
+def test_ready_message_points_to_finalize_and_print_sf2():
+    message = ready_to_finalize_message(True, 0)
+    assert "Finalization" in message and "Print SF2" in message
+    assert "complete" in message
+
+
+def test_ready_message_does_not_call_a_month_with_warnings_complete():
+    message = ready_to_finalize_message(True, 2)
+    assert "2 warning(s)" in message
+    assert "complete" not in message
+
+
+def test_finalization_panel_returns_the_ready_message_on_every_path():
+    # The note under Save attendance is driven by this return value, so a
+    # bare `return` added to the panel would silently hide it.
+    import ast
+    import inspect
+
+    from app.admin_pages import attendance
+
+    tree = ast.parse(inspect.getsource(attendance._finalization_panel))
+    returns = [n for n in ast.walk(tree) if isinstance(n, ast.Return)]
+    assert returns and all(r.value is not None for r in returns)
+    assert any(
+        isinstance(r.value, ast.Call)
+        and getattr(r.value.func, "id", "") == "ready_to_finalize_message"
+        for r in returns
+    )
 
 
 # --- _last_attendance_change ----------------------------------------------

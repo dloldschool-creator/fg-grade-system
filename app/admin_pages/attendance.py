@@ -199,6 +199,27 @@ def _blocking_reasons(
     return reasons
 
 
+def ready_to_finalize_message(can_finalize: bool, warning_count: int) -> str | None:
+    """The note under Save attendance once the month can be finalized, or
+    None while it can't. Warnings don't block finalizing, so a month with
+    some is still ready — but the note mustn't call it complete while they
+    sit unread above the Finalize button."""
+    if not can_finalize:
+        return None
+    if warning_count:
+        return (
+            f"Almost there — this month can be finalized, but please read the "
+            f"{warning_count} warning(s) under **Finalization** first. Once they "
+            "look fine, finalize the month there, then print your SF2 from "
+            "**Print SF2** at the bottom of the page."
+        )
+    return (
+        "All set — this month's attendance looks complete! Scroll down to "
+        "**Finalization** to lock it in, then print your SF2 from **Print SF2** "
+        "at the bottom of the page."
+    )
+
+
 def _build_grid(
     session, roster, class_days, default_through: date | None = None
 ) -> tuple[pd.DataFrame, dict]:
@@ -410,7 +431,9 @@ def _summary_table(session, roster, class_days, pending_by_enrollment: dict) -> 
 def _finalization_panel(
     session, current_user, section, school_year_id, year, month, roster, class_days, has_unsaved_edits,
     pending_by_enrollment: dict,
-) -> None:
+) -> str | None:
+    """Draw the panel; return `ready_to_finalize_message` for the note under
+    Save attendance (None when the month can't be finalized right now)."""
     section_id = section.id
     status = get_month_status(session, section_id, year, month)
     current_state = status.status if status else FinalizationState.NOT_STARTED
@@ -459,7 +482,7 @@ def _finalization_panel(
                 "Only this section's adviser, a registrar or an admin can reopen a "
                 "finalized month."
             )
-        return
+        return None
 
     today = datetime.now(SCHOOL_TZ).date()
     report = validate_month(
@@ -557,6 +580,7 @@ def _finalization_panel(
         )
         try_commit(session, "Month finalized — attendance is now read-only.")
         st.rerun()
+    return ready_to_finalize_message(can_finalize, len(report["warnings"]))
 
 
 # The SF2 page's "go to Attendance" button leaves the school year, section and
@@ -736,6 +760,10 @@ def render() -> None:
                 column_config={LEARNER_COLUMN: st.column_config.TextColumn(pinned=True)},
             )
             st.caption("This month is finalized — reopen it below to make changes.")
+        # Under Save attendance (or the finalized grid); filled once the
+        # finalization panel below has judged the month, so the readiness
+        # check isn't run twice. A finalized month gets None and stays empty.
+        ready_hint = st.empty()
 
         st.divider()
         st.subheader("Monthly summary")
@@ -745,10 +773,12 @@ def render() -> None:
 
         st.divider()
         st.subheader("Finalization")
-        _finalization_panel(
+        ready_message = _finalization_panel(
             session, current_user, section, sy_choice, year, month,
             roster, class_days, has_unsaved_edits, pending_by_enrollment,
         )
+        if ready_message:
+            ready_hint.success(ready_message, icon="✅")
 
         st.divider()
         st.subheader("Print SF2")
