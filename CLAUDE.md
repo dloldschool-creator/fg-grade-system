@@ -594,6 +594,14 @@ of each is in `docs/build-log.md`.
   resolved by url_path alone, so `sf2.ATTENDANCE_URL_PATH` must match
   `streamlit_app.GROUPS` (`tests/test_navigation.py` checks it). Don't
   give advisers the SF2 page back without discussion.
+  Once a month can be finalized, a note under **Save attendance** points
+  to Finalization and Print SF2 (2026-11-01). It is filled into an
+  `st.empty()` placeholder from `_finalization_panel`'s return value
+  (`ready_to_finalize_message`), so the readiness check runs once — don't
+  re-run `validate_month` up there to decide it. Warnings don't block
+  finalizing, so the note softens to "read the warnings first" rather than
+  calling the month complete. Every return in the panel must hand back the
+  message or None; `tests/test_attendance_page.py` checks it.
 - **A finalized month's SF2 can change without a reopen, and now says so**
   (2026-10-17, `app/finalized_month_changes.py`). Three writers reach a
   finalized month from outside the grid: an Academic Calendar day flipped
