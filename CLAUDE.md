@@ -1524,6 +1524,19 @@ trust this over the paragraph above:
       nothing after has an annual average built from a single 12-unit
       entry.
 
+- [ ] **Remember-me restore should keep the current page** (asked
+      2026-11-06). Confirmed working live on v1.9.2 (refresh stays signed
+      in; logout and an unticked sign-in both clear it), but a refresh
+      lands on the Dashboard instead of the page you were on. Likely
+      cause: the first run of a new session has no user yet, so
+      `streamlit_app.py` builds the login-only navigation and the URL's
+      page is lost before the cookie report's rerun restores the user.
+      Probable fix: on that first run, if no restore has been tried yet,
+      draw nothing (or a "Signing you in…" placeholder) instead of the
+      login navigation, so the real navigation is built against the
+      original URL path; fall back to the login page once the browser has
+      had its chance to report. Verify in a real browser on a deep link
+      (e.g. /gradebook).
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
