@@ -1386,10 +1386,11 @@ Full phase-by-phase build history, including the reasoning behind every
 decision above: see `docs/build-log.md` (not auto-loaded — read it when you
 need the history).
 
-**Remaining before real use:** migrating the rest of the ~1,200 learners,
-filling in the empty subject profiles (the Grade 12 ones are the blocker
-— see the dress rehearsal below), and an end-to-end dress rehearsal on
-one section.
+**The app is in production use (v1.0.0, 2026-08-12).** **Still open:**
+migrating the rest of the ~1,200 learners and filling in the empty or
+Term-1-only subject profiles (the Grade 12 ones are the blocker — see the
+dress rehearsal below). The end-to-end dress rehearsal itself was done on
+BEZOS on 2026-08-13.
 **Done since:** 43 teacher accounts exist, and **every Grade 11 offering
 carries a teacher** as of 2026-08-17 — 315 assignments written by
 `scripts/import_teacher_assignments.py`, all 16 sections, 362 active
@@ -1443,7 +1444,7 @@ award tiers and the not-eligible reasons, and every generated document.
    does not require SUBMITTED — with one button that gap only covers
    imported/reopened grades.
 
-**The Grade 12 curriculum is the real blocker for real use.** As the
+**The Grade 12 curriculum is the real blocker for Grade 12 reporting.** As the
 rehearsal found it (2026-08-13): six of the eight G12 subject profiles
 held zero subjects, and the two CSS ones three each — so JOBS, the only
 section with real learners, offered three subjects total. Nothing is
