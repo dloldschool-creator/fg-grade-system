@@ -40,3 +40,9 @@ git push origin vX.Y.Z
 Versions before `v1.8.1` were assigned afterwards, based on the go-live
 commit as `v1.0.0`; they were never shown in the app. An earlier set of
 `v0.3.0`–`v0.11.1` tags was pushed and replaced the same day.
+
+## Releases since numbering began
+
+| Tag | Date | What changed |
+|---|---|---|
+| v1.9.0 | 2026-11-06 | "Keep me signed in on this device for 8 hours" at sign-in (off by default): a refresh or dropped connection no longer signs you out. Logout deletes the cookie and revokes the token on that device only. |

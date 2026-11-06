@@ -40,6 +40,7 @@ from app.auth import (
     logout,
     password_change_required,
 )
+from app.auth_cookie import render_sync as sync_auth_cookie
 from app.version import version_line
 
 st.set_page_config(page_title="FGNMHS Grading System", layout="wide")
@@ -67,6 +68,9 @@ st.markdown(
       [data-testid^="stBaseButton-secondary"]:not(:disabled) p {
           color: #FFFFFF;
       }
+      /* The sign-in cookie writer (app/auth_cookie.py) draws nothing,
+         but its wrapper would still add a gap at the top of every page. */
+      .st-key-auth_cookie_sync { display: none; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -231,6 +235,10 @@ def build_navigation(user) -> dict:
 
 
 current_user = get_current_user()
+# After get_current_user, which may schedule a cookie write (a restored
+# session's rotated token, or a delete). Drawn here once per run, never by
+# a page, so the component keeps one key.
+sync_auth_cookie()
 
 if current_user is None:
     pg = st.navigation([st.Page(login_form, title="Login", default=True)], position="hidden")

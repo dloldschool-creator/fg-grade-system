@@ -1,8 +1,9 @@
 """Login/session/RBAC helpers for the Streamlit app.
 
-Known limitation: st.session_state resets on a hard page refresh or new
-browser tab, so logging in again is needed after either. Not solved this
-pass — see docs/schema.md / CLAUDE.md history for why.
+st.session_state resets on a refresh, a new tab, or a dropped connection.
+Without "Keep me signed in" that still means signing in again; with it,
+`get_current_user` rebuilds the session from a cookie for up to
+`auth_cookie.REMEMBER_HOURS` after sign-in. See app/auth_cookie.py.
 """
 
 import base64
@@ -14,6 +15,7 @@ from functools import lru_cache
 
 import streamlit as st
 
+from app import auth_cookie
 from app.database import SessionLocal
 from app.naming import normalize_name
 from app.supabase_clients import get_anon_client
@@ -35,7 +37,17 @@ EDITING_ROLES = frozenset({"SUPER_ADMIN", "REGISTRAR", "ADVISER", "SUBJECT_TEACH
 # period of reading a roster without typing. 60 minutes is the compromise;
 # override with SESSION_TIMEOUT_MINUTES.
 SESSION_TIMEOUT_MINUTES = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
+# Holds the message to show on the sign-in page, not just a flag, because
+# a remembered session ends for a different reason (its fixed lifetime).
 TIMED_OUT_FLAG = "auth_timed_out"
+# Set only for a "Keep me signed in" session: the original sign-in time.
+# Such a session ends REMEMBER_HOURS after it instead of after idling,
+# since surviving a dropped connection is the point of ticking the box.
+REMEMBERED_SINCE_KEY = "auth_remembered_since"
+# The cookie is tried once per browser session. st.context.cookies is what
+# the browser sent when it *connected*, so after a logout in the same
+# session it still shows the cookie the logout just deleted.
+RESTORE_TRIED_KEY = "auth_cookie_restore_tried"
 
 
 @dataclass
@@ -161,29 +173,108 @@ def get_current_user() -> AuthUser | None:
     whole script on each interaction — so this function sees every action
     the user takes, which makes it the natural place to both check the
     idle window and refresh it. A session that has gone past the window is
-    cleared here rather than merely hidden, so the tokens go too."""
+    cleared here rather than merely hidden, so the tokens go too.
+
+    A new browser session with a "Keep me signed in" cookie is restored
+    here, once. A remembered session ignores the idle window and ends
+    `auth_cookie.REMEMBER_HOURS` after its original sign-in instead."""
     user = st.session_state.get(SESSION_KEY)
     if user is None:
-        return None
+        user = _restore_remembered_session()
+        if user is None:
+            return None
 
     now = time.time()
-    last_seen = st.session_state.get(LAST_SEEN_KEY)
-    if last_seen is not None and (now - last_seen) > SESSION_TIMEOUT_MINUTES * 60:
-        logout()
-        st.session_state[TIMED_OUT_FLAG] = True
-        return None
+    remembered_since = st.session_state.get(REMEMBERED_SINCE_KEY)
+    if remembered_since is not None:
+        if auth_cookie.is_expired(remembered_since, now):
+            logout()
+            st.session_state[TIMED_OUT_FLAG] = (
+                f"You were signed out {auth_cookie.REMEMBER_HOURS:g} hours after "
+                "signing in. Please sign in again."
+            )
+            return None
+    else:
+        last_seen = st.session_state.get(LAST_SEEN_KEY)
+        if last_seen is not None and (now - last_seen) > SESSION_TIMEOUT_MINUTES * 60:
+            logout()
+            st.session_state[TIMED_OUT_FLAG] = (
+                f"You were signed out after {SESSION_TIMEOUT_MINUTES} minutes of "
+                "inactivity. Please sign in again."
+            )
+            return None
 
     st.session_state[LAST_SEEN_KEY] = now
     return user
 
 
-def logout() -> None:
+def _restore_remembered_session() -> AuthUser | None:
+    """Rebuilds the session from the "Keep me signed in" cookie.
+
+    Supabase decides whether the token is still good; the cookie only
+    carries it. Refresh tokens rotate on use, so the new one is written
+    back straight away — before the database lookup, which could fail and
+    would otherwise leave the browser holding a spent token. The rewrite
+    keeps the original sign-in time, so the 8 hours never extend.
+    """
+    if st.session_state.get(RESTORE_TRIED_KEY):
+        return None
+    st.session_state[RESTORE_TRIED_KEY] = True
+
+    raw = auth_cookie.read_raw()
+    if raw is None:
+        return None
+    parsed = auth_cookie.decode(raw)
+    if parsed is None or auth_cookie.is_expired(parsed[0]):
+        auth_cookie.schedule_delete()
+        return None
+    issued_at, refresh_token = parsed
+
     try:
-        get_anon_client().auth.sign_out()
+        response = get_anon_client().auth.refresh_session(refresh_token)
     except Exception:
-        pass  # best-effort — clearing local session state is what actually matters
+        auth_cookie.schedule_delete()
+        return None
+    if response.user is None or response.session is None:
+        auth_cookie.schedule_delete()
+        return None
+    auth_cookie.schedule_set(issued_at, response.session.refresh_token)
+
+    try:
+        user = _load_or_provision_user(
+            response.user.id,
+            response.user.email,
+            (response.user.user_metadata or {}).get("full_name", ""),
+            response.session.access_token,
+            response.session.refresh_token,
+        )
+    except Exception:
+        # Database unreachable: show the sign-in page, keep the cookie
+        # (just rewritten with the live token) for the next attempt.
+        return None
+
+    st.session_state[SESSION_KEY] = user
+    st.session_state[LAST_SEEN_KEY] = time.time()
+    st.session_state[REMEMBERED_SINCE_KEY] = issued_at
+    return user
+
+
+def logout() -> None:
+    user = st.session_state.get(SESSION_KEY)
+    if user is not None:
+        # Revokes this session's refresh token, so a copied cookie stops
+        # working. Scope "local": the default, "global", would also sign
+        # the person out on every other device they use.
+        try:
+            client = get_anon_client()
+            client.auth.set_session(user.access_token, user.refresh_token)
+            client.auth.sign_out({"scope": "local"})
+        except Exception:
+            pass  # best-effort — clearing local session state is what actually matters
     st.session_state.pop(SESSION_KEY, None)
     st.session_state.pop(LAST_SEEN_KEY, None)
+    st.session_state.pop(REMEMBERED_SINCE_KEY, None)
+    auth_cookie.schedule_delete()
 
 
 SEAL_PATH = os.path.join(os.path.dirname(__file__), "assets", "fgnmhs_seal.png")
@@ -291,15 +382,22 @@ def login_form() -> None:
         )
         st.write("")
 
-        if st.session_state.pop(TIMED_OUT_FLAG, False):
-            st.info(
-                f"You were signed out after {SESSION_TIMEOUT_MINUTES} minutes of "
-                "inactivity. Please sign in again."
-            )
+        timed_out = st.session_state.pop(TIMED_OUT_FLAG, None)
+        if timed_out:
+            st.info(timed_out)
 
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="name@deped.gov.ph")
             password = st.text_input("Password", type="password")
+            remember = st.checkbox(
+                f"Keep me signed in on this device for {auth_cookie.REMEMBER_HOURS:g} hours",
+                value=False,
+                help=(
+                    "Stays signed in through a page refresh or a dropped connection. "
+                    "Don't tick this on a shared computer — the next person to open "
+                    "the browser would be signed in as you. Log out when you're done."
+                ),
+            )
             submitted = st.form_submit_button("Sign in", width="stretch")
 
         st.caption(
@@ -348,7 +446,16 @@ def login_form() -> None:
         response.session.access_token,
         response.session.refresh_token,
     )
-    st.session_state[LAST_SEEN_KEY] = time.time()
+    now = time.time()
+    st.session_state[LAST_SEEN_KEY] = now
+    if remember:
+        st.session_state[REMEMBERED_SINCE_KEY] = now
+        auth_cookie.schedule_set(now, response.session.refresh_token)
+    else:
+        # A fresh sign-in replaces whatever this browser remembered, so a
+        # previous person's cookie can't come back on the next refresh.
+        st.session_state.pop(REMEMBERED_SINCE_KEY, None)
+        auth_cookie.schedule_delete()
     st.rerun()
 
 
