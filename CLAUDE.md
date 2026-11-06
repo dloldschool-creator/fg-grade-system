@@ -775,6 +775,31 @@ the components' sum, or the languages are weighted twice.
   rendered PDF, not by eye — the misalignment was easy to miss on a
   screenshot and only showed up under precise measurement.
 
+**Sign-in and "Keep me signed in"** (2026-11-06, v1.9.0/v1.9.1)
+
+- A refresh/new tab/dropped connection empties `st.session_state`. The
+  opt-in checkbox (off by default — shared staffroom machines) stores the
+  Supabase refresh token in a cookie (`app/auth_cookie.py`, written by a
+  hidden `st.components.v2` component drawn once in `streamlit_app.py`);
+  `get_current_user` restores from it once per browser session. Fixed 8 h
+  from sign-in (`REMEMBER_ME_HOURS`), no idle timeout while remembered.
+  Logout deletes it and revokes with `scope: "local"` — the default
+  `"global"` signs the person out on every device.
+- **Never let a supabase-py client auto-refresh.** `get_anon_client()`
+  passes `auto_refresh_token=False`: the default starts a timer on every
+  client holding a session that refreshes — and *spends* — the refresh
+  token ~1 h later, forever, on a discarded client. That spent the
+  cookie's token, the next restore hit Supabase's reuse detection, and
+  the session was revoked: 8 hours became one (caught in review before
+  reboot). Refresh tokens rotate on use, so anything that calls
+  `set_session`/`refresh_session` must adopt the returned token
+  (`auth._adopt_tokens`).
+- Restore deletes the cookie only on a Supabase rejection (`AuthError`
+  that isn't `AuthRetryableError`); network errors arrive as raw `httpx`
+  exceptions and keep it.
+- Not yet verified on Streamlit Cloud: that the cookie reaches
+  `st.context.cookies` through its proxy. Check after the reboot.
+
 **Free text: reasons and length limits** (2026-10-16)
 
 - **A required reason goes through `app/text_rules.py`**, never a bare
@@ -1376,7 +1401,7 @@ new code, and the point of the rule is the reboot, not the push.
 **But `git push` does not deploy by itself** — it syncs files, and the
 running process keeps the old modules because `fileWatcherType` is off.
 Someone has to hit **Reboot** in the Streamlit Cloud dashboard. The page
-footer is the check: `v1.8.1 (c19e19c) · up 34m · ⚠ 41faa98 is on disk — restart to
+footer is the check: `v1.9.1 (04e7ad2) · up 34m · ⚠ 41faa98 is on disk — restart to
 load it` means the push landed and the deploy has not. **`_stcore/health`
 returns `ok` regardless**, so a green health check after a push says
 nothing about whether the new code is running — read the footer instead
