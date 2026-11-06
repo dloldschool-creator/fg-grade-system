@@ -801,9 +801,21 @@ the components' sum, or the languages are weighted twice.
   Cloud** (v1.9.2). Locally it did, so v1.9.0/1 passed every test and
   signed people out on the first live refresh. The component now reads
   `document.cookie` and reports it once per browser session; the report
-  reruns the script and `get_current_user` restores on that run (the
-  login form shows for a moment first). Never go back to
-  `st.context.cookies` for this. To probe the live site without a
+  reruns the script and `get_current_user` restores on that run. Never go
+  back to `st.context.cookies` for this.
+- **Until the browser reports, draw no sign-in navigation** (2026-11-06).
+  A one-page login navigation resolves /gradebook to its default and the
+  URL is gone, so a restored refresh landed on the Dashboard. Now the
+  browser reports even with no cookie (an empty value, one extra rerun per
+  session), and while `auth_cookie.awaiting_report()` holds,
+  `streamlit_app.holding_navigation()` registers every page's `url_path`
+  with a "Loading…" body. Page identity is `calc_hash(url_path)`, so the
+  real page takes over once restored. `GIVE_UP_SECONDS` (5) and a ticking
+  fragment fall back to sign-in if the report never comes. Verified in a
+  browser with a no-login harness (deep link kept with and without a
+  cookie) and on the real app (no cookie and a dead cookie both reach
+  sign-in, dead cookie deleted). A real remembered sign-in on a deep link
+  is still a human check. To probe the live site without a
   password: plant `fgnmhs_session` holding a fake token, reload — if the
   server read it, Supabase rejects it and the cookie disappears.
 
@@ -1524,19 +1536,9 @@ trust this over the paragraph above:
       nothing after has an annual average built from a single 12-unit
       entry.
 
-- [ ] **Remember-me restore should keep the current page** (asked
-      2026-11-06). Confirmed working live on v1.9.2 (refresh stays signed
-      in; logout and an unticked sign-in both clear it), but a refresh
-      lands on the Dashboard instead of the page you were on. Likely
-      cause: the first run of a new session has no user yet, so
-      `streamlit_app.py` builds the login-only navigation and the URL's
-      page is lost before the cookie report's rerun restores the user.
-      Probable fix: on that first run, if no restore has been tried yet,
-      draw nothing (or a "Signing you in…" placeholder) instead of the
-      login navigation, so the real navigation is built against the
-      original URL path; fall back to the login page once the browser has
-      had its chance to report. Verify in a real browser on a deep link
-      (e.g. /gradebook).
+- [x] **Remember-me restore keeps the current page** (2026-11-06) —
+      see "Until the browser reports" under Sign-in above. Still to do by
+      hand once deployed: tick the box, sign in, open /gradebook, refresh.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five

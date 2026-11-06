@@ -184,3 +184,38 @@ def test_read_raw_comes_from_the_browser_report_not_st_context(monkeypatch):
 def test_rotated_token_is_saved_before_the_database_lookup():
     source = inspect.getsource(auth._restore_remembered_session)
     assert source.index("schedule_set(") < source.index("_load_or_provision_user(")
+
+
+def test_a_browser_without_the_cookie_still_reports(monkeypatch):
+    """An empty report is what lets the server stop waiting. If the JS went
+    back to reporting only a found cookie, every signed-out visitor would
+    sit on the holding page until GIVE_UP_SECONDS."""
+    assert "setStateValue('value', found ? found.slice(prefix.length) : '')" in auth_cookie._JS
+    state = {auth_cookie._NAME: {"value": ""}}
+    monkeypatch.setattr(auth_cookie.st, "session_state", state)
+    assert auth_cookie.has_reported()
+    assert auth_cookie.read_raw() is None  # reported, but no cookie
+    assert not auth_cookie.awaiting_report()
+
+
+def test_waiting_for_the_report_is_bounded(monkeypatch):
+    state = {}
+    monkeypatch.setattr(auth_cookie.st, "session_state", state)
+    now = [1000.0]
+    monkeypatch.setattr(auth_cookie.time, "time", lambda: now[0])
+    assert auth_cookie.awaiting_report()
+    now[0] += auth_cookie.GIVE_UP_SECONDS - 1
+    assert auth_cookie.awaiting_report()
+    now[0] += 2
+    assert not auth_cookie.awaiting_report()
+    # Gave up for good: a late clock reading can't put it back.
+    now[0] = 1000.0
+    assert not auth_cookie.awaiting_report()
+
+
+def test_a_report_ends_the_wait(monkeypatch):
+    state = {}
+    monkeypatch.setattr(auth_cookie.st, "session_state", state)
+    assert auth_cookie.awaiting_report()
+    state[auth_cookie._NAME] = {"value": "abc"}
+    assert not auth_cookie.awaiting_report()

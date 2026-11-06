@@ -40,6 +40,7 @@ from app.auth import (
     logout,
     password_change_required,
 )
+from app.auth_cookie import awaiting_report, render_waiting
 from app.auth_cookie import render_sync as sync_auth_cookie
 from app.version import version_line
 
@@ -234,13 +235,37 @@ def build_navigation(user) -> dict:
     return navigation
 
 
+def holding_navigation() -> list:
+    """Every page's url_path, each drawing only the holding page.
+
+    Used for the first run(s) of a browser session, before the browser has
+    reported whether it holds a "Keep me signed in" cookie. Drawing the
+    sign-in navigation then would resolve a URL like /gradebook against a
+    one-page app and fall back to its default, so the restore that follows
+    a moment later lands on the Dashboard. A page's identity is a hash of
+    its url_path, so registering the same paths here keeps the URL's page
+    selected until the real navigation, built for the restored user,
+    replaces these. Roles are ignored: nothing here renders anything, and
+    the real navigation still decides what the user may open.
+    """
+    return [
+        st.Page(render_waiting, title=title, url_path=url_path, default=index == 0)
+        for index, (_module, title, _icon, url_path, _roles) in enumerate(
+            entry for _heading, entries in GROUPS for entry in entries
+        )
+    ]
+
+
 current_user = get_current_user()
 # After get_current_user, which may schedule a cookie write (a restored
 # session's rotated token, or a delete). Drawn here once per run, never by
 # a page, so the component keeps one key.
 sync_auth_cookie()
 
-if current_user is None:
+if current_user is None and awaiting_report():
+    pg = st.navigation(holding_navigation(), position="hidden")
+    pg.run()
+elif current_user is None:
     pg = st.navigation([st.Page(login_form, title="Login", default=True)], position="hidden")
     pg.run()
 elif current_user.must_change_password:

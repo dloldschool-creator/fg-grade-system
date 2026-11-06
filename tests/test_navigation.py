@@ -187,3 +187,27 @@ def test_the_section_picker_drops_a_section_it_cannot_offer():
 
     source = inspect.getsource(_helpers.section_picker)
     assert source.index("_forget_stale(section_key") < source.index("key=section_key")
+
+
+def test_the_holding_navigation_keeps_every_page_url(monkeypatch):
+    """Before the browser reports the remember-me cookie, every url_path
+    must be registered, or a refresh of a deep link falls back to the
+    default page and the restore lands on the Dashboard. Page identity is
+    a hash of url_path, so same paths = same pages once restored."""
+    captured = []
+
+    class FakePage:
+        def __init__(self, fn, *, title, url_path, default=False, **_):
+            captured.append((url_path, default))
+
+    monkeypatch.setattr(streamlit_app.st, "Page", FakePage)
+    streamlit_app.holding_navigation()
+    paths = [path for _module, _t, _i, path, _r in
+             (entry for _h, entries in streamlit_app.GROUPS for entry in entries)]
+    assert [p for p, _ in captured] == paths
+    assert sum(1 for _, default in captured if default) == 1
+
+
+def test_the_entrypoint_waits_for_the_report_before_the_sign_in_page():
+    source = Path(streamlit_app.__file__).read_text(encoding="utf-8")
+    assert source.index("awaiting_report()") < source.index("login_form, title=")

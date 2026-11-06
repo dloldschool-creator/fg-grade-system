@@ -34,9 +34,17 @@ cookie, and on Streamlit Community Cloud it can't *read* ours either:
 test after v1.9.1 — locally, with no proxy in front, it worked, which is
 why the tests passed). So the component reads `document.cookie` and
 reports the value once per browser session; the report reruns the script,
-and `app.auth` restores from it on that run. A browser without the cookie
-reports nothing and costs no rerun. The cookie can't be HttpOnly for the
-same reason — JavaScript is the only thing that can write or read it.
+and `app.auth` restores from it on that run. The cookie can't be HttpOnly
+for the same reason — JavaScript is the only thing that can write or read
+it.
+
+**A browser without the cookie reports too**, an empty value, at the cost
+of one rerun per browser session (2026-11-06). Until the browser has
+spoken the server can't tell "no cookie" from "not reported yet", and
+`streamlit_app.py` uses `awaiting_report()` to hold every page's URL open
+for that moment instead of drawing the sign-in navigation — which would
+throw the URL away, so a refresh of /gradebook landed on the Dashboard.
+`GIVE_UP_SECONDS` bounds the wait if the report never comes.
 
 Deliberately dependency-free (only Streamlit and the standard library):
 `app.auth` imports it at load, and every page imports `app.auth`, so it
@@ -65,6 +73,12 @@ _PENDING_KEY = "auth_cookie_pending"
 # session — including a new session in a window that wasn't reloaded (a
 # reconnect after the server dropped the old one).
 _SID_KEY = "auth_cookie_sid"
+# When this session started waiting for the report, and whether it gave up.
+_WAIT_SINCE_KEY = "auth_cookie_wait_since"
+_GAVE_UP_KEY = "auth_cookie_gave_up"
+# The report normally arrives well inside a second; past this, assume the
+# component is never going to run and show the sign-in page.
+GIVE_UP_SECONDS = 5.0
 
 # Re-invoked on every rerun. The report goes first and once per session id;
 # a write is applied once per nonce. Both flags live on `window`, which a
@@ -79,9 +93,9 @@ export default function(component) {
     window.__fgnmhsCookieSid = data.sid;
     const prefix = data.name + '=';
     const found = document.cookie.split('; ').find((c) => c.startsWith(prefix));
-    if (found && found.length > prefix.length) {
-      setStateValue('value', found.slice(prefix.length));
-    }
+    // Empty when there is no cookie: still a report, so the server stops
+    // waiting for one (awaiting_report).
+    setStateValue('value', found ? found.slice(prefix.length) : '');
   }
   if (data.cookie && window.__fgnmhsCookieNonce !== data.nonce) {
     document.cookie = data.cookie;
@@ -119,6 +133,48 @@ def is_expired(issued_at: float, now: float | None = None) -> bool:
     return now - issued_at > REMEMBER_SECONDS or issued_at > now + 300
 
 
+def _reported_value():
+    state = st.session_state.get(_NAME)
+    if state is None:
+        return None
+    return state.get("value") if isinstance(state, dict) else getattr(state, "value", None)
+
+
+def has_reported() -> bool:
+    """True once this browser session's component has reported, cookie or
+    not (an empty string means no cookie)."""
+    return _reported_value() is not None
+
+
+def awaiting_report() -> bool:
+    """True while the first runs of a browser session are still waiting
+    for the browser to say whether it holds the cookie — the window in
+    which drawing the sign-in navigation would lose the page in the URL.
+    Starts the give-up clock on its first call."""
+    if has_reported() or st.session_state.get(_GAVE_UP_KEY):
+        return False
+    started = st.session_state.setdefault(_WAIT_SINCE_KEY, time.time())
+    if time.time() - started > GIVE_UP_SECONDS:
+        st.session_state[_GAVE_UP_KEY] = True
+        return False
+    return True
+
+
+def render_waiting() -> None:
+    """The holding page shown while `awaiting_report()`. Normally the
+    browser's report reruns the script within a second and this is never
+    seen; the ticking fragment is only the fallback for a report that
+    never comes, so nobody is left on a blank page."""
+    st.caption("Loading…")
+
+    @st.fragment(run_every=1.0)
+    def _tick():
+        if not awaiting_report():
+            st.rerun(scope="app")
+
+    _tick()
+
+
 def read_raw() -> str | None:
     """The cookie as this browser session's component reported it, or None
     until it has (and always, for a browser without the cookie).
@@ -128,11 +184,7 @@ def read_raw() -> str | None:
     the rerun it triggered starts, so `app.auth` sees it in time to restore
     and to schedule the rotated token's write on the same run.
     Not `st.context.cookies` — see the module docstring."""
-    state = st.session_state.get(_NAME)
-    if state is None:
-        return None
-    value = state.get("value") if isinstance(state, dict) else getattr(state, "value", None)
-    return value or None
+    return _reported_value() or None
 
 
 def _schedule(cookie: str) -> None:
