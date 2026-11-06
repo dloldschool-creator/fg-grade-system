@@ -104,3 +104,21 @@ def test_it_shells_out_to_nothing():
             imported.add((node.module or "").split(".")[0])
     assert "subprocess" not in imported
     assert imported <= {"os", "time", "datetime"}, f"unexpected imports: {imported}"
+
+
+def test_release_reads_the_version_file_and_prefixes_v():
+    text = open(version.os.path.join(version._ROOT, "VERSION"), encoding="utf-8").read().strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", text), text
+    assert version.release() == "v" + text
+
+
+def test_release_line_warns_when_a_restart_is_pending(monkeypatch):
+    monkeypatch.setattr(version, "_LOADED_SHA", "a" * 40)
+    monkeypatch.setenv("APP_VERSION", "b" * 40)
+    assert version.release_line().startswith(version.release())
+    assert "restart" in version.release_line()
+
+
+def test_a_missing_version_file_reports_unknown(monkeypatch):
+    monkeypatch.setattr(version, "_ROOT", "/nonexistent")
+    assert version.release() == version.UNKNOWN

@@ -90,6 +90,18 @@ def short_sha() -> str:
     return sha if sha == UNKNOWN else sha[:7]
 
 
+def release() -> str:
+    """The semantic version, read from the repo-root VERSION file.
+
+    A file rather than `git describe`: a host's clone may carry no tags
+    (or no history at all), and nothing under `app/` may spawn git. The
+    release commit bumps VERSION and gets the matching `vX.Y.Z` tag, so the
+    two are meant to be the same fact — see docs/releases.md.
+    """
+    text = _read(os.path.join(_ROOT, "VERSION"))
+    return "v" + text if text else UNKNOWN
+
+
 def restart_pending() -> bool:
     """True when newer code is on disk than the process is running."""
     current = disk_commit_sha()
@@ -126,4 +138,17 @@ def version_line() -> str:
     line = "%s · %s" % (short_sha(), uptime())
     if restart_pending():
         line += " · ⚠ %s is on disk — restart to load it" % disk_commit_sha()[:7]
+    return line
+
+
+def release_line() -> str:
+    """What the sign-in page shows: the release, not the commit.
+
+    Keeps the restart warning — the sign-in page is where someone checks
+    whether a push has deployed, and a release number alone cannot say
+    that (it only changes when a release is cut).
+    """
+    line = release()
+    if restart_pending():
+        line += " · ⚠ newer code is on disk — restart to load it"
     return line
