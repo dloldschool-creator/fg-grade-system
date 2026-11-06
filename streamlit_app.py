@@ -194,11 +194,16 @@ GROUPS = [
 ]
 
 
+def _all_entries():
+    """Every GROUPS row, in sidebar order, headings dropped."""
+    return (entry for _heading, entries in GROUPS for entry in entries)
+
+
 def _quick_guide_page(**extra) -> st.Page:
     """The Quick Guide's `st.Page`, from its GROUPS row, so the title, icon
     and url_path are written once."""
     _module, title, icon, url_path, _roles = next(
-        entry for _heading, entries in GROUPS for entry in entries if entry[0] is help_page
+        entry for entry in _all_entries() if entry[0] is help_page
     )
     return st.Page(help_page.render, title=title, icon=icon, url_path=url_path, **extra)
 
@@ -250,9 +255,7 @@ def holding_navigation() -> list:
     """
     return [
         st.Page(render_waiting, title=title, url_path=url_path, default=index == 0)
-        for index, (_module, title, _icon, url_path, _roles) in enumerate(
-            entry for _heading, entries in GROUPS for entry in entries
-        )
+        for index, (_module, title, _icon, url_path, _roles) in enumerate(_all_entries())
     ]
 
 

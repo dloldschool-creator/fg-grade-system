@@ -209,5 +209,15 @@ def test_the_holding_navigation_keeps_every_page_url(monkeypatch):
 
 
 def test_the_entrypoint_waits_for_the_report_before_the_sign_in_page():
-    source = Path(streamlit_app.__file__).read_text(encoding="utf-8")
-    assert source.index("awaiting_report()") < source.index("login_form, title=")
+    """The holding branch must be the first test of a signed-out run; read
+    off the module's top-level if/elif chain, not a substring order."""
+    tree = ast.parse(Path(streamlit_app.__file__).read_text(encoding="utf-8"))
+    chain = next(
+        node for node in tree.body
+        if isinstance(node, ast.If) and "current_user" in ast.unparse(node.test)
+    )
+    assert ast.unparse(chain.test) == "current_user is None and awaiting_report()"
+    assert "holding_navigation()" in ast.unparse(chain.body[0])
+    sign_in = chain.orelse[0]
+    assert ast.unparse(sign_in.test) == "current_user is None"
+    assert "login_form" in ast.unparse(sign_in.body[0])
