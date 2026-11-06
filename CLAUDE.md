@@ -815,7 +815,7 @@ the components' sum, or the languages are weighted twice.
   browser with a no-login harness (deep link kept with and without a
   cookie) and on the real app (no cookie and a dead cookie both reach
   sign-in, dead cookie deleted). A real remembered sign-in on a deep link
-  is still a human check. To probe the live site without a
+  was confirmed live on v1.9.3. To probe the live site without a
   password: plant `fgnmhs_session` holding a fake token, reload — if the
   server read it, Supabase rejects it and the cookie disappears.
 
@@ -1537,8 +1537,8 @@ trust this over the paragraph above:
       entry.
 
 - [x] **Remember-me restore keeps the current page** (2026-11-06) —
-      see "Until the browser reports" under Sign-in above. Still to do by
-      hand once deployed: tick the box, sign in, open /gradebook, refresh.
+      see "Until the browser reports" under Sign-in above. Confirmed live
+      on v1.9.3: a remembered refresh of /gradebook stays on the Gradebook.
 - [ ] Blocked, needs you: drop the school's SF10 file into
       `sf-templates/` and the report layer can be built on top of the
       record — `app/excel_template.py` already carries the five
