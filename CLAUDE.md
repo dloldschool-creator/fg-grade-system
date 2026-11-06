@@ -797,8 +797,15 @@ the components' sum, or the languages are weighted twice.
 - Restore deletes the cookie only on a Supabase rejection (`AuthError`
   that isn't `AuthRetryableError`); network errors arrive as raw `httpx`
   exceptions and keep it.
-- Not yet verified on Streamlit Cloud: that the cookie reaches
-  `st.context.cookies` through its proxy. Check after the reboot.
+- **`st.context.cookies` does not carry it on Streamlit Community
+  Cloud** (v1.9.2). Locally it did, so v1.9.0/1 passed every test and
+  signed people out on the first live refresh. The component now reads
+  `document.cookie` and reports it once per browser session; the report
+  reruns the script and `get_current_user` restores on that run (the
+  login form shows for a moment first). Never go back to
+  `st.context.cookies` for this. To probe the live site without a
+  password: plant `fgnmhs_session` holding a fake token, reload — if the
+  server read it, Supabase rejects it and the cookie disappears.
 
 **Free text: reasons and length limits** (2026-10-16)
 
@@ -1401,7 +1408,7 @@ new code, and the point of the rule is the reboot, not the push.
 **But `git push` does not deploy by itself** — it syncs files, and the
 running process keeps the old modules because `fileWatcherType` is off.
 Someone has to hit **Reboot** in the Streamlit Cloud dashboard. The page
-footer is the check: `v1.9.1 (04e7ad2) · up 34m · ⚠ 41faa98 is on disk — restart to
+footer is the check: `v1.9.2 (abc1234) · up 34m · ⚠ 41faa98 is on disk — restart to
 load it` means the push landed and the deploy has not. **`_stcore/health`
 returns `ok` regardless**, so a green health check after a push says
 nothing about whether the new code is running — read the footer instead

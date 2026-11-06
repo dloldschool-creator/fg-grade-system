@@ -22,15 +22,21 @@ Rules it keeps:
   own session limits are the control for that.
 - **Logout and expiry delete it**, and logout also revokes the token at
   Supabase, so a copied cookie stops working.
-- **One browser, one cookie.** It is read from the connecting browser's
-  own request (`st.context.cookies`), never from anything shared between
-  sessions, and nothing here is cached.
+- **One browser, one cookie.** The value comes from this browser
+  session's own component, never from anything shared between sessions,
+  and nothing here is cached.
 
-Streamlit can read cookies but not write them, so writing is a tiny
-`st.components.v2` component (same approach as `app/live_search.py`)
-that sets `document.cookie`. It is drawn once per script run by
-`streamlit_app.py` and hidden by its CSS. The cookie can't be HttpOnly for that
-reason — JavaScript is the only thing that can write it.
+**Both directions go through JavaScript**, a tiny `st.components.v2`
+component (same approach as `app/live_search.py`) drawn once per script
+run by `streamlit_app.py` and hidden by its CSS. Streamlit can't write a
+cookie, and on Streamlit Community Cloud it can't *read* ours either:
+`st.context.cookies` never saw it there (found 2026-11-06, the first live
+test after v1.9.1 — locally, with no proxy in front, it worked, which is
+why the tests passed). So the component reads `document.cookie` and
+reports the value once per browser session; the report reruns the script,
+and `app.auth` restores from it on that run. A browser without the cookie
+reports nothing and costs no rerun. The cookie can't be HttpOnly for the
+same reason — JavaScript is the only thing that can write or read it.
 
 Deliberately dependency-free (only Streamlit and the standard library):
 `app.auth` imports it at load, and every page imports `app.auth`, so it
@@ -55,19 +61,32 @@ REMEMBER_SECONDS = int(REMEMBER_HOURS * 3600)
 _FORMAT = "v1"
 
 _PENDING_KEY = "auth_cookie_pending"
+# One id per browser session, so the browser reports the cookie once per
+# session — including a new session in a window that wasn't reloaded (a
+# reconnect after the server dropped the old one).
+_SID_KEY = "auth_cookie_sid"
 
-# Re-invoked on every rerun with the same data, so the write is applied
-# once per nonce (remembered on `window`, which a refresh resets along with
-# the session itself). The component must stay mounted so this runs even
-# when the script reruns straight after scheduling a write, which sign-in
-# and logout both do.
+# Re-invoked on every rerun. The report goes first and once per session id;
+# a write is applied once per nonce. Both flags live on `window`, which a
+# refresh resets along with the session itself. The component stays
+# mounted so a write runs even when the script reruns straight after
+# scheduling it, which sign-in and logout both do.
 _JS = """
 export default function(component) {
-  const { data } = component;
-  if (!data || !data.nonce || !data.cookie) return;
-  if (window.__fgnmhsCookieNonce === data.nonce) return;
-  document.cookie = data.cookie;
-  window.__fgnmhsCookieNonce = data.nonce;
+  const { data, setStateValue } = component;
+  if (!data) return;
+  if (data.sid && window.__fgnmhsCookieSid !== data.sid) {
+    window.__fgnmhsCookieSid = data.sid;
+    const prefix = data.name + '=';
+    const found = document.cookie.split('; ').find((c) => c.startsWith(prefix));
+    if (found && found.length > prefix.length) {
+      setStateValue('value', found.slice(prefix.length));
+    }
+  }
+  if (data.cookie && window.__fgnmhsCookieNonce !== data.nonce) {
+    document.cookie = data.cookie;
+    window.__fgnmhsCookieNonce = data.nonce;
+  }
 }
 """
 
@@ -101,12 +120,19 @@ def is_expired(issued_at: float, now: float | None = None) -> bool:
 
 
 def read_raw() -> str | None:
-    """The cookie as this browser sent it when it connected. None outside
-    a real browser session (tests, AppTest) as well as when absent."""
-    try:
-        return st.context.cookies.get(COOKIE_NAME) or None
-    except Exception:
+    """The cookie as this browser session's component reported it, or None
+    until it has (and always, for a browser without the cookie).
+
+    Read from the component's state *before* the component is drawn on
+    this run: Streamlit applies the browser's report to session state when
+    the rerun it triggered starts, so `app.auth` sees it in time to restore
+    and to schedule the rotated token's write on the same run.
+    Not `st.context.cookies` — see the module docstring."""
+    state = st.session_state.get(_NAME)
+    if state is None:
         return None
+    value = state.get("value") if isinstance(state, dict) else getattr(state, "value", None)
+    return value or None
 
 
 def _schedule(cookie: str) -> None:
@@ -142,9 +168,18 @@ def _mount():
 
 
 def render_sync() -> None:
-    """Applies any pending write in the browser. Call once per script run,
-    from the entrypoint only, so the component has one stable key."""
-    pending = st.session_state.get(_PENDING_KEY)
-    if not pending:
-        return
-    _mount()(key=_NAME, data=pending)
+    """Reports the browser's cookie (once per session) and applies any
+    pending write. Call once per script run, from the entrypoint only, so
+    the component has one stable key — and after `get_current_user`, so a
+    write it schedules goes out on the same run."""
+    if _SID_KEY not in st.session_state:
+        st.session_state[_SID_KEY] = f"{time.time_ns()}"
+    data = {"name": COOKIE_NAME, "sid": st.session_state[_SID_KEY]}
+    data.update(st.session_state.get(_PENDING_KEY) or {})
+    _mount()(
+        key=_NAME,
+        data=data,
+        default={"value": None},
+        # A callback is what makes the report rerun the script.
+        on_value_change=lambda: None,
+    )

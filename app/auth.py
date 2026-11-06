@@ -46,9 +46,9 @@ TIMED_OUT_FLAG = "auth_timed_out"
 # Such a session ends REMEMBER_HOURS after it instead of after idling,
 # since surviving a dropped connection is the point of ticking the box.
 REMEMBERED_SINCE_KEY = "auth_remembered_since"
-# The cookie is tried once per browser session. st.context.cookies is what
-# the browser sent when it *connected*, so after a logout in the same
-# session it still shows the cookie the logout just deleted.
+# The cookie is tried once per browser session. The browser reports it
+# once, and the report stays in session state, so after a logout in the
+# same session it still shows the cookie the logout just deleted.
 RESTORE_TRIED_KEY = "auth_cookie_restore_tried"
 
 
@@ -221,11 +221,14 @@ def _restore_remembered_session() -> AuthUser | None:
     """
     if st.session_state.get(RESTORE_TRIED_KEY):
         return None
-    st.session_state[RESTORE_TRIED_KEY] = True
-
+    # None until the browser has reported a cookie (the run after the
+    # component first draws), so this is not yet a try: the first run of a
+    # session always lands here, and a browser with no cookie stays here.
     raw = auth_cookie.read_raw()
     if raw is None:
         return None
+    st.session_state[RESTORE_TRIED_KEY] = True
+
     parsed = auth_cookie.decode(raw)
     if parsed is None or auth_cookie.is_expired(parsed[0]):
         auth_cookie.schedule_delete()

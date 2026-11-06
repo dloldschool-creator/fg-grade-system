@@ -159,10 +159,26 @@ def test_logout_deletes_the_cookie_and_revokes_only_this_device():
 
 
 def test_restore_is_tried_once_per_browser_session():
-    """st.context.cookies is frozen at connect time, so after a logout the
-    deleted cookie is still visible — a second try would sign back in."""
+    """The browser's report stays in session state, so after a logout the
+    deleted cookie is still visible — a second try would sign back in.
+    The try is marked only once a report exists: the first run of every
+    session comes before the browser has said anything."""
     source = inspect.getsource(auth._restore_remembered_session)
-    assert source.index("RESTORE_TRIED_KEY] = True") < source.index("read_raw()")
+    tried = source.index("RESTORE_TRIED_KEY] = True")
+    assert source.index("read_raw()") < tried < source.index("refresh_session(")
+
+
+def test_read_raw_comes_from_the_browser_report_not_st_context(monkeypatch):
+    """On Streamlit Community Cloud st.context.cookies never carried the
+    cookie; the component's report is the only source."""
+    assert "st.context.cookies.get" not in inspect.getsource(auth_cookie)
+    state = {}
+    monkeypatch.setattr(auth_cookie.st, "session_state", state)
+    assert auth_cookie.read_raw() is None
+    state[auth_cookie._NAME] = {"value": None}
+    assert auth_cookie.read_raw() is None
+    state[auth_cookie._NAME] = {"value": "abc"}
+    assert auth_cookie.read_raw() == "abc"
 
 
 def test_rotated_token_is_saved_before_the_database_lookup():
