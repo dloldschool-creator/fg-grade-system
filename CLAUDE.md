@@ -1352,9 +1352,8 @@ It is a file, not `git describe`, because a Streamlit Cloud clone may carry
 no tags and nothing under `app/` may spawn git. To cut a release: edit
 `VERSION`, commit, then `git tag -a vX.Y.Z` that commit and push the tag.
 The tag and the file must match. MAJOR means a change to an official
-output's rules, MINOR a new page or capability, PATCH a fix; `1.0.0` is
-reserved for the first real encoding run. `docs/releases.md` has the
-backfilled milestones `v0.1.0`–`v0.11.1`, which were assigned afterwards
+output's rules, MINOR a new page or capability, PATCH a fix; `1.0.0` is the go-live release (2026-08-12, `90e6c80`). `docs/releases.md` has the
+backfilled milestones `v0.1.0`–`v1.8.1`, which were assigned afterwards
 and never shown in the app. The sign-in line keeps the "restart pending"
 warning, since a release number alone can't show whether a push deployed.
 
