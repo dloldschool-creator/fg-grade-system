@@ -15,7 +15,11 @@ Rules it keeps:
 - **A fixed lifetime from sign-in** (`REMEMBER_HOURS`, 8 — one school
   day), never sliding. Rewriting the cookie with a rotated token keeps
   the original sign-in time, so using the app can't keep it alive
-  forever. The server checks the time too, not just the browser.
+  forever. The server re-checks that time on restore, so a browser that
+  ignores the cookie's Expires is still cut off — but the time travels
+  *in* the cookie, unsigned, so this bounds an honest browser, not
+  someone who already holds the token and edits the cookie. Supabase's
+  own session limits are the control for that.
 - **Logout and expiry delete it**, and logout also revokes the token at
   Supabase, so a copied cookie stops working.
 - **One browser, one cookie.** It is read from the connecting browser's
@@ -25,7 +29,7 @@ Rules it keeps:
 Streamlit can read cookies but not write them, so writing is a tiny
 `st.components.v2` component (same approach as `app/live_search.py`)
 that sets `document.cookie`. It is drawn once per script run by
-`streamlit_app.py` and hidden. The cookie can't be HttpOnly for that
+`streamlit_app.py` and hidden by its CSS. The cookie can't be HttpOnly for that
 reason — JavaScript is the only thing that can write it.
 
 Deliberately dependency-free (only Streamlit and the standard library):
@@ -66,8 +70,6 @@ export default function(component) {
   window.__fgnmhsCookieNonce = data.nonce;
 }
 """
-
-_CSS = ":host { display: none; }"
 
 _NAME = "auth_cookie_sync"
 _component = None
@@ -133,7 +135,9 @@ def _mount():
     `live_search._mount`."""
     global _component
     if _component is None or components.get_bidi_component_manager().get(_NAME) is None:
-        _component = components.component(_NAME, html="", css=_CSS, js=_JS)
+        # Draws nothing; streamlit_app.py hides its wrapper
+        # (.st-key-auth_cookie_sync), which would otherwise add a gap.
+        _component = components.component(_NAME, html="", js=_JS)
     return _component
 
 

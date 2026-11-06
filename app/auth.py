@@ -7,6 +7,7 @@ Without "Keep me signed in" that still means signing in again; with it,
 """
 
 import base64
+import html
 import os
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 import streamlit as st
+from supabase_auth.errors import AuthError, AuthRetryableError
 
 from app import auth_cookie
 from app.database import SessionLocal
@@ -232,8 +234,13 @@ def _restore_remembered_session() -> AuthUser | None:
 
     try:
         response = get_anon_client().auth.refresh_session(refresh_token)
-    except Exception:
-        auth_cookie.schedule_delete()
+    except Exception as exc:
+        # Only a rejection from Supabase says the token is dead. A network
+        # failure (raw httpx errors, or AuthRetryableError for a 5xx) says
+        # nothing about it, and deleting the cookie then would sign people
+        # out over the very kind of blip this feature exists to survive.
+        if isinstance(exc, AuthError) and not isinstance(exc, AuthRetryableError):
+            auth_cookie.schedule_delete()
         return None
     if response.user is None or response.session is None:
         auth_cookie.schedule_delete()
@@ -374,7 +381,7 @@ def login_form() -> None:
             <div class="login-heading">
               {_seal_img_tag()}
               <div class="eyebrow">Senior High School</div>
-              <h1>{_school_display_name()}</h1>
+              <h1>{html.escape(_school_display_name())}</h1>
               <p>Grading, Attendance &amp; Forms System</p>
             </div>
             """,
@@ -407,8 +414,9 @@ def login_form() -> None:
         # Release and commit, centred. It still carries the restart warning,
         # so a push that has not deployed is visible before signing in.
         # Escaped: the text comes from a file and an env var, not from code.
-        import html
-
+        # (The school name above is escaped for the same reason — it is
+        # typed on School Info, and this page sits beside a cookie that
+        # JavaScript can read.)
         from app.version import release_line
 
         st.markdown(
@@ -488,6 +496,23 @@ def _record_password_change(user: AuthUser) -> None:
     user.must_change_password = False
 
 
+def _adopt_tokens(user: AuthUser, session) -> None:
+    """Keeps the session, and the remember-me cookie, on the live token.
+
+    `set_session` refreshes when the access token is over an hour old, and
+    a refresh spends the old refresh token. Left in place, the spent one
+    is what the next restore presents — Supabase treats that as token
+    reuse and revokes the session — and what logout tries to revoke with.
+    """
+    if session is None or session.refresh_token == user.refresh_token:
+        return
+    user.access_token = session.access_token
+    user.refresh_token = session.refresh_token
+    remembered_since = st.session_state.get(REMEMBERED_SINCE_KEY)
+    if remembered_since is not None:
+        auth_cookie.schedule_set(remembered_since, session.refresh_token)
+
+
 def change_password_form(*, forced: bool = False) -> None:
     """Renders inline (e.g. in the sidebar) for any logged-in user —
     needed for someone who just got a generated temporary password from
@@ -517,8 +542,13 @@ def change_password_form(*, forced: bool = False) -> None:
                     )
                 else:
                     client = get_anon_client()
-                    client.auth.set_session(user.access_token, user.refresh_token)
                     try:
+                        # Inside the try: a spent or revoked token raises
+                        # here, and that is a message, not a crashed page.
+                        refreshed = client.auth.set_session(
+                            user.access_token, user.refresh_token
+                        )
+                        _adopt_tokens(user, refreshed.session)
                         client.auth.update_user({"password": new_password})
                     except Exception as exc:
                         st.error(f"Couldn't update password: {exc}")
