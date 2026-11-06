@@ -1343,6 +1343,21 @@ pytest -n 4                           # the default tier in parallel (needs pyte
   `recompute_enrollment_grades` commits, so it cannot be driven from a test.
   Don't add one that commits.
 
+## Releases (semver)
+
+Added 2026-11-06. The app carries a semantic version, `vMAJOR.MINOR.PATCH`,
+read from the repo-root **`VERSION`** file by `app.version.release()` and
+shown on the sign-in page (the sidebar still shows the commit and uptime).
+It is a file, not `git describe`, because a Streamlit Cloud clone may carry
+no tags and nothing under `app/` may spawn git. To cut a release: edit
+`VERSION`, commit, then `git tag -a vX.Y.Z` that commit and push the tag.
+The tag and the file must match. MAJOR means a change to an official
+output's rules, MINOR a new page or capability, PATCH a fix; `1.0.0` is
+reserved for the first real encoding run. `docs/releases.md` has the
+backfilled milestones `v0.1.0`–`v0.11.1`, which were assigned afterwards
+and never shown in the app. The sign-in line keeps the "restart pending"
+warning, since a release number alone can't show whether a push deployed.
+
 ## Where things stand
 
 **The app is live** at https://fgnmhs-shs.streamlit.app, deployed
