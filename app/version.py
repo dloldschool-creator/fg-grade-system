@@ -90,8 +90,8 @@ def short_sha() -> str:
     return sha if sha == UNKNOWN else sha[:7]
 
 
-def release() -> str:
-    """The semantic version, read from the repo-root VERSION file.
+def _read_release() -> str:
+    """The semantic version in the repo-root VERSION file, as on disk.
 
     A file rather than `git describe`: a host's clone may carry no tags
     (or no history at all), and nothing under `app/` may spawn git. The
@@ -99,7 +99,19 @@ def release() -> str:
     two are meant to be the same fact — see docs/releases.md.
     """
     text = _read(os.path.join(_ROOT, "VERSION"))
+    # Notepad can save a UTF-8 byte-order mark; it must not reach the page.
+    text = (text or "").lstrip("\ufeff").strip()
     return "v" + text if text else UNKNOWN
+
+
+# Captured at import for the same reason as _LOADED_SHA: after a push
+# without a restart, VERSION on disk names a release that isn't running.
+_LOADED_RELEASE = _read_release()
+
+
+def release() -> str:
+    """The release this running process was started from."""
+    return _LOADED_RELEASE
 
 
 def restart_pending() -> bool:
@@ -135,20 +147,25 @@ def version_line() -> str:
     the state a version line exists to make visible, and the one that
     otherwise looks exactly like a deploy that worked.
     """
-    line = "%s (%s) · %s" % (release(), short_sha(), uptime())
-    if restart_pending():
-        line += " · ⚠ %s is on disk — restart to load it" % disk_commit_sha()[:7]
-    return line
+    return "%s · %s%s" % (_identity(), uptime(), _restart_note())
 
 
 def release_line() -> str:
-    """What the sign-in page shows: the release, not the commit.
+    """What the sign-in page shows: release and commit, without uptime.
 
     Keeps the restart warning — the sign-in page is where someone checks
     whether a push has deployed, and a release number alone cannot say
     that (it only changes when a release is cut).
     """
-    line = "%s (%s)" % (release(), short_sha())
-    if restart_pending():
-        line += " · ⚠ newer code is on disk — restart to load it"
-    return line
+    return _identity() + _restart_note()
+
+
+def _identity() -> str:
+    """`vX.Y.Z (sha)` — the running release and commit."""
+    return "%s (%s)" % (release(), short_sha())
+
+
+def _restart_note() -> str:
+    if not restart_pending():
+        return ""
+    return " · ⚠ %s is on disk — restart to load it" % disk_commit_sha()[:7]

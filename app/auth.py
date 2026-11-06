@@ -306,13 +306,15 @@ def login_form() -> None:
             "Use the account issued to you by the school. If you were given a "
             "temporary password, change it once signed in."
         )
-        # The release number, not the commit (the sidebar keeps the commit).
-        # It still carries the restart warning, so a push that has not
-        # deployed is visible before signing in.
+        # Release and commit, centred. It still carries the restart warning,
+        # so a push that has not deployed is visible before signing in.
+        # Escaped: the text comes from a file and an env var, not from code.
+        import html
+
         from app.version import release_line
 
         st.markdown(
-            '<div class="login-version">%s</div>' % release_line(),
+            '<div class="login-version">%s</div>' % html.escape(release_line()),
             unsafe_allow_html=True,
         )
 

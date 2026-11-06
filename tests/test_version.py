@@ -34,7 +34,7 @@ def test_a_missing_git_directory_reports_unknown_rather_than_failing(monkeypatch
     monkeypatch.setattr(version, "_GIT", "/nonexistent/.git")
     monkeypatch.setattr(version, "_LOADED_SHA", version.UNKNOWN)
     assert version.commit_sha() == version.UNKNOWN
-    assert version.UNKNOWN in version.version_line()
+    assert "(%s)" % version.UNKNOWN in version.version_line()
 
 
 def test_the_reported_commit_is_the_one_loaded_not_the_one_on_disk(monkeypatch):
@@ -122,4 +122,64 @@ def test_release_line_warns_when_a_restart_is_pending(monkeypatch):
 
 def test_a_missing_version_file_reports_unknown(monkeypatch):
     monkeypatch.setattr(version, "_ROOT", "/nonexistent")
-    assert version.release() == version.UNKNOWN
+    assert version._read_release() == version.UNKNOWN
+
+
+def test_the_release_is_the_one_loaded_not_the_one_on_disk(monkeypatch):
+    """Same failure as the commit: a push without a restart changes VERSION
+    on disk while the old code keeps running."""
+    monkeypatch.setattr(version, "_LOADED_RELEASE", "v0.0.1")
+    assert version.release() == "v0.0.1"
+    assert version.release_line().startswith("v0.0.1 (")
+
+
+def test_a_byte_order_mark_is_dropped(monkeypatch, tmp_path):
+    (tmp_path / "VERSION").write_text("﻿1.2.3\r\n", encoding="utf-8")
+    monkeypatch.setattr(version, "_ROOT", str(tmp_path))
+    assert version._read_release() == "v1.2.3"
+
+
+def _tags_on(commit):
+    """v-tags naming `commit`, read from .git without running git.
+
+    Loose tags are followed through their tag object (zlib, stdlib);
+    packed tags use the peeled "^" line. A tag object that has itself been
+    packed is skipped, which only makes this test skip, never fail wrongly.
+    """
+    import os
+    import zlib
+
+    git = version._GIT
+    found = set()
+    tag_dir = os.path.join(git, "refs", "tags")
+    for name in os.listdir(tag_dir) if os.path.isdir(tag_dir) else []:
+        sha = version._read(os.path.join(tag_dir, name))
+        if not sha or not name.startswith("v"):
+            continue
+        target = sha
+        obj = os.path.join(git, "objects", sha[:2], sha[2:])
+        if os.path.exists(obj):
+            with open(obj, "rb") as handle:
+                raw = zlib.decompress(handle.read())
+            if raw.startswith(b"tag "):
+                body = raw.split(b"\x00", 1)[1].decode("utf-8", "replace")
+                target = body.split("\n", 1)[0].split(" ", 1)[1]
+        if target == commit:
+            found.add(name)
+    lines = (version._read(os.path.join(git, "packed-refs")) or "").splitlines()
+    for i, line in enumerate(lines):
+        if " refs/tags/v" not in line:
+            continue
+        sha, ref = line.split(" ", 1)
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (nxt[1:] if nxt.startswith("^") else sha) == commit:
+            found.add(ref.rsplit("/", 1)[1])
+    return found
+
+
+def test_the_version_file_matches_the_tag_on_head_if_there_is_one():
+    """docs/releases.md: a release tag and VERSION must match."""
+    tags = _tags_on(version.disk_commit_sha())
+    if not tags:
+        pytest.skip("HEAD carries no v-tag")
+    assert version._read_release() in tags, (version._read_release(), tags)
