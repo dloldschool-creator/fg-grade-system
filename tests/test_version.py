@@ -34,7 +34,7 @@ def test_a_missing_git_directory_reports_unknown_rather_than_failing(monkeypatch
     monkeypatch.setattr(version, "_GIT", "/nonexistent/.git")
     monkeypatch.setattr(version, "_LOADED_SHA", version.UNKNOWN)
     assert version.commit_sha() == version.UNKNOWN
-    assert version.version_line().startswith(version.UNKNOWN)
+    assert version.UNKNOWN in version.version_line()
 
 
 def test_the_reported_commit_is_the_one_loaded_not_the_one_on_disk(monkeypatch):
@@ -80,7 +80,7 @@ def test_uptime_reads_plainly(monkeypatch, seconds, expected):
 
 def test_the_line_carries_both_facts():
     line = version.version_line()
-    assert version.short_sha() in line
+    assert line.startswith("%s (%s)" % (version.release(), version.short_sha()))
     assert "up " in line
 
 
@@ -116,6 +116,7 @@ def test_release_line_warns_when_a_restart_is_pending(monkeypatch):
     monkeypatch.setattr(version, "_LOADED_SHA", "a" * 40)
     monkeypatch.setenv("APP_VERSION", "b" * 40)
     assert version.release_line().startswith(version.release())
+    assert "(%s)" % version.short_sha() in version.release_line()
     assert "restart" in version.release_line()
 
 

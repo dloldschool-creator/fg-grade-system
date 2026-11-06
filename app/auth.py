@@ -197,6 +197,7 @@ _LOGIN_STYLES = """
 <style>
   /* Scoped to .login-heading, which only the sign-in page draws. */
   .login-heading { text-align: center; margin-bottom: 0.25rem; }
+  .login-version { text-align: center; font-size: 0.875rem; opacity: 0.6; }
   /* The seal is an <img> inside this block rather than st.image(), so it
      inherits the centring above. Targeting Streamlit's own image wrapper
      with CSS is brittle — its test id and DOM nesting change between
@@ -310,7 +311,10 @@ def login_form() -> None:
         # deployed is visible before signing in.
         from app.version import release_line
 
-        st.caption(release_line())
+        st.markdown(
+            '<div class="login-version">%s</div>' % release_line(),
+            unsafe_allow_html=True,
+        )
 
     if not submitted:
         return

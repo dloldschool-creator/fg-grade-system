@@ -135,7 +135,7 @@ def version_line() -> str:
     the state a version line exists to make visible, and the one that
     otherwise looks exactly like a deploy that worked.
     """
-    line = "%s · %s" % (short_sha(), uptime())
+    line = "%s (%s) · %s" % (release(), short_sha(), uptime())
     if restart_pending():
         line += " · ⚠ %s is on disk — restart to load it" % disk_commit_sha()[:7]
     return line
@@ -148,7 +148,7 @@ def release_line() -> str:
     whether a push has deployed, and a release number alone cannot say
     that (it only changes when a release is cut).
     """
-    line = release()
+    line = "%s (%s)" % (release(), short_sha())
     if restart_pending():
         line += " · ⚠ newer code is on disk — restart to load it"
     return line
