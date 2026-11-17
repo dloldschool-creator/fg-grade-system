@@ -49,3 +49,4 @@ commit as `v1.0.0`; they were never shown in the app. An earlier set of
 | v1.9.1 | 2026-11-06 | Fix: remembered sign-ins lasting ~1 hour (library background refresh spent the cookie token; also leaked a thread per sign-in). Network blips keep the cookie; password change keeps it current; school name escaped on sign-in page. |
 | v1.9.2 | 2026-11-06 | Fix: "Keep me signed in" did nothing on Streamlit Cloud — its proxy keeps the cookie from `st.context.cookies`, so the browser now reports it through the component. |
 | v1.9.3 | 2026-11-06 | Fix: a remembered refresh kept you signed in but landed on the Dashboard; the page in the URL is now kept while the browser reports its cookie. |
+| v1.9.4 | 2026-11-17 | Dashboard: the database space card is collapsible (closed by default with the headline figure; opens itself at the warning threshold). |
