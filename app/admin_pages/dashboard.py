@@ -345,8 +345,15 @@ def _render_database_usage() -> None:
 
     used_mb = total / _MB
     fraction = used_mb / DB_LIMIT_MB
-    with st.container(border=True):
-        st.markdown("**Database space**")
+    # Collapsed by default, with the headline figure in the label so the
+    # closed card still answers "how full is it". It opens by itself once
+    # the warning threshold is crossed, so a problem is never hidden.
+    # The body is cheap (the usage above is cached), so the fact that
+    # Streamlit runs an expander body while closed costs nothing here.
+    with st.expander(
+        f"Database space: {used_mb:,.1f} MB used ({fraction:.0%} of {DB_LIMIT_MB} MB)",
+        expanded=fraction >= DB_WARN_FRACTION,
+    ):
         st.metric("Used", f"{used_mb:,.1f} MB")
         st.progress(min(fraction, 1.0), text=f"{fraction:.0%} of {DB_LIMIT_MB} MB")
         if fraction >= DB_CRITICAL_FRACTION:
