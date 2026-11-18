@@ -54,6 +54,11 @@ LEARNER_MOVEMENT_RECORDED = "LEARNER_MOVEMENT_RECORDED"
 # Enrollment page (the ticked "Remove" column, with a reason), so the
 # correction leaves an audited trail rather than a silent DELETE.
 LEARNER_MOVEMENT_DELETED = "LEARNER_MOVEMENT_DELETED"
+# An adviser or registrar correcting the date, school, reason or remarks of a
+# logged movement in place (app/movement_edit.py), so a typing mistake never
+# needs a second instance of the movement. `previous`/`new` hold only the
+# fields that changed.
+LEARNER_MOVEMENT_EDITED = "LEARNER_MOVEMENT_EDITED"
 # The only way to change which section an enrollment sits in (a section
 # picked wrongly at enrolment). Refused once grades or attendance exist —
 # see app/enrollment_section_correction.py.
@@ -178,6 +183,7 @@ REASON_REQUIRED = {
     SUBJECT_OVERRIDE_CREATED,
     SUBJECT_OVERRIDE_REMOVED,
     LEARNER_MOVEMENT_DELETED,
+    LEARNER_MOVEMENT_EDITED,
     ENROLLMENT_SECTION_CORRECTED,
     ENROLLMENT_WITHDRAWN,
 }

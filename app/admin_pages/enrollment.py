@@ -10,6 +10,7 @@ from app.admin_pages._helpers import (
     clear_text_fields,
     flash,
     flush_or_rollback,
+    generation_key,
     get_session,
     keep_panel_open,
     panel_is_open,
@@ -28,6 +29,7 @@ from app.enrollment_withdrawal import (
     withdraw_enrollment,
     withdrawal_history,
 )
+from app.enrollment_status import movement_label
 from app.enrollment_subject_overrides import load_overrides_by_enrollment
 from app.finalized_month_changes import (
     apply_movement_change,
@@ -43,6 +45,15 @@ from app.models.learners import Enrollment, Learner, LearnerMovement
 from app.models.organization import SchoolYear, Term
 from app.models.rbac import User
 from app.models.subjects import EnrollmentSubjectOverride, SectionSubjectOffering, Subject
+from app.movement_edit import (
+    MovementRefused,
+    StaleMovement,
+    duplicate_problem,
+    edit_movement,
+    fields_problem,
+    normalise_fields,
+    snapshot,
+)
 from app.nls_reasons import NLS_REASONS
 from app.text_rules import ADDRESS_MAX, NOTE_MAX, REASON_MAX, SHORT_MAX, clean_text, reason_problem
 
@@ -489,6 +500,150 @@ def _withdrawn_tab(session):
     )
 
 
+def _edit_movement_panel(session, enrollment, learner, movements, current_user, allowed_section_ids, panel_id):
+    """Fix a wrong date, school or reason on a movement already logged, in
+    place (app/movement_edit.py). The type is never editable. No queries
+    here: the page's batched `movements` are what is shown, and the service
+    re-reads under a lock on save."""
+    st.subheader("Edit a movement")
+    st.caption(
+        "Typed the wrong date, school or reason? Correct it here instead of "
+        "logging the movement again — a learner can only have one Transferred "
+        "In, Transferred Out, Dropped and NLS. The type itself can't be "
+        "changed; for a wrong type, ask the registrar to remove the entry."
+    )
+    labels = {
+        str(m.id): f"{m.effective_date:%b %d, %Y} — {movement_label(m.movement_type)}" for m in movements
+    }
+    pick_key = f"mv_edit_pick_{enrollment.id}"
+    _forget_stale(pick_key, list(labels))
+    choice = st.selectbox(
+        "Movement to edit",
+        options=list(labels),
+        format_func=labels.get,
+        key=pick_key,
+        on_change=keep_panel_open,
+        args=(panel_id,),
+    )
+    movement = next(m for m in movements if str(m.id) == choice)
+    mtype = movement.movement_type
+    is_nls_or_dropped = mtype in (EnrollmentStatus.NLS, EnrollmentStatus.DROPPED)
+    expected = snapshot(movement)
+
+    # The NLS/Dropped cause cascade sits outside the form for the same reason
+    # as in "Log movement": a widget in a form reports only on submit.
+    main_reason = sub_reason = None
+    if is_nls_or_dropped:
+        main_key = f"mv_edit_main_{movement.id}"
+        sub_key = f"mv_edit_sub_{movement.id}"
+        main_options = list(NLS_REASONS.keys())
+        if movement.nls_reason and movement.nls_reason not in main_options:
+            main_options.append(movement.nls_reason)  # an older free-text value stays selectable
+        if main_key not in st.session_state and movement.nls_reason in main_options:
+            st.session_state[main_key] = movement.nls_reason
+        _forget_stale(main_key, main_options)
+        main_reason = st.selectbox(
+            "NLS/Dropped reason — main cause (SF2 Legend 2)",
+            options=main_options,
+            key=main_key,
+            on_change=keep_panel_open,
+            args=(panel_id,),
+        )
+        sub_options = NLS_REASONS.get(main_reason)
+        if sub_options:
+            sub_options = list(sub_options)
+            if movement.details and movement.details not in sub_options and main_reason == movement.nls_reason:
+                sub_options.append(movement.details)
+            if sub_key not in st.session_state and movement.details in sub_options:
+                st.session_state[sub_key] = movement.details
+            _forget_stale(sub_key, sub_options)
+            sub_reason = st.selectbox(
+                "Specific reason", options=sub_options, key=sub_key, on_change=keep_panel_open, args=(panel_id,)
+            )
+        else:
+            sub_reason = st.text_input(
+                "Specify reason",
+                value=movement.details or "",
+                key=f"{sub_key}_text",
+                max_chars=SHORT_MAX,
+                on_change=keep_panel_open,
+                args=(panel_id,),
+            )
+
+    form = f"edit_movement_{movement.id}"
+    with st.form(form):
+        new_date = st.date_input(
+            "Effective date",
+            value=movement.effective_date,
+            key=generation_key(form, f"{form}.date"),
+        )
+        details = None
+        if not is_nls_or_dropped:
+            details = text_field(
+                "Details", key=f"{form}.details", value=movement.details or "", max_chars=NOTE_MAX
+            )
+        col1, col2 = st.columns(2)
+        previous_school = text_field(
+            "Previous school" + (" (required)" if mtype == EnrollmentStatus.TRANSFERRED_IN else " (if applicable)"),
+            key=f"{form}.previous_school",
+            value=movement.previous_school or "",
+            container=col1,
+            max_chars=ADDRESS_MAX,
+            disabled=mtype == EnrollmentStatus.TRANSFERRED_OUT,
+        )
+        receiving_school = text_field(
+            "Receiving school" + (" (required)" if mtype == EnrollmentStatus.TRANSFERRED_OUT else " (if applicable)"),
+            key=f"{form}.receiving_school",
+            value=movement.receiving_school or "",
+            container=col2,
+            max_chars=ADDRESS_MAX,
+            disabled=mtype == EnrollmentStatus.TRANSFERRED_IN,
+        )
+        remarks = text_field("Remarks", key=f"{form}.remarks", value=movement.remarks or "", max_chars=NOTE_MAX)
+        reason = text_field(
+            "Reason for the correction — required",
+            key=f"{form}.reason",
+            max_chars=REASON_MAX,
+            placeholder="e.g. Wrong date typed; the transfer was effective Sep 12",
+        )
+        if st.form_submit_button("Save correction"):
+            new = normalise_fields(
+                mtype,
+                effective_date=new_date,
+                details=sub_reason if is_nls_or_dropped else details,
+                previous_school=previous_school,
+                receiving_school=receiving_school,
+                nls_reason=main_reason if is_nls_or_dropped else None,
+                remarks=remarks,
+            )
+            try:
+                effect = edit_movement(
+                    session,
+                    enrollment=enrollment,
+                    movement=movement,
+                    learner=learner,
+                    expected=expected,
+                    new=new,
+                    reason=reason,
+                    user_id=current_user.id,
+                    allowed_section_ids=allowed_section_ids,
+                )
+            except MovementRefused as refusal:
+                session.rollback()
+                flash("error", str(refusal))
+                if isinstance(refusal, StaleMovement):
+                    # Fresh keys, so the form shows what is stored now. Any
+                    # other refusal keeps what was typed so it can be fixed.
+                    clear_text_fields(form)
+            else:
+                if try_commit(session, "Movement corrected."):
+                    clear_text_fields(form)
+                    if effect.message():
+                        flash("warning", effect.message())
+            keep_panel_open(panel_id)
+            st.rerun()
+
+
 def _roster_tab(session, adviser_user_id, current_user):
     school_years = session.query(SchoolYear).order_by(SchoolYear.name.desc()).all()
     if not school_years:
@@ -809,6 +964,17 @@ def _roster_tab(session, adviser_user_id, current_user):
                                 flash("warning", effect.message())
                         st.rerun()
 
+            if movements:
+                _edit_movement_panel(
+                    session,
+                    enrollment,
+                    learner,
+                    movements,
+                    current_user,
+                    None if adviser_user_id is None else {s.id for s in sections},
+                    panel_id,
+                )
+
             st.caption(
                 "Logging a movement also updates the learner's status above. They "
                 "still appear on that month's SF2 with a remark, then drop off the "
@@ -915,35 +1081,45 @@ def _roster_tab(session, adviser_user_id, current_user):
                 remarks = text_field("Remarks", key=f"{movement_form}.remarks", max_chars=NOTE_MAX)
 
                 if st.form_submit_button("Log movement"):
-                    error = None
-                    if is_transferred_in and not (previous_school or "").strip():
-                        error = "Previous school is required for a Transferred In movement."
-                    elif is_transferred_out and not (receiving_school or "").strip():
-                        error = "Receiving school is required for a Transferred Out movement."
+                    error = fields_problem(EnrollmentStatus(movement_type), previous_school, receiving_school)
 
                     if error:
                         flash("error", error)
                     else:
                         previous_status = enrollment.enrollment_status
-                        nls_reason = main_reason if is_nls_or_dropped else None
-                        stored_details = sub_reason if is_nls_or_dropped else details
-                        # The disabled field is inapplicable to this
-                        # movement type, so whatever it's still holding
-                        # from an earlier pick is dropped rather than
-                        # stored — a Transferred In row must never carry
-                        # a Receiving school, and vice versa.
-                        stored_previous_school = None if is_transferred_out else (previous_school or None)
-                        stored_receiving_school = None if is_transferred_in else (receiving_school or None)
+                        # A school that doesn't apply to the type is dropped
+                        # rather than stored (a Transferred In row must never
+                        # carry a Receiving school, and vice versa) — the same
+                        # normalisation an edit uses.
+                        stored = normalise_fields(
+                            EnrollmentStatus(movement_type),
+                            effective_date=effective_date,
+                            details=sub_reason if is_nls_or_dropped else details,
+                            previous_school=previous_school,
+                            receiving_school=receiving_school,
+                            nls_reason=main_reason if is_nls_or_dropped else None,
+                            remarks=remarks,
+                        )
+                        nls_reason = stored["nls_reason"]
+                        stored_details = stored["details"]
+                        stored_previous_school = stored["previous_school"]
+                        stored_receiving_school = stored["receiving_school"]
                         log_before = lock_movements(session, enrollment)
+                        duplicate = duplicate_problem(log_before, EnrollmentStatus(movement_type))
+                        if duplicate:
+                            # Releases the lock; nothing was written.
+                            session.rollback()
+                            flash("error", duplicate)
+                            st.rerun()
                         new_movement = LearnerMovement(
                             enrollment_id=enrollment.id,
                             movement_type=EnrollmentStatus(movement_type),
                             effective_date=effective_date,
-                            details=stored_details or None,
+                            details=stored_details,
                             previous_school=stored_previous_school,
                             receiving_school=stored_receiving_school,
                             nls_reason=nls_reason,
-                            remarks=remarks or None,
+                            remarks=stored["remarks"],
                         )
                         session.add(new_movement)
                         enrollment.enrollment_status = EnrollmentStatus(movement_type)

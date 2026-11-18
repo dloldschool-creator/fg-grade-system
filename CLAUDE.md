@@ -618,6 +618,28 @@ of each is in `docs/build-log.md`.
   the window (latest entry, earliest exit), so only a removal can reopen.
   A new writer of `academic_calendar_dates.is_default_class_day` or
   `learner_movements` must call this module before its commit.
+- **A wrong movement is edited, never re-logged, and a learner has one of
+  each kind** (2026-11-18, `app/movement_edit.py`). Before this a movement
+  could only be logged or removed (registrar-only), so an adviser's typo in
+  a date or school meant a second instance of the same movement. Now
+  Enrollment → Movement / status history has **Edit a movement**: date,
+  schools, NLS/Dropped reason and remarks, **never the type** (a wrong type
+  is the registrar's remove-and-relog). Needs a reason, audited as
+  `LEARNER_MOVEMENT_EDITED` with only the changed fields, and goes through
+  `apply_movement_change` with the old *and* new date, so a date moving
+  across a finalized month flags or reopens it like a log or removal.
+  Advisers edit only sections they advise — enforced in the service via
+  `allowed_section_ids`, not just by what the page lists. `learner_movements`
+  has no `version` column, so rule 9 is met by locking the enrollment and
+  comparing the row with what the page showed (`StaleMovement`). An edit
+  leaves `enrollment_status` alone. **One Transferred In, Transferred Out,
+  Dropped and NLS per enrollment** (`ONCE_PER_ENROLLMENT`, checked in the
+  log path after `lock_movements`, so two people logging at once take
+  turns) — per *type*, not "one exit", because leaving and returning
+  (Transferred Out then In) is real and `latest_exit_movement` reads the log
+  that way. Shifted In/Out and the rest are unlimited. It is an app check,
+  not a constraint, and duplicates already in the data are untouched.
+  Not yet seen in a browser; `AppTest` can't reach the page without a login.
 - **Withdrawing an enrollment is not a movement, and it is the one
   delete of a learner's year** (2026-10-14). The school keeps this system
   in step with DepEd's LIS, and the school head may direct that a learner
